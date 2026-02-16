@@ -5,18 +5,15 @@
   import { NostrClient } from '../lib/services/nostr/nostr-client.js';
   import { KIND } from '../lib/types/nostr.js';
   import type { NostrEvent } from '../lib/types/nostr.js';
+  import { nip19 } from 'nostr-tools';
 
   let repos = $state<NostrEvent[]>([]);
   let loading = $state(true);
   let error = $state<string | null>(null);
 
-  const relays = [
-    'wss://theforest.nostr1.com',
-    'wss://nostr.land',
-    'wss://relay.damus.io'
-  ];
+  import { DEFAULT_NOSTR_RELAYS } from '../lib/config.js';
 
-  const nostrClient = new NostrClient(relays);
+  const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 
   onMount(async () => {
     await loadRepos();
@@ -85,6 +82,51 @@
     
     return urls;
   }
+
+  function getNpubFromEvent(event: NostrEvent): string {
+    // Extract npub from clone URLs that match our domain
+    const gitDomain = $page.data.gitDomain || 'localhost:6543';
+    const cloneUrls = getCloneUrls(event);
+    
+    for (const url of cloneUrls) {
+      if (url.includes(gitDomain)) {
+        // Extract npub from URL: https://domain/npub.../repo.git
+        const match = url.match(/\/(npub[a-z0-9]+)\//);
+        if (match) {
+          return match[1];
+        }
+      }
+    }
+    
+    // Fallback: convert pubkey to npub if needed
+    try {
+      if (event.pubkey.startsWith('npub')) {
+        return event.pubkey;
+      }
+      return nip19.npubEncode(event.pubkey);
+    } catch {
+      // If conversion fails, return pubkey as-is
+      return event.pubkey;
+    }
+  }
+
+  function getRepoNameFromUrl(event: NostrEvent): string {
+    const gitDomain = $page.data.gitDomain || 'localhost:6543';
+    const cloneUrls = getCloneUrls(event);
+    
+    for (const url of cloneUrls) {
+      if (url.includes(gitDomain)) {
+        // Extract repo name from URL: https://domain/npub.../repo-name.git
+        const match = url.match(/\/(npub[a-z0-9]+)\/([^\/]+)\.git/);
+        if (match) {
+          return match[2];
+        }
+      }
+    }
+    
+    // Fallback to repo name from event
+    return getRepoName(event);
+  }
 </script>
 
 <div class="container">
@@ -93,6 +135,7 @@
     <nav>
       <a href="/">Repositories</a>
       <a href="/signup">Sign Up</a>
+      <a href="/docs/nip34">NIP-34 Docs</a>
     </nav>
   </header>
 
@@ -116,7 +159,12 @@
       <div class="repos-list">
         {#each repos as repo}
           <div class="repo-card">
-            <h3>{getRepoName(repo)}</h3>
+            <div class="repo-header">
+              <h3>{getRepoName(repo)}</h3>
+              <a href="/repos/{getNpubFromEvent(repo)}/{getRepoNameFromUrl(repo)}" class="view-button">
+                View & Edit →
+              </a>
+            </div>
             {#if getRepoDescription(repo)}
               <p class="description">{getRepoDescription(repo)}</p>
             {/if}
@@ -181,9 +229,30 @@
     background: white;
   }
 
+  .repo-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+
   .repo-card h3 {
-    margin: 0 0 0.5rem 0;
+    margin: 0;
     font-size: 1.25rem;
+  }
+
+  .view-button {
+    padding: 0.5rem 1rem;
+    background: #3b82f6;
+    color: white;
+    text-decoration: none;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    white-space: nowrap;
+  }
+
+  .view-button:hover {
+    background: #2563eb;
   }
 
   .description {

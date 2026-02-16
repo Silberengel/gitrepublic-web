@@ -5,10 +5,12 @@
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { NostrEvent } from '../../types/nostr.js';
 import { GIT_DOMAIN } from '../../config.js';
+import { generateVerificationFile, VERIFICATION_FILE_PATH } from '../nostr/repo-verification.js';
+import simpleGit, { type SimpleGit } from 'simple-git';
 
 const execAsync = promisify(exec);
 
@@ -66,8 +68,12 @@ export class RepoManager {
     }
 
     // Create bare repository if it doesn't exist
-    if (!existsSync(repoPath.fullPath)) {
+    const isNewRepo = !existsSync(repoPath.fullPath);
+    if (isNewRepo) {
       await execAsync(`git init --bare "${repoPath.fullPath}"`);
+      
+      // Create verification file in the repository
+      await this.createVerificationFile(repoPath.fullPath, event);
     }
 
     // If there are other clone URLs, sync from them
@@ -141,5 +147,68 @@ export class RepoManager {
    */
   repoExists(repoPath: string): boolean {
     return existsSync(repoPath);
+  }
+
+  /**
+   * Create verification file in a new repository
+   * This proves the repository is owned by the announcement author
+   */
+  private async createVerificationFile(repoPath: string, event: NostrEvent): Promise<void> {
+    try {
+      // Create a temporary working directory
+      const repoName = this.parseRepoPathForName(repoPath)?.repoName || 'temp';
+      const workDir = join(repoPath, '..', `${repoName}.work`);
+      const { rm, mkdir } = await import('fs/promises');
+      
+      // Clean up if exists
+      if (existsSync(workDir)) {
+        await rm(workDir, { recursive: true, force: true });
+      }
+      await mkdir(workDir, { recursive: true });
+
+      // Clone the bare repo
+      const git: SimpleGit = simpleGit();
+      await git.clone(repoPath, workDir);
+
+      // Generate verification file content
+      const verificationContent = generateVerificationFile(event, event.pubkey);
+
+      // Write verification file
+      const verificationPath = join(workDir, VERIFICATION_FILE_PATH);
+      writeFileSync(verificationPath, verificationContent, 'utf-8');
+
+      // Commit the verification file
+      const workGit: SimpleGit = simpleGit(workDir);
+      await workGit.add(VERIFICATION_FILE_PATH);
+      
+      // Use the event timestamp for commit date
+      const commitDate = new Date(event.created_at * 1000).toISOString();
+      await workGit.commit('Add Nostr repository verification file', [VERIFICATION_FILE_PATH], {
+        '--author': `Nostr <${event.pubkey}@nostr>`,
+        '--date': commitDate
+      });
+
+      // Push back to bare repo
+      await workGit.push(['origin', 'main']).catch(async () => {
+        // If main branch doesn't exist, create it
+        await workGit.checkout(['-b', 'main']);
+        await workGit.push(['origin', 'main']);
+      });
+
+      // Clean up
+      await rm(workDir, { recursive: true, force: true });
+    } catch (error) {
+      console.error('Failed to create verification file:', error);
+      // Don't throw - verification file creation is important but shouldn't block provisioning
+    }
+  }
+
+  /**
+   * Parse repo path to extract repo name (helper for verification file creation)
+   */
+  private parseRepoPathForName(repoPath: string): { repoName: string } | null {
+    const match = repoPath.match(/\/([^\/]+)\.git$/);
+    if (!match) return null;
+    return { repoName: match[1] };
   }
 }

@@ -21,13 +21,9 @@
   let existingRepoRef = $state(''); // hex, nevent, or naddr
   let loadingExisting = $state(false);
 
-  const relays = [
-    'wss://theforest.nostr1.com',
-    'wss://nostr.land',
-    'wss://relay.damus.io'
-  ];
+  import { DEFAULT_NOSTR_RELAYS, combineRelays } from '../../lib/config.js';
 
-  const nostrClient = new NostrClient(relays);
+  const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 
   onMount(() => {
     nip07Available = isNIP07Available();
@@ -169,7 +165,7 @@
         ['name', repoName],
         ...(description ? [['description', description]] : []),
         ...allCloneUrls.map(url => ['clone', url]),
-        ['relays', ...relays]
+        ['relays', ...DEFAULT_NOSTR_RELAYS]
       ];
 
       // Build event
@@ -189,7 +185,7 @@
       const { inbox, outbox } = await getUserRelays(pubkey, nostrClient);
       
       // Combine user's outbox with default relays
-      const userRelays = [...new Set([...outbox, ...relays])];
+      const userRelays = combineRelays(outbox);
 
       // Publish to user's outboxes and standard relays
       const result = await nostrClient.publishEvent(signedEvent, userRelays);
