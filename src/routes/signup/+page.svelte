@@ -289,14 +289,14 @@
           placeholder="Repository description"
           rows={3}
           disabled={loading}
-        />
+        ></textarea>
       </div>
 
       <div class="form-group">
-        <label>
+        <div class="label">
           Clone URLs
           <small>{$page.data.gitDomain || 'localhost:6543'} will be added automatically</small>
-        </label>
+        </div>
         {#each cloneUrls as url, index}
           <div class="input-group">
             <input
@@ -402,14 +402,14 @@
     gap: 0.5rem;
   }
 
-  label {
+  label, .label {
     font-weight: 500;
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
   }
 
-  label small {
+  label small, .label small {
     font-weight: normal;
     color: #6b7280;
     font-size: 0.875rem;
