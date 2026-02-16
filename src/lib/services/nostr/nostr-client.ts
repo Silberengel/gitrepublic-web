@@ -39,30 +39,74 @@ export class NostrClient {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(relay);
       const events: NostrEvent[] = [];
+      let resolved = false;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      
+      const cleanup = () => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          try {
+            ws.close();
+          } catch {
+            // Ignore errors during cleanup
+          }
+        }
+      };
+
+      const resolveOnce = (value: NostrEvent[]) => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          resolve(value);
+        }
+      };
+
+      const rejectOnce = (error: Error) => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          reject(error);
+        }
+      };
       
       ws.onopen = () => {
-        ws.send(JSON.stringify(['REQ', 'sub', ...filters]));
+        try {
+          ws.send(JSON.stringify(['REQ', 'sub', ...filters]));
+        } catch (error) {
+          rejectOnce(error instanceof Error ? error : new Error(String(error)));
+        }
       };
       
       ws.onmessage = (event: MessageEvent) => {
-        const message = JSON.parse(event.data);
-        
-        if (message[0] === 'EVENT') {
-          events.push(message[2]);
-        } else if (message[0] === 'EOSE') {
-          ws.close();
-          resolve(events);
+        try {
+          const message = JSON.parse(event.data);
+          
+          if (message[0] === 'EVENT') {
+            events.push(message[2]);
+          } else if (message[0] === 'EOSE') {
+            resolveOnce(events);
+          }
+        } catch (error) {
+          // Ignore parse errors, continue receiving events
         }
       };
       
       ws.onerror = (error) => {
-        ws.close();
-        reject(error);
+        rejectOnce(new Error(`WebSocket error for ${relay}: ${error}`));
+      };
+
+      ws.onclose = () => {
+        // If we haven't resolved yet, resolve with what we have
+        if (!resolved) {
+          resolveOnce(events);
+        }
       };
       
-      setTimeout(() => {
-        ws.close();
-        resolve(events);
+      timeoutId = setTimeout(() => {
+        resolveOnce(events);
       }, 5000);
     });
   }
@@ -89,33 +133,76 @@ export class NostrClient {
   private async publishToRelay(relay: string, nostrEvent: NostrEvent): Promise<void> {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(relay);
+      let resolved = false;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      
+      const cleanup = () => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          try {
+            ws.close();
+          } catch {
+            // Ignore errors during cleanup
+          }
+        }
+      };
+
+      const resolveOnce = () => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          resolve();
+        }
+      };
+
+      const rejectOnce = (error: Error) => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          reject(error);
+        }
+      };
       
       ws.onopen = () => {
-        ws.send(JSON.stringify(['EVENT', nostrEvent]));
+        try {
+          ws.send(JSON.stringify(['EVENT', nostrEvent]));
+        } catch (error) {
+          rejectOnce(error instanceof Error ? error : new Error(String(error)));
+        }
       };
       
       ws.onmessage = (event: MessageEvent) => {
-        const message = JSON.parse(event.data);
-        
-        if (message[0] === 'OK' && message[1] === nostrEvent.id) {
-          if (message[2] === true) {
-            ws.close();
-            resolve();
-          } else {
-            ws.close();
-            reject(new Error(message[3] || 'Publish rejected'));
+        try {
+          const message = JSON.parse(event.data);
+          
+          if (message[0] === 'OK' && message[1] === nostrEvent.id) {
+            if (message[2] === true) {
+              resolveOnce();
+            } else {
+              rejectOnce(new Error(message[3] || 'Publish rejected'));
+            }
           }
+        } catch (error) {
+          // Ignore parse errors, continue waiting for OK message
         }
       };
       
       ws.onerror = (error) => {
-        ws.close();
-        reject(error);
+        rejectOnce(new Error(`WebSocket error for ${relay}: ${error}`));
+      };
+
+      ws.onclose = () => {
+        // If we haven't resolved yet, it's an unexpected close
+        if (!resolved) {
+          rejectOnce(new Error('WebSocket closed unexpectedly'));
+        }
       };
       
-      setTimeout(() => {
-        ws.close();
-        reject(new Error('Timeout'));
+      timeoutId = setTimeout(() => {
+        rejectOnce(new Error('Publish timeout'));
       }, 5000);
     });
   }

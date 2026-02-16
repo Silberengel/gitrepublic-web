@@ -5,7 +5,7 @@
 
 import simpleGit, { type SimpleGit } from 'simple-git';
 import { readFile, readdir, stat } from 'fs/promises';
-import { join, dirname } from 'path';
+import { join, dirname, normalize, resolve } from 'path';
 import { existsSync } from 'fs';
 import { RepoManager } from './repo-manager.js';
 
@@ -60,9 +60,100 @@ export class FileManager {
   }
 
   /**
+   * Validate and sanitize file path to prevent path traversal attacks
+   */
+  private validateFilePath(filePath: string): { valid: boolean; error?: string; normalized?: string } {
+    if (!filePath || typeof filePath !== 'string') {
+      return { valid: false, error: 'File path must be a non-empty string' };
+    }
+
+    // Normalize the path (resolves .. and .)
+    const normalized = normalize(filePath);
+    
+    // Check for path traversal attempts
+    if (normalized.includes('..')) {
+      return { valid: false, error: 'Path traversal detected (..)' };
+    }
+
+    // Check for absolute paths
+    if (normalized.startsWith('/')) {
+      return { valid: false, error: 'Absolute paths are not allowed' };
+    }
+
+    // Check for null bytes
+    if (normalized.includes('\0')) {
+      return { valid: false, error: 'Null bytes are not allowed in paths' };
+    }
+
+    // Check for control characters
+    if (/[\x00-\x1f\x7f]/.test(normalized)) {
+      return { valid: false, error: 'Control characters are not allowed in paths' };
+    }
+
+    // Limit path length (reasonable limit)
+    if (normalized.length > 4096) {
+      return { valid: false, error: 'Path is too long (max 4096 characters)' };
+    }
+
+    return { valid: true, normalized };
+  }
+
+  /**
+   * Validate repository name to prevent injection attacks
+   */
+  private validateRepoName(repoName: string): { valid: boolean; error?: string } {
+    if (!repoName || typeof repoName !== 'string') {
+      return { valid: false, error: 'Repository name must be a non-empty string' };
+    }
+
+    // Check length
+    if (repoName.length > 100) {
+      return { valid: false, error: 'Repository name is too long (max 100 characters)' };
+    }
+
+    // Check for invalid characters (alphanumeric, hyphens, underscores, dots)
+    if (!/^[a-zA-Z0-9._-]+$/.test(repoName)) {
+      return { valid: false, error: 'Repository name contains invalid characters' };
+    }
+
+    // Check for path traversal
+    if (repoName.includes('..') || repoName.includes('/') || repoName.includes('\\')) {
+      return { valid: false, error: 'Repository name contains invalid path characters' };
+    }
+
+    return { valid: true };
+  }
+
+  /**
+   * Validate npub format
+   */
+  private validateNpub(npub: string): { valid: boolean; error?: string } {
+    if (!npub || typeof npub !== 'string') {
+      return { valid: false, error: 'npub must be a non-empty string' };
+    }
+
+    // Basic npub format check (starts with npub, base58 encoded)
+    if (!npub.startsWith('npub1') || npub.length < 10 || npub.length > 100) {
+      return { valid: false, error: 'Invalid npub format' };
+    }
+
+    return { valid: true };
+  }
+
+  /**
    * Check if repository exists
    */
   repoExists(npub: string, repoName: string): boolean {
+    // Validate inputs
+    const npubValidation = this.validateNpub(npub);
+    if (!npubValidation.valid) {
+      return false;
+    }
+    const repoValidation = this.validateRepoName(repoName);
+    if (!repoValidation.valid) {
+      return false;
+    }
+
     const repoPath = this.getRepoPath(npub, repoName);
     return this.repoManager.repoExists(repoPath);
   }
@@ -71,6 +162,21 @@ export class FileManager {
    * List files and directories in a repository at a given path
    */
   async listFiles(npub: string, repoName: string, ref: string = 'HEAD', path: string = ''): Promise<FileEntry[]> {
+    // Validate inputs
+    const npubValidation = this.validateNpub(npub);
+    if (!npubValidation.valid) {
+      throw new Error(`Invalid npub: ${npubValidation.error}`);
+    }
+    const repoValidation = this.validateRepoName(repoName);
+    if (!repoValidation.valid) {
+      throw new Error(`Invalid repository name: ${repoValidation.error}`);
+    }
+    
+    const pathValidation = this.validateFilePath(path);
+    if (!pathValidation.valid) {
+      throw new Error(`Invalid file path: ${pathValidation.error}`);
+    }
+
     const repoPath = this.getRepoPath(npub, repoName);
     
     if (!this.repoExists(npub, repoName)) {
@@ -123,6 +229,21 @@ export class FileManager {
    * Get file content from a repository
    */
   async getFileContent(npub: string, repoName: string, filePath: string, ref: string = 'HEAD'): Promise<FileContent> {
+    // Validate inputs
+    const npubValidation = this.validateNpub(npub);
+    if (!npubValidation.valid) {
+      throw new Error(`Invalid npub: ${npubValidation.error}`);
+    }
+    const repoValidation = this.validateRepoName(repoName);
+    if (!repoValidation.valid) {
+      throw new Error(`Invalid repository name: ${repoValidation.error}`);
+    }
+    
+    const pathValidation = this.validateFilePath(filePath);
+    if (!pathValidation.valid) {
+      throw new Error(`Invalid file path: ${pathValidation.error}`);
+    }
+
     const repoPath = this.getRepoPath(npub, repoName);
     
     if (!this.repoExists(npub, repoName)) {
@@ -163,6 +284,43 @@ export class FileManager {
     authorEmail: string,
     branch: string = 'main'
   ): Promise<void> {
+    // Validate inputs
+    const npubValidation = this.validateNpub(npub);
+    if (!npubValidation.valid) {
+      throw new Error(`Invalid npub: ${npubValidation.error}`);
+    }
+    const repoValidation = this.validateRepoName(repoName);
+    if (!repoValidation.valid) {
+      throw new Error(`Invalid repository name: ${repoValidation.error}`);
+    }
+    
+    const pathValidation = this.validateFilePath(filePath);
+    if (!pathValidation.valid) {
+      throw new Error(`Invalid file path: ${pathValidation.error}`);
+    }
+
+    // Validate content size (prevent extremely large files)
+    const maxFileSize = 100 * 1024 * 1024; // 100 MB per file
+    if (Buffer.byteLength(content, 'utf-8') > maxFileSize) {
+      throw new Error(`File is too large (max ${maxFileSize / 1024 / 1024} MB)`);
+    }
+
+    // Validate commit message
+    if (!commitMessage || typeof commitMessage !== 'string' || commitMessage.trim().length === 0) {
+      throw new Error('Commit message is required');
+    }
+    if (commitMessage.length > 1000) {
+      throw new Error('Commit message is too long (max 1000 characters)');
+    }
+
+    // Validate author info
+    if (!authorName || typeof authorName !== 'string' || authorName.trim().length === 0) {
+      throw new Error('Author name is required');
+    }
+    if (!authorEmail || typeof authorEmail !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(authorEmail)) {
+      throw new Error('Valid author email is required');
+    }
+
     const repoPath = this.getRepoPath(npub, repoName);
     
     if (!this.repoExists(npub, repoName)) {
@@ -170,6 +328,12 @@ export class FileManager {
     }
 
     try {
+      // Check repository size before writing
+      const repoSizeCheck = await this.repoManager.checkRepoSizeLimit(repoPath);
+      if (!repoSizeCheck.withinLimit) {
+        throw new Error(repoSizeCheck.error || 'Repository size limit exceeded');
+      }
+
       // Clone bare repo to a temporary working directory (non-bare)
       const workDir = join(this.repoRoot, npub, `${repoName}.work`);
       const { rm } = await import('fs/promises');
@@ -194,9 +358,17 @@ export class FileManager {
         await workGit.checkout(['-b', branch]);
       }
 
-      // Write the file
-      const fullFilePath = join(workDir, filePath);
+      // Write the file (use validated path)
+      const validatedPath = pathValidation.normalized || filePath;
+      const fullFilePath = join(workDir, validatedPath);
       const fileDir = dirname(fullFilePath);
+      
+      // Additional security: ensure the resolved path is still within workDir
+      const resolvedPath = resolve(fullFilePath);
+      const resolvedWorkDir = resolve(workDir);
+      if (!resolvedPath.startsWith(resolvedWorkDir)) {
+        throw new Error('Path validation failed: resolved path outside work directory');
+      }
       
       // Ensure directory exists
       if (!existsSync(fileDir)) {
@@ -207,8 +379,8 @@ export class FileManager {
       const { writeFile: writeFileFs } = await import('fs/promises');
       await writeFileFs(fullFilePath, content, 'utf-8');
 
-      // Stage the file
-      await workGit.add(filePath);
+      // Stage the file (use validated path)
+      await workGit.add(validatedPath);
 
       // Commit
       await workGit.commit(commitMessage, [filePath], {
@@ -278,6 +450,34 @@ export class FileManager {
     authorEmail: string,
     branch: string = 'main'
   ): Promise<void> {
+    // Validate inputs
+    const npubValidation = this.validateNpub(npub);
+    if (!npubValidation.valid) {
+      throw new Error(`Invalid npub: ${npubValidation.error}`);
+    }
+    const repoValidation = this.validateRepoName(repoName);
+    if (!repoValidation.valid) {
+      throw new Error(`Invalid repository name: ${repoValidation.error}`);
+    }
+    
+    const pathValidation = this.validateFilePath(filePath);
+    if (!pathValidation.valid) {
+      throw new Error(`Invalid file path: ${pathValidation.error}`);
+    }
+
+    // Validate commit message
+    if (!commitMessage || typeof commitMessage !== 'string' || commitMessage.trim().length === 0) {
+      throw new Error('Commit message is required');
+    }
+
+    // Validate author info
+    if (!authorName || typeof authorName !== 'string' || authorName.trim().length === 0) {
+      throw new Error('Author name is required');
+    }
+    if (!authorEmail || typeof authorEmail !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(authorEmail)) {
+      throw new Error('Valid author email is required');
+    }
+
     const repoPath = this.getRepoPath(npub, repoName);
     
     if (!this.repoExists(npub, repoName)) {
@@ -303,15 +503,24 @@ export class FileManager {
         await workGit.checkout(['-b', branch]);
       }
 
-      // Remove the file
-      const fullFilePath = join(workDir, filePath);
+      // Remove the file (use validated path)
+      const validatedPath = pathValidation.normalized || filePath;
+      const fullFilePath = join(workDir, validatedPath);
+      
+      // Additional security: ensure the resolved path is still within workDir
+      const resolvedPath = resolve(fullFilePath);
+      const resolvedWorkDir = resolve(workDir);
+      if (!resolvedPath.startsWith(resolvedWorkDir)) {
+        throw new Error('Path validation failed: resolved path outside work directory');
+      }
+      
       if (existsSync(fullFilePath)) {
         const { unlink } = await import('fs/promises');
         await unlink(fullFilePath);
       }
 
-      // Stage the deletion
-      await workGit.rm([filePath]);
+      // Stage the deletion (use validated path)
+      await workGit.rm([validatedPath]);
 
       // Commit
       await workGit.commit(commitMessage, [filePath], {
@@ -491,7 +700,7 @@ export class FileManager {
       if (stats.files && files.length > 0) {
         for (const statFile of stats.files) {
           const file = files.find(f => f.file === statFile.file);
-          if (file) {
+          if (file && 'insertions' in statFile && 'deletions' in statFile) {
             file.additions = statFile.insertions;
             file.deletions = statFile.deletions;
           }
@@ -528,14 +737,20 @@ export class FileManager {
     try {
       if (message) {
         // Create annotated tag
-        const tagOptions: string[] = ['-a', tagName, '-m', message];
+        await git.addTag(tagName);
+        // Note: simple-git addTag doesn't support message directly, use raw command
         if (ref !== 'HEAD') {
-          tagOptions.push(ref);
+          await git.raw(['tag', '-a', tagName, '-m', message, ref]);
+        } else {
+          await git.raw(['tag', '-a', tagName, '-m', message]);
         }
-        await git.addTag(tagName, message);
       } else {
         // Create lightweight tag
-        await git.addTag(tagName);
+        if (ref !== 'HEAD') {
+          await git.raw(['tag', tagName, ref]);
+        } else {
+          await git.addTag(tagName);
+        }
       }
     } catch (error) {
       console.error('Error creating tag:', error);
