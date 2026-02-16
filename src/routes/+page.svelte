@@ -60,6 +60,10 @@
     }
   }
 
+  function goToSearch() {
+    goto('/search');
+  }
+
   function getRepoName(event: NostrEvent): string {
     const nameTag = event.tags.find(t => t[0] === 'name' && t[1]);
     if (nameTag?.[1]) return nameTag[1];
@@ -73,6 +77,16 @@
   function getRepoDescription(event: NostrEvent): string {
     const descTag = event.tags.find(t => t[0] === 'description' && t[1]);
     return descTag?.[1] || '';
+  }
+
+  function getRepoImage(event: NostrEvent): string | null {
+    const imageTag = event.tags.find(t => t[0] === 'image' && t[1]);
+    return imageTag?.[1] || null;
+  }
+
+  function getRepoBanner(event: NostrEvent): string | null {
+    const bannerTag = event.tags.find(t => t[0] === 'banner' && t[1]);
+    return bannerTag?.[1] || null;
   }
 
   function getCloneUrls(event: NostrEvent): string[] {
@@ -143,6 +157,7 @@
     <h1>gitrepublic</h1>
     <nav>
       <a href="/">Repositories</a>
+      <a href="/search">Search</a>
       <a href="/signup">Sign Up</a>
       <a href="/docs/nip34">NIP-34 Docs</a>
     </nav>
@@ -167,24 +182,38 @@
     {:else}
       <div class="repos-list">
         {#each repos as repo}
+          {@const repoImage = getRepoImage(repo)}
+          {@const repoBanner = getRepoBanner(repo)}
           <div class="repo-card">
-            <div class="repo-header">
-              <h3>{getRepoName(repo)}</h3>
-              <a href="/repos/{getNpubFromEvent(repo)}/{getRepoNameFromUrl(repo)}" class="view-button">
-                View & Edit →
-              </a>
-            </div>
-            {#if getRepoDescription(repo)}
-              <p class="description">{getRepoDescription(repo)}</p>
+            {#if repoBanner}
+              <div class="repo-card-banner">
+                <img src={repoBanner} alt="Banner" />
+              </div>
             {/if}
-            <div class="clone-urls">
-              <strong>Clone URLs:</strong>
-              {#each getCloneUrls(repo) as url}
-                <code>{url}</code>
-              {/each}
-            </div>
-            <div class="repo-meta">
-              <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
+            <div class="repo-card-content">
+              <div class="repo-header">
+                {#if repoImage}
+                  <img src={repoImage} alt="Repository" class="repo-card-image" />
+                {/if}
+                <div class="repo-header-text">
+                  <h3>{getRepoName(repo)}</h3>
+                  {#if getRepoDescription(repo)}
+                    <p class="description">{getRepoDescription(repo)}</p>
+                  {/if}
+                </div>
+                <a href="/repos/{getNpubFromEvent(repo)}/{getRepoNameFromUrl(repo)}" class="view-button">
+                  View & Edit →
+                </a>
+              </div>
+              <div class="clone-urls">
+                <strong>Clone URLs:</strong>
+                {#each getCloneUrls(repo) as url}
+                  <code>{url}</code>
+                {/each}
+              </div>
+              <div class="repo-meta">
+                <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
+              </div>
             </div>
           </div>
         {/each}
@@ -234,15 +263,45 @@
   .repo-card {
     border: 1px solid #e5e7eb;
     border-radius: 0.5rem;
-    padding: 1.5rem;
     background: white;
+    overflow: hidden;
+  }
+
+  .repo-card-banner {
+    width: 100%;
+    height: 200px;
+    overflow: hidden;
+    background: #f3f4f6;
+  }
+
+  .repo-card-banner img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .repo-card-content {
+    padding: 1.5rem;
   }
 
   .repo-header {
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
     margin-bottom: 0.5rem;
+    gap: 1rem;
+  }
+
+  .repo-header-text {
+    flex: 1;
+  }
+
+  .repo-card-image {
+    width: 64px;
+    height: 64px;
+    border-radius: 8px;
+    object-fit: cover;
+    flex-shrink: 0;
   }
 
   .repo-card h3 {

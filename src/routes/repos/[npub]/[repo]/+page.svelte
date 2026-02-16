@@ -10,6 +10,17 @@
   import { getUserRelays } from '$lib/services/nostr/user-relays.js';
   import { nip19 } from 'nostr-tools';
 
+  // Get page data for OpenGraph metadata
+  const pageData = $page.data as {
+    title?: string;
+    description?: string;
+    image?: string;
+    banner?: string;
+    repoName?: string;
+    repoDescription?: string;
+    repoUrl?: string;
+  };
+
   const npub = ($page.params as { npub?: string; repo?: string }).npub || '';
   const repo = ($page.params as { npub?: string; repo?: string }).repo || '';
 
@@ -84,6 +95,132 @@
   let newPRLabels = $state<string[]>(['']);
   let selectedPR = $state<string | null>(null);
 
+  // README
+  let readmeContent = $state<string | null>(null);
+  let readmePath = $state<string | null>(null);
+  let readmeIsMarkdown = $state(false);
+  let loadingReadme = $state(false);
+  let readmeHtml = $state<string>('');
+
+  // Fork
+  let forkInfo = $state<{ isFork: boolean; originalRepo: { npub: string; repo: string } | null } | null>(null);
+  let forking = $state(false);
+
+  // Repository images
+  let repoImage = $state<string | null>(null);
+  let repoBanner = $state<string | null>(null);
+
+  async function loadReadme() {
+    loadingReadme = true;
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/readme?ref=${currentBranch}`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.found) {
+          readmeContent = data.content;
+          readmePath = data.path;
+          readmeIsMarkdown = data.isMarkdown;
+          
+          // Render markdown if needed
+          if (readmeIsMarkdown && readmeContent) {
+            const { marked } = await import('marked');
+            readmeHtml = marked.parse(readmeContent) as string;
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error loading README:', err);
+    } finally {
+      loadingReadme = false;
+    }
+  }
+
+  async function loadForkInfo() {
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/fork`);
+      if (response.ok) {
+        forkInfo = await response.json();
+      }
+    } catch (err) {
+      console.error('Error loading fork info:', err);
+    }
+  }
+
+  async function forkRepository() {
+    if (!userPubkey) {
+      alert('Please connect your NIP-07 extension');
+      return;
+    }
+
+    forking = true;
+    error = null;
+
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/fork`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userPubkey })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        alert(`Repository forked successfully! Visit /repos/${data.fork.npub}/${data.fork.repo}`);
+        goto(`/repos/${data.fork.npub}/${data.fork.repo}`);
+      } else {
+        const data = await response.json();
+        error = data.error || 'Failed to fork repository';
+      }
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to fork repository';
+    } finally {
+      forking = false;
+    }
+  }
+
+  async function loadRepoImages() {
+    try {
+      // Get images from page data (loaded from announcement)
+      if (pageData.image) {
+        repoImage = pageData.image;
+      }
+      if (pageData.banner) {
+        repoBanner = pageData.banner;
+      }
+
+      // Also fetch from announcement directly as fallback
+      if (!repoImage && !repoBanner) {
+        const decoded = nip19.decode(npub);
+        if (decoded.type === 'npub') {
+          const repoOwnerPubkey = decoded.data as string;
+          const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
+          const events = await client.fetchEvents([
+            {
+              kinds: [30617], // REPO_ANNOUNCEMENT
+              authors: [repoOwnerPubkey],
+              '#d': [repo],
+              limit: 1
+            }
+          ]);
+
+          if (events.length > 0) {
+            const announcement = events[0];
+            const imageTag = announcement.tags.find((t: string[]) => t[0] === 'image');
+            const bannerTag = announcement.tags.find((t: string[]) => t[0] === 'banner');
+            
+            if (imageTag?.[1]) {
+              repoImage = imageTag[1];
+            }
+            if (bannerTag?.[1]) {
+              repoBanner = bannerTag[1];
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error loading repo images:', err);
+    }
+  }
+
   onMount(async () => {
     await loadBranches();
     await loadFiles();
@@ -91,6 +228,9 @@
     await loadTags();
     await checkMaintainerStatus();
     await checkVerification();
+    await loadReadme();
+    await loadForkInfo();
+    await loadRepoImages();
   });
 
   async function checkAuth() {
@@ -685,26 +825,86 @@
       loadPRs();
     }
   });
+
+  $effect(() => {
+    if (currentBranch) {
+      loadReadme();
+    }
+  });
 </script>
+
+<svelte:head>
+  <title>{pageData.title || `${repo} - Repository`}</title>
+  <meta name="description" content={pageData.description || `Repository: ${repo}`} />
+  
+  <!-- OpenGraph / Facebook -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content={pageData.title || `${pageData.repoName || repo} - Repository`} />
+  <meta property="og:description" content={pageData.description || pageData.repoDescription || `Repository: ${pageData.repoName || repo}`} />
+  <meta property="og:url" content={pageData.repoUrl || `https://${$page.url.host}${$page.url.pathname}`} />
+  {#if pageData.image || repoImage}
+    <meta property="og:image" content={pageData.image || repoImage} />
+  {/if}
+  {#if pageData.banner || repoBanner}
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+  {/if}
+  
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content={repoBanner || repoImage ? "summary_large_image" : "summary"} />
+  <meta name="twitter:title" content={pageData.title || `${pageData.repoName || repo} - Repository`} />
+  <meta name="twitter:description" content={pageData.description || pageData.repoDescription || `Repository: ${pageData.repoName || repo}`} />
+  {#if pageData.banner || repoBanner}
+    <meta name="twitter:image" content={pageData.banner || repoBanner} />
+  {:else if pageData.image || repoImage}
+    <meta name="twitter:image" content={pageData.image || repoImage} />
+  {/if}
+</svelte:head>
 
 <div class="container">
   <header>
+    {#if repoBanner}
+      <div class="repo-banner">
+        <img src={repoBanner} alt="" />
+      </div>
+    {/if}
     <div class="header-left">
       <a href="/" class="back-link">← Back to Repositories</a>
-      <h1>{repo}</h1>
-      <span class="npub">by {npub.slice(0, 16)}...</span>
+      <div class="repo-title-section">
+        {#if repoImage}
+          <img src={repoImage} alt="Repository image" class="repo-image" />
+        {/if}
+        <div>
+          <h1>{pageData.repoName || repo}</h1>
+          {#if pageData.repoDescription}
+            <p class="repo-description-header">{pageData.repoDescription}</p>
+          {/if}
+        </div>
+      </div>
+      <span class="npub">
+        by <a href={`/users/${npub}`}>{npub.slice(0, 16)}...</a>
+      </span>
       <a href="/docs/nip34" class="docs-link" target="_blank" title="NIP-34 Documentation">📖</a>
+      {#if forkInfo?.isFork && forkInfo.originalRepo}
+        <span class="fork-badge">Forked from <a href={`/repos/${forkInfo.originalRepo.npub}/${forkInfo.originalRepo.repo}`}>{forkInfo.originalRepo.repo}</a></span>
+      {/if}
     </div>
-    <div class="header-right">
+      <div class="header-right">
       <select bind:value={currentBranch} onchange={handleBranchChange} class="branch-select">
         {#each branches as branch}
           <option value={branch}>{branch}</option>
         {/each}
       </select>
-      {#if userPubkey && isMaintainer}
-        <button onclick={() => showCreateBranchDialog = true} class="create-branch-button">+ New Branch</button>
-      {/if}
       {#if userPubkey}
+        <button onclick={forkRepository} disabled={forking} class="fork-button">
+          {forking ? 'Forking...' : 'Fork'}
+        </button>
+        {#if isMaintainer}
+          <a href={`/repos/${npub}/${repo}/settings`} class="settings-button">Settings</a>
+        {/if}
+        {#if isMaintainer}
+          <button onclick={() => showCreateBranchDialog = true} class="create-branch-button">+ New Branch</button>
+        {/if}
         <span class="auth-status">
           {#if isMaintainer}
             ✓ Maintainer
@@ -944,8 +1144,29 @@
       </aside>
       {/if}
 
-      <!-- Editor Area / Diff View -->
+      <!-- Editor Area / Diff View / README -->
       <div class="editor-area">
+        {#if activeTab === 'files' && readmeContent && !currentFile}
+          <div class="readme-section">
+            <div class="readme-header">
+              <h3>README</h3>
+              <div class="readme-actions">
+                <a href={`/api/repos/${npub}/${repo}/raw?path=${readmePath}`} target="_blank" class="raw-link">View Raw</a>
+                <a href={`/api/repos/${npub}/${repo}/download?format=zip`} class="download-link">Download ZIP</a>
+              </div>
+            </div>
+            {#if loadingReadme}
+              <div class="loading">Loading README...</div>
+            {:else if readmeIsMarkdown && readmeHtml}
+              <div class="readme-content markdown">
+                {@html readmeHtml}
+              </div>
+            {:else if readmeContent}
+              <pre class="readme-content"><code>{readmeContent}</code></pre>
+            {/if}
+          </div>
+        {/if}
+
         {#if activeTab === 'files' && currentFile}
           <div class="editor-header">
             <span class="file-path">{currentFile}</span>
@@ -1343,10 +1564,64 @@
     background: white;
   }
 
+  .repo-banner {
+    width: 100%;
+    height: 300px;
+    overflow: hidden;
+    background: #f3f4f6;
+    margin-bottom: 1rem;
+  }
+
+  .repo-banner img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
   .header-left {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .repo-title-section {
     display: flex;
     align-items: center;
     gap: 1rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .repo-image {
+    width: 64px;
+    height: 64px;
+    border-radius: 8px;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+
+  .repo-description-header {
+    margin: 0.25rem 0 0 0;
+    color: #666;
+    font-size: 0.9rem;
+  }
+
+  .fork-badge {
+    padding: 0.25rem 0.5rem;
+    background: #e0e7ff;
+    color: #3730a3;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    margin-left: 0.5rem;
+  }
+
+  .fork-badge a {
+    color: #3730a3;
+    text-decoration: none;
+  }
+
+  .fork-badge a:hover {
+    text-decoration: underline;
   }
 
   .back-link {
