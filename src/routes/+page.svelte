@@ -6,10 +6,12 @@
   import { KIND } from '../lib/types/nostr.js';
   import type { NostrEvent } from '../lib/types/nostr.js';
   import { nip19 } from 'nostr-tools';
+  import { getPublicKeyWithNIP07, isNIP07Available } from '../lib/services/nostr/nip07-signer.js';
 
   let repos = $state<NostrEvent[]>([]);
   let loading = $state(true);
   let error = $state<string | null>(null);
+  let userPubkey = $state<string | null>(null);
 
   import { DEFAULT_NOSTR_RELAYS } from '../lib/config.js';
 
@@ -17,7 +19,36 @@
 
   onMount(async () => {
     await loadRepos();
+    await checkAuth();
   });
+
+  async function checkAuth() {
+    try {
+      if (isNIP07Available()) {
+        userPubkey = await getPublicKeyWithNIP07();
+      }
+    } catch (err) {
+      console.log('NIP-07 not available or user not connected');
+      userPubkey = null;
+    }
+  }
+
+  async function login() {
+    try {
+      if (!isNIP07Available()) {
+        alert('NIP-07 extension not found. Please install a Nostr extension like Alby or nos2x.');
+        return;
+      }
+      userPubkey = await getPublicKeyWithNIP07();
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to connect';
+      console.error('Login error:', err);
+    }
+  }
+
+  function logout() {
+    userPubkey = null;
+  }
 
   async function loadRepos() {
     loading = true;
@@ -160,6 +191,18 @@
       <a href="/search">Search</a>
       <a href="/signup">Sign Up</a>
       <a href="/docs/nip34">NIP-34 Docs</a>
+      <div class="auth-section">
+        {#if userPubkey}
+          <span class="user-info">
+            {nip19.npubEncode(userPubkey).slice(0, 16)}...
+          </span>
+          <button onclick={logout} class="logout-button">Logout</button>
+        {:else}
+          <button onclick={login} class="login-button" disabled={!isNIP07Available()}>
+            {isNIP07Available() ? 'Login' : 'NIP-07 Not Available'}
+          </button>
+        {/if}
+      </div>
     </nav>
   </header>
 

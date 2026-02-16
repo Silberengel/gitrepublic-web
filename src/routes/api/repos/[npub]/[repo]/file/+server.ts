@@ -9,6 +9,7 @@ import { FileManager } from '$lib/services/git/file-manager.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
+import { verifyNIP98Auth } from '$lib/services/nostr/nip98-auth.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -55,7 +56,7 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
   }
 };
 
-export const POST: RequestHandler = async ({ params, request }: { params: { npub?: string; repo?: string }; request: Request }) => {
+export const POST: RequestHandler = async ({ params, url, request }: { params: { npub?: string; repo?: string }; url: URL; request: Request }) => {
   const { npub, repo } = params;
 
   if (!npub || !repo) {
@@ -64,7 +65,18 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
 
   try {
     const body = await request.json();
-    const { path, content, commitMessage, authorName, authorEmail, branch, action, userPubkey } = body;
+    const { path, content, commitMessage, authorName, authorEmail, branch, action, userPubkey, useNIP07, nsecKey } = body;
+    
+    // Check for NIP-98 authentication (for git operations)
+    const authHeader = request.headers.get('Authorization');
+    let nip98Event = null;
+    if (authHeader && authHeader.startsWith('Nostr ')) {
+      const requestUrl = `${request.headers.get('x-forwarded-proto') || (url.protocol === 'https:' ? 'https' : 'http')}://${request.headers.get('host') || url.host}${url.pathname}${url.search}`;
+      const authResult = verifyNIP98Auth(authHeader, requestUrl, request.method);
+      if (authResult.valid && authResult.event) {
+        nip98Event = authResult.event;
+      }
+    }
 
     if (!path || !commitMessage || !authorName || !authorEmail) {
       return error(400, 'Missing required fields: path, commitMessage, authorName, authorEmail');
@@ -108,6 +120,21 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
       return error(403, 'Only repository maintainers can edit files directly. Please submit a pull request instead.');
     }
 
+    // Prepare signing options
+    const signingOptions: {
+      useNIP07?: boolean;
+      nip98Event?: any;
+      nsecKey?: string;
+    } = {};
+    
+    if (useNIP07) {
+      signingOptions.useNIP07 = true;
+    } else if (nip98Event) {
+      signingOptions.nip98Event = nip98Event;
+    } else if (nsecKey) {
+      signingOptions.nsecKey = nsecKey;
+    }
+
     if (action === 'delete') {
       await fileManager.deleteFile(
         npub,
@@ -116,7 +143,8 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
         commitMessage,
         authorName,
         authorEmail,
-        branch || 'main'
+        branch || 'main',
+        Object.keys(signingOptions).length > 0 ? signingOptions : undefined
       );
       return json({ success: true, message: 'File deleted and committed' });
     } else if (action === 'create' || content !== undefined) {
@@ -131,7 +159,8 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
         commitMessage,
         authorName,
         authorEmail,
-        branch || 'main'
+        branch || 'main',
+        Object.keys(signingOptions).length > 0 ? signingOptions : undefined
       );
       return json({ success: true, message: 'File saved and committed' });
     } else {

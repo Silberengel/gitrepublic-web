@@ -136,7 +136,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     // Verify it's an ownership transfer event
     if (transferEvent.kind !== KIND.OWNERSHIP_TRANSFER) {
-      return error(400, 'Event must be kind 30619 (ownership transfer)');
+      return error(400, `Event must be kind ${KIND.OWNERSHIP_TRANSFER} (ownership transfer)`);
     }
 
     // Verify the 'a' tag references this repo

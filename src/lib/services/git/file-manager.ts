@@ -8,6 +8,8 @@ import { readFile, readdir, stat } from 'fs/promises';
 import { join, dirname, normalize, resolve } from 'path';
 import { existsSync } from 'fs';
 import { RepoManager } from './repo-manager.js';
+import { createGitCommitSignature } from './commit-signer.js';
+import type { NostrEvent } from '../../types/nostr.js';
 
 export interface FileEntry {
   name: string;
@@ -273,6 +275,10 @@ export class FileManager {
 
   /**
    * Write file and commit changes
+   * @param signingOptions - Optional commit signing options:
+   *   - useNIP07: Use NIP-07 browser extension (client-side only)
+   *   - nip98Event: Use NIP-98 auth event as signature (server-side, for git operations)
+   *   - nsecKey: Use direct nsec/hex key (server-side)
    */
   async writeFile(
     npub: string,
@@ -282,7 +288,12 @@ export class FileManager {
     commitMessage: string,
     authorName: string,
     authorEmail: string,
-    branch: string = 'main'
+    branch: string = 'main',
+    signingOptions?: {
+      useNIP07?: boolean;
+      nip98Event?: NostrEvent;
+      nsecKey?: string;
+    }
   ): Promise<void> {
     // Validate inputs
     const npubValidation = this.validateNpub(npub);
@@ -382,8 +393,25 @@ export class FileManager {
       // Stage the file (use validated path)
       await workGit.add(validatedPath);
 
+      // Sign commit if signing options are provided
+      let finalCommitMessage = commitMessage;
+      if (signingOptions && (signingOptions.useNIP07 || signingOptions.nip98Event || signingOptions.nsecKey)) {
+        try {
+          const { signedMessage } = await createGitCommitSignature(
+            commitMessage,
+            authorName,
+            authorEmail,
+            signingOptions
+          );
+          finalCommitMessage = signedMessage;
+        } catch (err) {
+          console.warn('Failed to sign commit:', err);
+          // Continue without signature if signing fails
+        }
+      }
+
       // Commit
-      await workGit.commit(commitMessage, [filePath], {
+      await workGit.commit(finalCommitMessage, [filePath], {
         '--author': `${authorName} <${authorEmail}>`
       });
 
@@ -423,6 +451,7 @@ export class FileManager {
 
   /**
    * Create a new file
+   * @param signingOptions - Optional commit signing options (see writeFile)
    */
   async createFile(
     npub: string,
@@ -432,14 +461,20 @@ export class FileManager {
     commitMessage: string,
     authorName: string,
     authorEmail: string,
-    branch: string = 'main'
+    branch: string = 'main',
+    signingOptions?: {
+      useNIP07?: boolean;
+      nip98Event?: NostrEvent;
+      nsecKey?: string;
+    }
   ): Promise<void> {
     // Reuse writeFile logic - it will create the file if it doesn't exist
-    return this.writeFile(npub, repoName, filePath, content, commitMessage, authorName, authorEmail, branch);
+    return this.writeFile(npub, repoName, filePath, content, commitMessage, authorName, authorEmail, branch, signingOptions);
   }
 
   /**
    * Delete a file
+   * @param signingOptions - Optional commit signing options (see writeFile)
    */
   async deleteFile(
     npub: string,
@@ -448,7 +483,12 @@ export class FileManager {
     commitMessage: string,
     authorName: string,
     authorEmail: string,
-    branch: string = 'main'
+    branch: string = 'main',
+    signingOptions?: {
+      useNIP07?: boolean;
+      nip98Event?: NostrEvent;
+      nsecKey?: string;
+    }
   ): Promise<void> {
     // Validate inputs
     const npubValidation = this.validateNpub(npub);
@@ -522,8 +562,25 @@ export class FileManager {
       // Stage the deletion (use validated path)
       await workGit.rm([validatedPath]);
 
+      // Sign commit if signing options are provided
+      let finalCommitMessage = commitMessage;
+      if (signingOptions && (signingOptions.useNIP07 || signingOptions.nip98Event || signingOptions.nsecKey)) {
+        try {
+          const { signedMessage } = await createGitCommitSignature(
+            commitMessage,
+            authorName,
+            authorEmail,
+            signingOptions
+          );
+          finalCommitMessage = signedMessage;
+        } catch (err) {
+          console.warn('Failed to sign commit:', err);
+          // Continue without signature if signing fails
+        }
+      }
+
       // Commit
-      await workGit.commit(commitMessage, [filePath], {
+      await workGit.commit(finalCommitMessage, [filePath], {
         '--author': `${authorName} <${authorEmail}>`
       });
 

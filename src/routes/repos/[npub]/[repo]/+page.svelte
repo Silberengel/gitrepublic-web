@@ -4,7 +4,7 @@
   import { goto } from '$app/navigation';
   import CodeEditor from '$lib/components/CodeEditor.svelte';
   import PRDetail from '$lib/components/PRDetail.svelte';
-  import { getPublicKeyWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
+  import { getPublicKeyWithNIP07, isNIP07Available } from '$lib/services/nostr/nip07-signer.js';
   import { NostrClient } from '$lib/services/nostr/nostr-client.js';
   import { DEFAULT_NOSTR_RELAYS, combineRelays } from '$lib/config.js';
   import { getUserRelays } from '$lib/services/nostr/user-relays.js';
@@ -235,14 +235,35 @@
 
   async function checkAuth() {
     try {
-      if (typeof window !== 'undefined' && window.nostr) {
+      if (isNIP07Available()) {
         userPubkey = await getPublicKeyWithNIP07();
         // Recheck maintainer status after auth
         await checkMaintainerStatus();
       }
     } catch (err) {
       console.log('NIP-07 not available or user not connected');
+      userPubkey = null;
     }
+  }
+
+  async function login() {
+    try {
+      if (!isNIP07Available()) {
+        alert('NIP-07 extension not found. Please install a Nostr extension like Alby or nos2x.');
+        return;
+      }
+      userPubkey = await getPublicKeyWithNIP07();
+      // Re-check maintainer status after login
+      await checkMaintainerStatus();
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to connect';
+      console.error('Login error:', err);
+    }
+  }
+
+  function logout() {
+    userPubkey = null;
+    isMaintainer = false;
   }
 
   async function checkMaintainerStatus() {
@@ -404,7 +425,8 @@
           authorName: 'Web Editor',
           authorEmail: `${npubFromPubkey}@nostr`,
           branch: currentBranch,
-          userPubkey: userPubkey
+          userPubkey: userPubkey,
+          useNIP07: true // Use NIP-07 for commit signing in web UI
         })
       });
 
@@ -912,8 +934,12 @@
             ✓ Authenticated (Contributor)
           {/if}
         </span>
+        <button onclick={logout} class="logout-button">Logout</button>
       {:else}
         <span class="auth-status">Not authenticated</span>
+        <button onclick={login} class="login-button" disabled={!isNIP07Available()}>
+          {isNIP07Available() ? 'Login' : 'NIP-07 Not Available'}
+        </button>
       {/if}
       
       {#if verificationStatus}
@@ -1671,6 +1697,37 @@
   .auth-status {
     font-size: 0.875rem;
     color: #6b7280;
+  }
+
+  .login-button,
+  .logout-button {
+    padding: 0.5rem 1rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0.25rem;
+    background: white;
+    color: #374151;
+    cursor: pointer;
+    font-size: 0.875rem;
+  }
+
+  .login-button:hover:not(:disabled) {
+    background: #f9fafb;
+  }
+
+  .login-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .logout-button {
+    background: #ef4444;
+    color: white;
+    border-color: #ef4444;
+    margin-left: 0.5rem;
+  }
+
+  .logout-button:hover {
+    background: #dc2626;
   }
 
   .repo-view {

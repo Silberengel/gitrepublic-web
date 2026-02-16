@@ -290,9 +290,29 @@ export class RepoManager {
       
       // Use the event timestamp for commit date
       const commitDate = new Date(event.created_at * 1000).toISOString();
-      const commitMessage = selfTransferEvent 
+      let commitMessage = selfTransferEvent 
         ? 'Add Nostr repository verification and initial ownership proof'
         : 'Add Nostr repository verification file';
+      
+      // Sign commit if nsec key is provided (from environment or event)
+      // Note: For initial commits, we might not have the user's nsec, so this is optional
+      const nsecKey = process.env.NOSTRGIT_SECRET_KEY;
+      if (nsecKey) {
+        try {
+          const { createGitCommitSignature } = await import('./commit-signer.js');
+          const { signedMessage } = createGitCommitSignature(
+            nsecKey,
+            commitMessage,
+            'Nostr',
+            `${event.pubkey}@nostr`,
+            event.created_at
+          );
+          commitMessage = signedMessage;
+        } catch (err) {
+          console.warn('Failed to sign initial commit:', err);
+          // Continue without signature if signing fails
+        }
+      }
       
       await workGit.commit(commitMessage, filesToAdd, {
         '--author': `Nostr <${event.pubkey}@nostr>`,
