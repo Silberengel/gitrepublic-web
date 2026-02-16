@@ -19,6 +19,7 @@ export interface NostrFilter {
   '#e'?: string[];
   '#p'?: string[];
   '#d'?: string[];
+  '#a'?: string[];
   since?: number;
   until?: number;
   limit?: number;
@@ -27,6 +28,7 @@ export interface NostrFilter {
 export const KIND = {
   REPO_ANNOUNCEMENT: 30617,
   REPO_STATE: 30618,
+  OWNERSHIP_TRANSFER: 30619, // Repository ownership transfer event
   PATCH: 1617,
   PULL_REQUEST: 1618,
   PULL_REQUEST_UPDATE: 1619,
@@ -35,6 +37,8 @@ export const KIND = {
   STATUS_APPLIED: 1631,
   STATUS_CLOSED: 1632,
   STATUS_DRAFT: 1633,
+  HIGHLIGHT: 9802, // NIP-84: Highlight event
+  COMMENT: 1111, // NIP-22: Comment event
 } as const;
 
 export interface Issue extends NostrEvent {

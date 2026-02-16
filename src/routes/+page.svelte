@@ -31,14 +31,23 @@
       // Get git domain from layout data
       const gitDomain = $page.data.gitDomain || 'localhost:6543';
       
-      // Filter for repos that list our domain in clone tags
+      // Filter for repos that list our domain in clone tags and are public
       repos = events.filter(event => {
         const cloneUrls = event.tags
           .filter(t => t[0] === 'clone')
           .flatMap(t => t.slice(1))
           .filter(url => url && typeof url === 'string');
         
-        return cloneUrls.some(url => url.includes(gitDomain));
+        const hasDomain = cloneUrls.some(url => url.includes(gitDomain));
+        if (!hasDomain) return false;
+
+        // Filter out private repos from public listing
+        const isPrivate = event.tags.some(t => 
+          (t[0] === 'private' && t[1] === 'true') || 
+          (t[0] === 't' && t[1] === 'private')
+        );
+        
+        return !isPrivate; // Only show public repos
       });
       
       // Sort by created_at descending

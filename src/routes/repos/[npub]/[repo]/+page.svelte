@@ -3,6 +3,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import CodeEditor from '$lib/components/CodeEditor.svelte';
+  import PRDetail from '$lib/components/PRDetail.svelte';
   import { getPublicKeyWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
   import { NostrClient } from '$lib/services/nostr/nostr-client.js';
   import { DEFAULT_NOSTR_RELAYS, combineRelays } from '$lib/config.js';
@@ -81,6 +82,7 @@
   let newPRCommitId = $state('');
   let newPRBranchName = $state('');
   let newPRLabels = $state<string[]>(['']);
+  let selectedPR = $state<string | null>(null);
 
   onMount(async () => {
     await loadBranches();
@@ -1046,9 +1048,23 @@
               <div class="empty-state">
                 <p>No pull requests found. Create one to get started!</p>
               </div>
+            {:else if selectedPR}
+              {#each prs.filter(p => p.id === selectedPR) as pr}
+                {@const decoded = nip19.decode(npub)}
+                {#if decoded.type === 'npub'}
+                  {@const repoOwnerPubkey = decoded.data as string}
+                  <PRDetail
+                    {pr}
+                    {npub}
+                    {repo}
+                    {repoOwnerPubkey}
+                  />
+                  <button onclick={() => selectedPR = null} class="back-btn">← Back to PR List</button>
+                {/if}
+              {/each}
             {:else}
               {#each prs as pr}
-                <div class="pr-detail">
+                <div class="pr-detail" onclick={() => selectedPR = pr.id} style="cursor: pointer;">
                   <h3>{pr.subject}</h3>
                   <div class="pr-meta-detail">
                     <span class="pr-status" class:open={pr.status === 'open'} class:closed={pr.status === 'closed'} class:merged={pr.status === 'merged'}>

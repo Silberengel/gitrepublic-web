@@ -8,8 +8,9 @@ import { IssuesService } from '$lib/services/nostr/issues-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
 
-export const GET: RequestHandler = async ({ params, url }) => {
+export const GET: RequestHandler = async ({ params, url, request }) => {
   const { npub, repo } = params;
+  const userPubkey = url.searchParams.get('userPubkey') || request.headers.get('x-user-pubkey');
 
   if (!npub || !repo) {
     return error(400, 'Missing npub or repo parameter');
@@ -22,6 +23,13 @@ export const GET: RequestHandler = async ({ params, url }) => {
       return error(400, 'Invalid npub format');
     }
     const repoOwnerPubkey = decoded.data as string;
+
+    // Check repository privacy
+    const { checkRepoAccess } = await import('$lib/utils/repo-privacy.js');
+    const access = await checkRepoAccess(npub, repo, userPubkey || null);
+    if (!access.allowed) {
+      return error(403, access.error || 'Access denied');
+    }
 
     const issuesService = new IssuesService(DEFAULT_NOSTR_RELAYS);
     const issues = await issuesService.getIssues(repoOwnerPubkey, repo);

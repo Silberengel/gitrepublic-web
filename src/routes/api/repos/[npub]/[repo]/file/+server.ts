@@ -14,10 +14,11 @@ const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
 
-export const GET: RequestHandler = async ({ params, url }: { params: { npub?: string; repo?: string }; url: URL }) => {
+export const GET: RequestHandler = async ({ params, url, request }: { params: { npub?: string; repo?: string }; url: URL; request: Request }) => {
   const { npub, repo } = params;
   const filePath = url.searchParams.get('path');
   const ref = url.searchParams.get('ref') || 'HEAD';
+  const userPubkey = url.searchParams.get('userPubkey') || request.headers.get('x-user-pubkey');
 
   if (!npub || !repo || !filePath) {
     return error(400, 'Missing npub, repo, or path parameter');
@@ -26,6 +27,24 @@ export const GET: RequestHandler = async ({ params, url }: { params: { npub?: st
   try {
     if (!fileManager.repoExists(npub, repo)) {
       return error(404, 'Repository not found');
+    }
+
+    // Check repository privacy
+    let repoOwnerPubkey: string;
+    try {
+      const decoded = nip19.decode(npub);
+      if (decoded.type === 'npub') {
+        repoOwnerPubkey = decoded.data as string;
+      } else {
+        return error(400, 'Invalid npub format');
+      }
+    } catch {
+      return error(400, 'Invalid npub format');
+    }
+
+    const canView = await maintainerService.canView(userPubkey || null, repoOwnerPubkey, repo);
+    if (!canView) {
+      return error(403, 'This repository is private. Only owners and maintainers can view it.');
     }
 
     const fileContent = await fileManager.getFileContent(npub, repo, filePath, ref);

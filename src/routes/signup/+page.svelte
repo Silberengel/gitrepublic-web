@@ -187,10 +187,22 @@
       // Combine user's outbox with default relays
       const userRelays = combineRelays(outbox);
 
-      // Publish to user's outboxes and standard relays
+      // Publish repository announcement
       const result = await nostrClient.publishEvent(signedEvent, userRelays);
 
       if (result.success.length > 0) {
+        // Create and publish initial ownership proof (self-transfer event)
+        const { OwnershipTransferService } = await import('../../lib/services/nostr/ownership-transfer-service.js');
+        const ownershipService = new OwnershipTransferService(userRelays);
+        
+        const initialOwnershipEvent = ownershipService.createInitialOwnershipEvent(pubkey, dTag);
+        const signedOwnershipEvent = await signEventWithNIP07(initialOwnershipEvent);
+        
+        // Publish initial ownership event (don't fail if this fails, announcement is already published)
+        await nostrClient.publishEvent(signedOwnershipEvent, userRelays).catch(err => {
+          console.warn('Failed to publish initial ownership event:', err);
+        });
+
         success = true;
         setTimeout(() => {
           goto('/');

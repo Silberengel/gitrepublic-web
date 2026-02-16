@@ -11,12 +11,18 @@
     content?: string;
     language?: 'markdown' | 'asciidoc' | 'text';
     onChange?: (value: string) => void;
+    onSelection?: (selectedText: string, startLine: number, endLine: number, startPos: number, endPos: number) => void;
+    readOnly?: boolean;
+    highlights?: Array<{ id: string; startLine: number; endLine: number; content: string }>;
   }
 
   let {
     content = $bindable(''),
     language = $bindable('text'),
-    onChange = () => {}
+    onChange = () => {},
+    onSelection = () => {},
+    readOnly = false,
+    highlights = []
   }: Props = $props();
 
   let editorView: EditorView | null = null;
@@ -44,7 +50,26 @@
             const newContent = update.state.doc.toString();
             onChange(newContent);
           }
-        })
+          
+          // Handle text selection
+          if (update.selectionSet && !readOnly) {
+            const selection = update.state.selection.main;
+            if (!selection.empty) {
+              const selectedText = update.state.doc.sliceString(selection.from, selection.to);
+              const startLine = update.state.doc.lineAt(selection.from);
+              const endLine = update.state.doc.lineAt(selection.to);
+              
+              onSelection(
+                selectedText,
+                startLine.number,
+                endLine.number,
+                selection.from,
+                selection.to
+              );
+            }
+          }
+        }),
+        EditorView.editable.of(!readOnly)
       ]
     });
 

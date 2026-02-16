@@ -48,8 +48,12 @@ export class RepoManager {
 
   /**
    * Create a bare git repository from a NIP-34 repo announcement
+   * 
+   * @param event - The repo announcement event
+   * @param selfTransferEvent - Optional self-transfer event to include in initial commit
+   * @param isExistingRepo - Whether this is an existing repo being added to the server
    */
-  async provisionRepo(event: NostrEvent): Promise<void> {
+  async provisionRepo(event: NostrEvent, selfTransferEvent?: NostrEvent, isExistingRepo: boolean = false): Promise<void> {
     const cloneUrls = this.extractCloneUrls(event);
     const domainUrl = cloneUrls.find(url => url.includes(this.domain));
     
@@ -68,19 +72,34 @@ export class RepoManager {
       mkdirSync(repoDir, { recursive: true });
     }
 
+    // Check if repo already exists
+    const repoExists = existsSync(repoPath.fullPath);
+    
+    // If there are other clone URLs, sync from them first (for existing repos)
+    const otherUrls = cloneUrls.filter(url => !url.includes(this.domain));
+    if (otherUrls.length > 0 && repoExists) {
+      // For existing repos, sync first to get the latest state
+      await this.syncFromRemotes(repoPath.fullPath, otherUrls);
+    }
+
     // Create bare repository if it doesn't exist
-    const isNewRepo = !existsSync(repoPath.fullPath);
+    const isNewRepo = !repoExists;
     if (isNewRepo) {
       await execAsync(`git init --bare "${repoPath.fullPath}"`);
       
-      // Create verification file in the repository
-      await this.createVerificationFile(repoPath.fullPath, event);
-    }
-
-    // If there are other clone URLs, sync from them
-    const otherUrls = cloneUrls.filter(url => !url.includes(this.domain));
-    if (otherUrls.length > 0) {
-      await this.syncFromRemotes(repoPath.fullPath, otherUrls);
+      // Create verification file and self-transfer event in the repository
+      await this.createVerificationFile(repoPath.fullPath, event, selfTransferEvent);
+      
+      // If there are other clone URLs, sync from them after creating the repo
+      if (otherUrls.length > 0) {
+        await this.syncFromRemotes(repoPath.fullPath, otherUrls);
+      }
+    } else if (isExistingRepo && selfTransferEvent) {
+      // For existing repos, we might want to add the self-transfer event
+      // But we should be careful not to overwrite existing history
+      // For now, we'll just ensure the verification file exists
+      // The self-transfer event should already be published to relays
+      console.log(`Existing repo ${repoPath.fullPath} - self-transfer event should be published to relays`);
     }
   }
 
@@ -215,10 +234,10 @@ export class RepoManager {
   }
 
   /**
-   * Create verification file in a new repository
+   * Create verification file and self-transfer event in a new repository
    * This proves the repository is owned by the announcement author
    */
-  private async createVerificationFile(repoPath: string, event: NostrEvent): Promise<void> {
+  private async createVerificationFile(repoPath: string, event: NostrEvent, selfTransferEvent?: NostrEvent): Promise<void> {
     try {
       // Create a temporary working directory
       const repoName = this.parseRepoPathForName(repoPath)?.repoName || 'temp';
@@ -242,13 +261,40 @@ export class RepoManager {
       const verificationPath = join(workDir, VERIFICATION_FILE_PATH);
       writeFileSync(verificationPath, verificationContent, 'utf-8');
 
-      // Commit the verification file
+      // If self-transfer event is provided, include it in the commit
+      const filesToAdd = [VERIFICATION_FILE_PATH];
+      if (selfTransferEvent) {
+        const selfTransferPath = join(workDir, '.nostr-ownership-transfer');
+        const isTemplate = !selfTransferEvent.sig || !selfTransferEvent.id;
+        
+        const selfTransferContent = JSON.stringify({
+          eventId: selfTransferEvent.id || '(unsigned - needs owner signature)',
+          pubkey: selfTransferEvent.pubkey,
+          signature: selfTransferEvent.sig || '(unsigned - needs owner signature)',
+          timestamp: selfTransferEvent.created_at,
+          kind: selfTransferEvent.kind,
+          content: selfTransferEvent.content,
+          tags: selfTransferEvent.tags,
+          ...(isTemplate ? {
+            _note: 'This is a template. The owner must sign and publish this event to relays for it to be valid.',
+            _instructions: 'To publish: 1. Sign this event with your private key, 2. Publish to relays using your Nostr client'
+          } : {})
+        }, null, 2) + '\n';
+        writeFileSync(selfTransferPath, selfTransferContent, 'utf-8');
+        filesToAdd.push('.nostr-ownership-transfer');
+      }
+
+      // Commit the verification file and self-transfer event
       const workGit: SimpleGit = simpleGit(workDir);
-      await workGit.add(VERIFICATION_FILE_PATH);
+      await workGit.add(filesToAdd);
       
       // Use the event timestamp for commit date
       const commitDate = new Date(event.created_at * 1000).toISOString();
-      await workGit.commit('Add Nostr repository verification file', [VERIFICATION_FILE_PATH], {
+      const commitMessage = selfTransferEvent 
+        ? 'Add Nostr repository verification and initial ownership proof'
+        : 'Add Nostr repository verification file';
+      
+      await workGit.commit(commitMessage, filesToAdd, {
         '--author': `Nostr <${event.pubkey}@nostr>`,
         '--date': commitDate
       });
@@ -275,5 +321,41 @@ export class RepoManager {
     const match = repoPath.match(/\/([^\/]+)\.git$/);
     if (!match) return null;
     return { repoName: match[1] };
+  }
+
+  /**
+   * Check if a repository already has a verification file
+   * Used to determine if this is a truly new repo or an existing one being added
+   */
+  async hasVerificationFile(repoPath: string): Promise<boolean> {
+    if (!this.repoExists(repoPath)) {
+      return false;
+    }
+
+    try {
+      const git: SimpleGit = simpleGit();
+      const repoName = this.parseRepoPathForName(repoPath)?.repoName || 'temp';
+      const workDir = join(repoPath, '..', `${repoName}.check`);
+      const { rm, mkdir } = await import('fs/promises');
+      
+      // Clean up if exists
+      if (existsSync(workDir)) {
+        await rm(workDir, { recursive: true, force: true });
+      }
+      await mkdir(workDir, { recursive: true });
+
+      // Try to clone and check for verification file
+      await git.clone(repoPath, workDir);
+      const verificationPath = join(workDir, VERIFICATION_FILE_PATH);
+      const hasFile = existsSync(verificationPath);
+
+      // Clean up
+      await rm(workDir, { recursive: true, force: true });
+      
+      return hasFile;
+    } catch {
+      // If we can't check, assume it doesn't have one
+      return false;
+    }
   }
 }

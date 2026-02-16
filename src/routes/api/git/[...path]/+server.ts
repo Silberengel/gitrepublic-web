@@ -6,7 +6,6 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { RepoManager } from '$lib/services/git/repo-manager.js';
-import { verifyEvent } from 'nostr-tools';
 import { nip19 } from 'nostr-tools';
 import { spawn, execSync } from 'child_process';
 import { existsSync } from 'fs';
@@ -15,10 +14,15 @@ import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { KIND } from '$lib/types/nostr.js';
 import type { NostrEvent } from '$lib/types/nostr.js';
+import { verifyNIP98Auth } from '$lib/services/nostr/nip98-auth.js';
+import { OwnershipTransferService } from '$lib/services/nostr/ownership-transfer-service.js';
+import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const repoManager = new RepoManager(repoRoot);
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
+const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
 
 // Path to git-http-backend (common locations)
 const GIT_HTTP_BACKEND_PATHS = [
@@ -52,59 +56,6 @@ function findGitHttpBackend(): string | null {
   return null;
 }
 
-/**
- * Verify NIP-98 authentication for push operations
- */
-async function verifyNIP98Auth(
-  request: Request,
-  expectedPubkey: string
-): Promise<{ valid: boolean; error?: string }> {
-  const authHeader = request.headers.get('Authorization');
-  
-  if (!authHeader || !authHeader.startsWith('Nostr ')) {
-    return { valid: false, error: 'Missing or invalid Authorization header (expected "Nostr <event>")' };
-  }
-
-  try {
-    const eventJson = authHeader.slice(7); // Remove "Nostr " prefix
-    const nostrEvent: NostrEvent = JSON.parse(eventJson);
-
-    // Verify event signature
-    if (!verifyEvent(nostrEvent)) {
-      return { valid: false, error: 'Invalid event signature' };
-    }
-
-    // Verify pubkey matches repo owner
-    if (nostrEvent.pubkey !== expectedPubkey) {
-      return { valid: false, error: 'Event pubkey does not match repository owner' };
-    }
-
-    // Verify event is recent (within last 5 minutes)
-    const now = Math.floor(Date.now() / 1000);
-    const eventAge = now - nostrEvent.created_at;
-    if (eventAge > 300) {
-      return { valid: false, error: 'Authentication event is too old (must be within 5 minutes)' };
-    }
-    if (eventAge < 0) {
-      return { valid: false, error: 'Authentication event has future timestamp' };
-    }
-
-    // Verify the event method and URL match the request
-    const methodTag = nostrEvent.tags.find(t => t[0] === 'method');
-    const urlTag = nostrEvent.tags.find(t => t[0] === 'u');
-    
-    if (methodTag && methodTag[1] !== request.method) {
-      return { valid: false, error: 'Event method does not match request method' };
-    }
-
-    return { valid: true };
-  } catch (err) {
-    return {
-      valid: false,
-      error: `Failed to parse or verify authentication: ${err instanceof Error ? err.message : String(err)}`
-    };
-  }
-}
 
 /**
  * Get repository announcement to extract clone URLs for post-receive sync
@@ -162,6 +113,11 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   const [, npub, repoName, gitPath = ''] = match;
   const service = url.searchParams.get('service');
 
+  // Build absolute request URL for NIP-98 validation
+  const protocol = request.headers.get('x-forwarded-proto') || (url.protocol === 'https:' ? 'https' : 'http');
+  const host = request.headers.get('host') || url.host;
+  const requestUrl = `${protocol}://${host}${url.pathname}${url.search}`;
+
   // Validate npub format
   try {
     const decoded = nip19.decode(npub);
@@ -176,6 +132,52 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   const repoPath = join(repoRoot, npub, `${repoName}.git`);
   if (!repoManager.repoExists(repoPath)) {
     return error(404, 'Repository not found');
+  }
+
+  // Check repository privacy for clone/fetch operations
+  let originalOwnerPubkey: string;
+  try {
+    const decoded = nip19.decode(npub);
+    if (decoded.type !== 'npub') {
+      return error(400, 'Invalid npub format');
+    }
+    originalOwnerPubkey = decoded.data as string;
+  } catch {
+    return error(400, 'Invalid npub format');
+  }
+
+  // For clone/fetch operations, check if repo is private
+  // If private, require NIP-98 authentication
+  const privacyInfo = await maintainerService.getPrivacyInfo(originalOwnerPubkey, repoName);
+  if (privacyInfo.isPrivate) {
+    // Private repos require authentication for clone/fetch
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Nostr ')) {
+      return error(401, 'This repository is private. Authentication required.');
+    }
+
+    // Build absolute request URL for NIP-98 validation
+    const protocol = request.headers.get('x-forwarded-proto') || (url.protocol === 'https:' ? 'https' : 'http');
+    const host = request.headers.get('host') || url.host;
+    const requestUrl = `${protocol}://${host}${url.pathname}${url.search}`;
+
+    // Verify NIP-98 authentication
+    const authResult = verifyNIP98Auth(
+      authHeader,
+      requestUrl,
+      request.method,
+      undefined // GET requests don't have body
+    );
+
+    if (!authResult.valid) {
+      return error(401, authResult.error || 'Authentication required');
+    }
+
+    // Verify user can view the repo
+    const canView = await maintainerService.canView(authResult.pubkey || null, originalOwnerPubkey, repoName);
+    if (!canView) {
+      return error(403, 'You do not have permission to access this private repository.');
+    }
   }
 
   // Find git-http-backend
@@ -265,13 +267,13 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
   const [, npub, repoName, gitPath = ''] = match;
 
   // Validate npub format and decode to get pubkey
-  let repoOwnerPubkey: string;
+  let originalOwnerPubkey: string;
   try {
     const decoded = nip19.decode(npub);
     if (decoded.type !== 'npub') {
       return error(400, 'Invalid npub format');
     }
-    repoOwnerPubkey = decoded.data as string;
+    originalOwnerPubkey = decoded.data as string;
   } catch {
     return error(400, 'Invalid npub format');
   }
@@ -282,11 +284,35 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     return error(404, 'Repository not found');
   }
 
+  // Get current owner (may be different if ownership was transferred)
+  const currentOwnerPubkey = await ownershipTransferService.getCurrentOwner(originalOwnerPubkey, repoName);
+
+  // Build absolute request URL for NIP-98 validation
+  const protocol = request.headers.get('x-forwarded-proto') || (url.protocol === 'https:' ? 'https' : 'http');
+  const host = request.headers.get('host') || url.host;
+  const requestUrl = `${protocol}://${host}${url.pathname}${url.search}`;
+
+  // Get request body (read once, use for both auth and git-http-backend)
+  const body = await request.arrayBuffer();
+  const bodyBuffer = Buffer.from(body);
+
   // For push operations (git-receive-pack), require NIP-98 authentication
   if (gitPath === 'git-receive-pack' || path.includes('git-receive-pack')) {
-    const authResult = await verifyNIP98Auth(request, repoOwnerPubkey);
+    // Verify NIP-98 authentication
+    const authResult = verifyNIP98Auth(
+      request.headers.get('Authorization'),
+      requestUrl,
+      request.method,
+      bodyBuffer.length > 0 ? bodyBuffer : undefined
+    );
+
     if (!authResult.valid) {
       return error(401, authResult.error || 'Authentication required');
+    }
+
+    // Verify pubkey matches current repo owner (may have been transferred)
+    if (authResult.pubkey !== currentOwnerPubkey) {
+      return error(403, 'Event pubkey does not match repository owner');
     }
   }
 
@@ -298,10 +324,6 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
 
   // Build PATH_INFO
   const pathInfo = gitPath ? `/${npub}/${repoName}.git/${gitPath}` : `/${npub}/${repoName}.git`;
-
-  // Get request body
-  const body = await request.arrayBuffer();
-  const bodyBuffer = Buffer.from(body);
 
   // Set up environment variables for git-http-backend
   const envVars = {

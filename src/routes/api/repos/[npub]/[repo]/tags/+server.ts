@@ -14,8 +14,9 @@ const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
 
-export const GET: RequestHandler = async ({ params }: { params: { npub?: string; repo?: string } }) => {
+export const GET: RequestHandler = async ({ params, url, request }: { params: { npub?: string; repo?: string }; url: URL; request: Request }) => {
   const { npub, repo } = params;
+  const userPubkey = url.searchParams.get('userPubkey') || request.headers.get('x-user-pubkey');
 
   if (!npub || !repo) {
     return error(400, 'Missing npub or repo parameter');
@@ -24,6 +25,13 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
   try {
     if (!fileManager.repoExists(npub, repo)) {
       return error(404, 'Repository not found');
+    }
+
+    // Check repository privacy
+    const { checkRepoAccess } = await import('$lib/utils/repo-privacy.js');
+    const access = await checkRepoAccess(npub, repo, userPubkey || null);
+    if (!access.allowed) {
+      return error(403, access.error || 'Access denied');
     }
 
     const tags = await fileManager.getTags(npub, repo);

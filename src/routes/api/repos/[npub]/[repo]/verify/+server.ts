@@ -8,6 +8,7 @@ import type { RequestHandler } from './$types';
 import { FileManager } from '$lib/services/git/file-manager.js';
 import { verifyRepositoryOwnership, VERIFICATION_FILE_PATH } from '$lib/services/nostr/repo-verification.js';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
+import { OwnershipTransferService } from '$lib/services/nostr/ownership-transfer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { KIND } from '$lib/types/nostr.js';
 import { nip19 } from 'nostr-tools';
@@ -17,6 +18,7 @@ import { join } from 'path';
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
 
 export const GET: RequestHandler = async ({ params }: { params: { npub?: string; repo?: string } }) => {
   const { npub, repo } = params;
@@ -45,19 +47,6 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
       return error(404, 'Repository not found');
     }
 
-    // Try to read verification file
-    let verificationContent: string;
-    try {
-      const verificationFile = await fileManager.getFileContent(npub, repo, VERIFICATION_FILE_PATH, 'HEAD');
-      verificationContent = verificationFile.content;
-    } catch (err) {
-      return json({
-        verified: false,
-        error: 'Verification file not found in repository',
-        message: 'This repository does not have a .nostr-verification file. It may have been created before verification was implemented.'
-      });
-    }
-
     // Fetch the repository announcement
     const events = await nostrClient.fetchEvents([
       {
@@ -78,21 +67,84 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
 
     const announcement = events[0];
 
-    // Verify ownership
-    const verification = verifyRepositoryOwnership(announcement, verificationContent);
+    // Check for ownership transfer events (including self-transfer for initial ownership)
+    const repoTag = `30617:${ownerPubkey}:${repo}`;
+    const transferEvents = await nostrClient.fetchEvents([
+      {
+        kinds: [KIND.OWNERSHIP_TRANSFER],
+        '#a': [repoTag],
+        limit: 100
+      }
+    ]);
 
-    if (verification.valid) {
+    // Look for self-transfer event (initial ownership proof)
+    // Self-transfer: from owner to themselves, tagged with 'self-transfer'
+    const selfTransfer = transferEvents.find(event => {
+      const pTag = event.tags.find(t => t[0] === 'p');
+      let toPubkey = pTag?.[1];
+      
+      // Decode npub if needed
+      if (toPubkey) {
+        try {
+          const decoded = nip19.decode(toPubkey);
+          if (decoded.type === 'npub') {
+            toPubkey = decoded.data as string;
+          }
+        } catch {
+          // Assume it's already hex
+        }
+      }
+      
+      return event.pubkey === ownerPubkey && 
+             toPubkey === ownerPubkey;
+    });
+
+    // Verify ownership - prefer self-transfer event, fall back to verification file
+    let verified = false;
+    let verificationMethod = '';
+    let error: string | undefined;
+
+    if (selfTransfer) {
+      // Verify self-transfer event signature
+      const { verifyEvent } = await import('nostr-tools');
+      if (verifyEvent(selfTransfer)) {
+        verified = true;
+        verificationMethod = 'self-transfer-event';
+      } else {
+        verified = false;
+        error = 'Self-transfer event signature is invalid';
+        verificationMethod = 'self-transfer-event';
+      }
+    } else {
+      // Fall back to verification file method (for backward compatibility)
+      try {
+        const verificationFile = await fileManager.getFileContent(npub, repo, VERIFICATION_FILE_PATH, 'HEAD');
+        const verification = verifyRepositoryOwnership(announcement, verificationFile.content);
+        verified = verification.valid;
+        error = verification.error;
+        verificationMethod = 'verification-file';
+      } catch (err) {
+        verified = false;
+        error = 'No ownership proof found (neither self-transfer event nor verification file)';
+        verificationMethod = 'none';
+      }
+    }
+
+    if (verified) {
       return json({
         verified: true,
         announcementId: announcement.id,
         ownerPubkey: ownerPubkey,
+        verificationMethod,
+        selfTransferEventId: selfTransfer?.id,
         message: 'Repository ownership verified successfully'
       });
     } else {
       return json({
         verified: false,
-        error: verification.error,
+        error: error || 'Repository ownership verification failed',
         announcementId: announcement.id,
+        verificationMethod,
         message: 'Repository ownership verification failed'
       });
     }
