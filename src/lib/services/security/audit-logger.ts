@@ -15,6 +15,7 @@ import { appendFile, mkdir, readdir, unlink, stat } from 'fs/promises';
 import { join, dirname } from 'path';
 import { existsSync } from 'fs';
 import { truncatePubkey, sanitizeError, redactSensitiveData } from '../../utils/security.js';
+import logger from '../logger.js';
 
 export interface AuditLogEntry {
   timestamp: string;
@@ -72,7 +73,7 @@ export class AuditLogger {
         await mkdir(this.logDir, { recursive: true });
       }
     } catch (error) {
-      console.error('[AUDIT] Failed to create log directory:', error);
+      logger.error({ error }, '[AUDIT] Failed to create log directory');
     }
   }
 
@@ -98,13 +99,13 @@ export class AuditLogger {
     // Run cleanup daily
     this.cleanupInterval = setInterval(() => {
       this.cleanupOldLogs().catch(err => {
-        console.error('[AUDIT] Failed to cleanup old logs:', err);
+        logger.error({ error: err }, '[AUDIT] Failed to cleanup old logs');
       });
     }, 24 * 60 * 60 * 1000); // 24 hours
     
     // Run initial cleanup
     this.cleanupOldLogs().catch(err => {
-      console.error('[AUDIT] Failed to cleanup old logs:', err);
+      logger.error({ error: err }, '[AUDIT] Failed to cleanup old logs');
     });
   }
 
@@ -128,14 +129,14 @@ export class AuditLogger {
           const stats = await stat(filePath);
           if (stats.mtime.getTime() < cutoffTime) {
             await unlink(filePath);
-            console.log(`[AUDIT] Deleted old log file: ${file}`);
+            logger.info({ file }, '[AUDIT] Deleted old log file');
           }
         } catch (err) {
           // Ignore errors for individual files
         }
       }
     } catch (error) {
-      console.error('[AUDIT] Error during log cleanup:', error);
+      logger.error({ error }, '[AUDIT] Error during log cleanup');
     }
   }
 
@@ -158,7 +159,7 @@ export class AuditLogger {
         await appendFile(join(this.logDir, this.currentLogFile), content, 'utf8');
       }
     } catch (error) {
-      console.error('[AUDIT] Failed to write to log file:', error);
+      logger.error({ error }, '[AUDIT] Failed to write to log file');
       // Put items back in queue (but limit queue size to prevent memory issues)
       this.writeQueue = [...this.writeQueue, ...this.writeQueue].slice(0, 1000);
     } finally {
@@ -191,14 +192,14 @@ export class AuditLogger {
       timestamp: new Date().toISOString()
     };
 
-    // Log to console (structured JSON)
+    // Log using pino (structured JSON)
     const logLine = JSON.stringify(sanitizedEntry);
-    console.log(`[AUDIT] ${logLine}`);
+    logger.info(sanitizedEntry, '[AUDIT]');
 
     // Write to file if configured (async, non-blocking)
     if (this.logFile) {
       this.writeToFile(logLine).catch(err => {
-        console.error('[AUDIT] Failed to write log entry:', sanitizeError(err));
+        logger.error({ error: sanitizeError(err) }, '[AUDIT] Failed to write log entry');
       });
     }
   }

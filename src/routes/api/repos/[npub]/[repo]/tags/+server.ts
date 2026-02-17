@@ -9,6 +9,7 @@ import { FileManager } from '$lib/services/git/file-manager.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
+import logger from '$lib/services/logger.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -37,7 +38,7 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
     const tags = await fileManager.getTags(npub, repo);
     return json(tags);
   } catch (err) {
-    console.error('Error getting tags:', err);
+    logger.error({ error: err, npub, repo }, 'Error getting tags');
     return error(500, err instanceof Error ? err.message : 'Failed to get tags');
   }
 };
@@ -98,7 +99,7 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
     await fileManager.createTag(npub, repo, tagName, ref || 'HEAD', message);
     return json({ success: true, message: 'Tag created successfully' });
   } catch (err) {
-    console.error('Error creating tag:', err);
+    logger.error({ error: err, npub, repo, tagName }, 'Error creating tag');
     return error(500, err instanceof Error ? err.message : 'Failed to create tag');
   }
 };

@@ -10,6 +10,7 @@ import { existsSync } from 'fs';
 import { RepoManager } from './repo-manager.js';
 import { createGitCommitSignature } from './commit-signer.js';
 import type { NostrEvent } from '../../types/nostr.js';
+import logger from '../logger.js';
 
 export interface FileEntry {
   name: string;
@@ -229,7 +230,7 @@ export class FileManager {
         return a.name.localeCompare(b.name);
       });
     } catch (error) {
-      console.error('Error listing files:', error);
+      logger.error({ error, repoPath, ref }, 'Error listing files');
       throw new Error(`Failed to list files: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -275,7 +276,7 @@ export class FileManager {
         size
       };
     } catch (error) {
-      console.error('Error reading file:', error);
+      logger.error({ error, repoPath, filePath, ref }, 'Error reading file');
       throw new Error(`Failed to read file: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -414,7 +415,7 @@ export class FileManager {
         } catch (err) {
           // Security: Sanitize error messages (never log private keys)
           const sanitizedErr = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : String(err);
-          console.warn('Failed to sign commit:', sanitizedErr);
+          logger.warn({ error: sanitizedErr, repoPath, filePath }, 'Failed to sign commit');
           // Continue without signature if signing fails
         }
       }
@@ -430,7 +431,7 @@ export class FileManager {
       // Clean up work directory
       await rm(workDir, { recursive: true, force: true });
     } catch (error) {
-      console.error('Error writing file:', error);
+      logger.error({ error, repoPath, filePath, npub }, 'Error writing file');
       throw new Error(`Failed to write file: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -453,7 +454,7 @@ export class FileManager {
         .map(b => b.replace(/^origin\//, ''))
         .filter(b => !b.includes('HEAD'));
     } catch (error) {
-      console.error('Error getting branches:', error);
+      logger.error({ error, repoPath }, 'Error getting branches');
       return ['main', 'master']; // Default branches
     }
   }
@@ -585,7 +586,7 @@ export class FileManager {
         } catch (err) {
           // Security: Sanitize error messages (never log private keys)
           const sanitizedErr = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : String(err);
-          console.warn('Failed to sign commit:', sanitizedErr);
+          logger.warn({ error: sanitizedErr, repoPath, filePath }, 'Failed to sign commit');
           // Continue without signature if signing fails
         }
       }
@@ -601,7 +602,7 @@ export class FileManager {
       // Clean up
       await rm(workDir, { recursive: true, force: true });
     } catch (error) {
-      console.error('Error deleting file:', error);
+      logger.error({ error, repoPath, filePath, npub }, 'Error deleting file');
       throw new Error(`Failed to delete file: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -646,7 +647,7 @@ export class FileManager {
       // Clean up
       await rm(workDir, { recursive: true, force: true });
     } catch (error) {
-      console.error('Error creating branch:', error);
+      logger.error({ error, repoPath, branchName, npub }, 'Error creating branch');
       throw new Error(`Failed to create branch: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -689,7 +690,7 @@ export class FileManager {
         files: commit.diff?.files?.map((f: any) => f.file) || []
       }));
     } catch (error) {
-      console.error('Error getting commit history:', error);
+      logger.error({ error, repoPath, branch, limit }, 'Error getting commit history');
       throw new Error(`Failed to get commit history: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -777,7 +778,7 @@ export class FileManager {
 
       return files;
     } catch (error) {
-      console.error('Error getting diff:', error);
+      logger.error({ error, repoPath, fromRef, toRef }, 'Error getting diff');
       throw new Error(`Failed to get diff: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -821,7 +822,7 @@ export class FileManager {
         }
       }
     } catch (error) {
-      console.error('Error creating tag:', error);
+      logger.error({ error, repoPath, tagName, ref, message }, 'Error creating tag');
       throw new Error(`Failed to create tag: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -866,7 +867,7 @@ export class FileManager {
 
       return tagList;
     } catch (error) {
-      console.error('Error getting tags:', error);
+      logger.error({ error, repoPath }, 'Error getting tags');
       return [];
     }
   }

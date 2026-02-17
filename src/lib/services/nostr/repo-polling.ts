@@ -7,6 +7,7 @@ import { KIND } from '../../types/nostr.js';
 import type { NostrEvent } from '../../types/nostr.js';
 import { RepoManager } from '../git/repo-manager.js';
 import { OwnershipTransferService } from './ownership-transfer-service.js';
+import logger from '../logger.js';
 
 export class RepoPollingService {
   private nostrClient: NostrClient;
@@ -80,7 +81,7 @@ export class RepoPollingService {
           // Extract repo ID from d-tag
           const dTag = event.tags.find(t => t[0] === 'd')?.[1];
           if (!dTag) {
-            console.warn(`Repo announcement ${event.id} missing d-tag`);
+            logger.warn({ eventId: event.id }, 'Repo announcement missing d-tag');
             continue;
           }
 
@@ -136,7 +137,7 @@ export class RepoPollingService {
           if (isExistingRepo && !selfTransferEvent) {
             // Security: Truncate pubkey in logs
             const truncatedPubkey = event.pubkey.length > 16 ? `${event.pubkey.slice(0, 8)}...${event.pubkey.slice(-4)}` : event.pubkey;
-            console.log(`Existing repo ${dTag} from ${truncatedPubkey} has no self-transfer event. Creating template for owner to sign and publish.`);
+            logger.info({ repoId: dTag, pubkey: truncatedPubkey }, 'Existing repo has no self-transfer event. Creating template for owner to sign and publish.');
             
             try {
               // Create a self-transfer event template for the existing repo
@@ -155,21 +156,21 @@ export class RepoPollingService {
               // Use the template (even though it's unsigned, it will be included in the repo)
               selfTransferEvent = selfTransferTemplate;
               
-              console.warn(`Self-transfer event template created for ${dTag}. Owner ${event.pubkey} should sign and publish it to relays.`);
+              logger.warn({ repoId: dTag, pubkey: event.pubkey }, 'Self-transfer event template created. Owner should sign and publish it to relays.');
             } catch (err) {
-              console.error(`Failed to create self-transfer event template for ${dTag}:`, err);
+              logger.error({ error: err, repoId: dTag }, 'Failed to create self-transfer event template');
             }
           }
 
           // Provision the repo with self-transfer event if available
           await this.repoManager.provisionRepo(event, selfTransferEvent, isExistingRepo);
-          console.log(`Provisioned repo from announcement ${event.id}${isExistingRepo ? ' (existing)' : ' (new)'}`);
+          logger.info({ eventId: event.id, isExistingRepo }, 'Provisioned repo from announcement');
         } catch (error) {
-          console.error(`Failed to provision repo from ${event.id}:`, error);
+          logger.error({ error, eventId: event.id }, 'Failed to provision repo from announcement');
         }
       }
     } catch (error) {
-      console.error('Error polling for repo announcements:', error);
+      logger.error({ error }, 'Error polling for repo announcements');
     }
   }
 

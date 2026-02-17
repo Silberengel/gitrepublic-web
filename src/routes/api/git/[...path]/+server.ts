@@ -18,6 +18,7 @@ import { verifyNIP98Auth } from '$lib/services/nostr/nip98-auth.js';
 import { OwnershipTransferService } from '$lib/services/nostr/ownership-transfer-service.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { BranchProtectionService } from '$lib/services/nostr/branch-protection-service.js';
+import logger from '$lib/services/logger.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
@@ -412,11 +413,12 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     // Note: We need to extract the target branch from the git push request
     // This is a simplified check - in production, you'd parse the git protocol
     // to determine the exact branch being pushed
+    let targetBranch = 'main'; // Default to main if can't determine
     try {
       // Try to extract branch from request body (git protocol)
       const bodyText = bodyBuffer.toString('utf-8', 0, Math.min(bodyBuffer.length, 1000));
       const branchMatch = bodyText.match(/refs\/heads\/([^\s\n]+)/);
-      const targetBranch = branchMatch ? branchMatch[1] : 'main'; // Default to main if can't determine
+      targetBranch = branchMatch ? branchMatch[1] : 'main'; // Default to main if can't determine
       
       const protectionCheck = await branchProtectionService.canPushToBranch(
         authResult.pubkey || '',
@@ -433,7 +435,7 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
       // If we can't check protection, log but don't block (fail open for now)
       // Security: Sanitize error messages
       const sanitizedError = error instanceof Error ? error.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : String(error);
-      console.warn('Failed to check branch protection:', sanitizedError);
+      logger.warn({ error: sanitizedError, npub, repoName, targetBranch }, 'Failed to check branch protection');
     }
   }
 
@@ -545,14 +547,14 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
               repoManager.syncToRemotes(repoPath, otherUrls).catch(err => {
                 // Security: Sanitize error messages
                 const sanitizedErr = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : String(err);
-                console.error('Failed to sync to remotes after push:', sanitizedErr);
+                logger.error({ error: sanitizedErr, npub, repoName }, 'Failed to sync to remotes after push');
               });
             }
           }
         } catch (err) {
           // Security: Sanitize error messages
           const sanitizedErr = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : String(err);
-          console.error('Failed to sync to remotes:', sanitizedErr);
+          logger.error({ error: sanitizedErr, npub, repoName }, 'Failed to sync to remotes');
           // Don't fail the request if sync fails
         }
       }

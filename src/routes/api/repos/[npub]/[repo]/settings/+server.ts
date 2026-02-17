@@ -11,6 +11,7 @@ import { KIND } from '$lib/types/nostr.js';
 import { nip19 } from 'nostr-tools';
 import { signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
+import logger from '$lib/services/logger.js';
 import { OwnershipTransferService } from '$lib/services/nostr/ownership-transfer-service.js';
 
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
@@ -100,7 +101,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       npub
     });
   } catch (err) {
-    console.error('Error getting repository settings:', err);
+    logger.error({ error: err, npub, repo }, 'Error getting repository settings');
     return error(500, err instanceof Error ? err.message : 'Failed to get repository settings');
   }
 };
@@ -214,7 +215,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     return json({ success: true, event: signedEvent });
   } catch (err) {
-    console.error('Error updating repository settings:', err);
+    logger.error({ error: err, npub, repo }, 'Error updating repository settings');
     return error(500, err instanceof Error ? err.message : 'Failed to update repository settings');
   }
 };

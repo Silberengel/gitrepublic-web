@@ -11,6 +11,7 @@ import { FileManager } from '$lib/services/git/file-manager.js';
 import { nip19 } from 'nostr-tools';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import logger from '$lib/services/logger.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -154,7 +155,7 @@ export const GET: RequestHandler = async ({ url }) => {
       total: results.repos.length + results.code.length
     });
   } catch (err) {
-    console.error('Error searching:', err);
+    logger.error({ error: err, query }, 'Error searching');
     return error(500, err instanceof Error ? err.message : 'Failed to search');
   }
 };

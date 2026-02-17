@@ -11,6 +11,7 @@ import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
 import { verifyNIP98Auth } from '$lib/services/nostr/nip98-auth.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
+import logger from '$lib/services/logger.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -86,7 +87,7 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
   } catch (err) {
     // Security: Sanitize error messages to prevent leaking sensitive data
     const sanitizedError = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : 'Failed to read file';
-    console.error('Error reading file:', sanitizedError);
+    logger.error({ error: sanitizedError, npub, repo, filePath }, 'Error reading file');
     return error(500, sanitizedError);
   }
 };
@@ -98,9 +99,11 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
     return error(400, 'Missing npub or repo parameter');
   }
 
+  let path: string | undefined;
   try {
     const body = await request.json();
-    const { path, content, commitMessage, authorName, authorEmail, branch, action, userPubkey, useNIP07, nsecKey } = body;
+    path = body.path;
+    const { content, commitMessage, authorName, authorEmail, branch, action, userPubkey, useNIP07, nsecKey } = body;
     
     // Check for NIP-98 authentication (for git operations)
     const authHeader = request.headers.get('Authorization');
@@ -175,7 +178,7 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
     if (nsecKey) {
       // Security: Log warning but never log the actual key value
       const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
-      console.warn(`[SECURITY] Client attempted to send nsecKey in request from IP ${clientIp}. This is not allowed for security reasons.`);
+      logger.warn({ clientIp, npub, repo }, '[SECURITY] Client attempted to send nsecKey in request. This is not allowed for security reasons.');
       auditLogger.log({
         user: userPubkeyHex || undefined,
         ip: clientIp,
@@ -265,7 +268,7 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
   } catch (err) {
     // Security: Sanitize error messages to prevent leaking sensitive data
     const sanitizedError = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : 'Failed to write file';
-    console.error('Error writing file:', sanitizedError);
+    logger.error({ error: sanitizedError, npub, repo, path }, 'Error writing file');
     return error(500, sanitizedError);
   }
 };

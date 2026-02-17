@@ -12,6 +12,7 @@ import type { NostrEvent } from '../../types/nostr.js';
 import { GIT_DOMAIN } from '../../config.js';
 import { generateVerificationFile, VERIFICATION_FILE_PATH } from '../nostr/repo-verification.js';
 import simpleGit, { type SimpleGit } from 'simple-git';
+import logger from '../logger.js';
 
 const execAsync = promisify(exec);
 
@@ -99,7 +100,7 @@ export class RepoManager {
       // But we should be careful not to overwrite existing history
       // For now, we'll just ensure the verification file exists
       // The self-transfer event should already be published to relays
-      console.log(`Existing repo ${repoPath.fullPath} - self-transfer event should be published to relays`);
+      logger.info({ repoPath: repoPath.fullPath }, 'Existing repo - self-transfer event should be published to relays');
     }
   }
 
@@ -119,7 +120,7 @@ export class RepoManager {
         // Update all branches
         await execAsync(`cd "${repoPath}" && git remote set-head ${remoteName} -a`);
       } catch (error) {
-        console.error(`Failed to sync from ${url}:`, error);
+        logger.error({ error, url, repoPath }, 'Failed to sync from remote');
         // Continue with other remotes
       }
     }
@@ -136,7 +137,7 @@ export class RepoManager {
         await execAsync(`cd "${repoPath}" && git push ${remoteName} --all --force`);
         await execAsync(`cd "${repoPath}" && git push ${remoteName} --tags --force`);
       } catch (error) {
-        console.error(`Failed to sync to ${url}:`, error);
+        logger.error({ error, url, repoPath }, 'Failed to sync to remote');
         // Continue with other remotes
       }
     }
@@ -311,7 +312,7 @@ export class RepoManager {
           );
           commitMessage = signedMessage;
         } catch (err) {
-          console.warn('Failed to sign initial commit:', err);
+          logger.warn({ error: err, repoPath: repoPath.fullPath }, 'Failed to sign initial commit');
           // Continue without signature if signing fails
         }
       }
@@ -331,7 +332,7 @@ export class RepoManager {
       // Clean up
       await rm(workDir, { recursive: true, force: true });
     } catch (error) {
-      console.error('Failed to create verification file:', error);
+      logger.error({ error, repoPath: repoPath.fullPath }, 'Failed to create verification file');
       // Don't throw - verification file creation is important but shouldn't block provisioning
     }
   }

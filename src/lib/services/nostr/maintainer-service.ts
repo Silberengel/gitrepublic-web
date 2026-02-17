@@ -8,6 +8,7 @@ import { KIND } from '../../types/nostr.js';
 import type { NostrEvent } from '../../types/nostr.js';
 import { nip19 } from 'nostr-tools';
 import { OwnershipTransferService } from './ownership-transfer-service.js';
+import logger from '../logger.js';
 
 export interface RepoPrivacyInfo {
   isPrivate: boolean;
@@ -109,7 +110,7 @@ export class MaintainerService {
       this.cache.set(cacheKey, { ...result, timestamp: Date.now() });
       return result;
     } catch (error) {
-      console.error('Error fetching maintainers:', error);
+      logger.error({ error, ownerPubkey, repoName }, 'Error fetching maintainers');
       // Fallback: only owner is maintainer, repo is public by default
       const result = { owner: repoOwnerPubkey, maintainers: [repoOwnerPubkey], isPrivate: false };
       this.cache.set(cacheKey, { ...result, timestamp: Date.now() });

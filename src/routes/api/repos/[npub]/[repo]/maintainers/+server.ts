@@ -8,6 +8,7 @@ import type { RequestHandler } from './$types';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
+import logger from '$lib/services/logger.js';
 
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
 
@@ -60,7 +61,7 @@ export const GET: RequestHandler = async ({ params, url }: { params: { npub?: st
 
     return json({ maintainers, owner });
   } catch (err) {
-    console.error('Error checking maintainers:', err);
+    logger.error({ error: err, npub, repo }, 'Error checking maintainers');
     return error(500, err instanceof Error ? err.message : 'Failed to check maintainers');
   }
 };

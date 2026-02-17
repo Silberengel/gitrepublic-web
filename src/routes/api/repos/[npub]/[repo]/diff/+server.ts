@@ -5,6 +5,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { FileManager } from '$lib/services/git/file-manager.js';
+import logger from '$lib/services/logger.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -35,7 +36,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     const diffs = await fileManager.getDiff(npub, repo, fromRef, toRef, filePath);
     return json(diffs);
   } catch (err) {
-    console.error('Error getting diff:', err);
+    logger.error({ error: err, npub, repo, fromRef, toRef }, 'Error getting diff');
     return error(500, err instanceof Error ? err.message : 'Failed to get diff');
   }
 };

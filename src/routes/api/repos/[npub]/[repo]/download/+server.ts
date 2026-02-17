@@ -13,6 +13,7 @@ import { promisify } from 'util';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { createReadStream } from 'fs';
+import logger from '$lib/services/logger.js';
 
 const execAsync = promisify(exec);
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
@@ -104,7 +105,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       throw archiveError;
     }
   } catch (err) {
-    console.error('Error creating repository archive:', err);
+    logger.error({ error: err, npub, repo }, 'Error creating repository archive');
     return error(500, err instanceof Error ? err.message : 'Failed to create repository archive');
   }
 };

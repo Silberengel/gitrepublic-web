@@ -5,6 +5,7 @@
 import { NostrClient } from './nostr-client.js';
 import { KIND } from '../../types/nostr.js';
 import type { NostrEvent } from '../../types/nostr.js';
+import logger from '../logger.js';
 
 export class ForkCountService {
   private nostrClient: NostrClient;
@@ -52,7 +53,7 @@ export class ForkCountService {
       
       return count;
     } catch (error) {
-      console.error(`[ForkCount] Error counting forks for ${originalOwnerPubkey}/${originalRepoName}:`, error);
+      logger.error({ error, originalOwnerPubkey, originalRepoName }, '[ForkCount] Error counting forks');
       // Return cached value if available, otherwise 0
       return cached?.count || 0;
     }

@@ -6,6 +6,7 @@
 import { NostrClient } from './nostr-client.js';
 import { KIND } from '../../types/nostr.js';
 import type { NostrEvent } from '../../types/nostr.js';
+import logger from '../logger.js';
 
 export interface BranchProtectionRule {
   branch: string;
@@ -51,7 +52,7 @@ export class BranchProtectionService {
       const event = events[0];
       return this.parseProtectionEvent(event);
     } catch (error) {
-      console.error('Error fetching branch protection:', error);
+      logger.error({ error, ownerPubkey, repoName }, 'Error fetching branch protection');
       return null;
     }
   }

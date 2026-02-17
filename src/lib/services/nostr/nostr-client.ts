@@ -4,6 +4,7 @@
 
 import type { NostrEvent, NostrFilter } from '../../types/nostr.js';
 import { createRequire } from 'module';
+import logger from '../logger.js';
 
 // Polyfill WebSocket for Node.js environments (lazy initialization)
 let wsPolyfillInitialized = false;
@@ -22,7 +23,7 @@ function initializeWebSocketPolyfill() {
     wsPolyfillInitialized = true;
   } catch {
     // ws package not available, will fail at runtime in Node.js
-    console.warn('WebSocket polyfill not available. Install "ws" package for Node.js support.');
+    logger.warn('WebSocket polyfill not available. Install "ws" package for Node.js support.');
     wsPolyfillInitialized = true; // Mark as initialized to avoid repeated warnings
   }
 }

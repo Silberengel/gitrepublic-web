@@ -12,6 +12,7 @@ import { nip19 } from 'nostr-tools';
 import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
+import logger from '$lib/services/logger.js';
 
 const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
@@ -72,7 +73,7 @@ export const GET: RequestHandler = async ({ params }) => {
       })
     });
   } catch (err) {
-    console.error('Error fetching ownership info:', err);
+    logger.error({ error: err, npub, repo }, 'Error fetching ownership info');
     return error(500, err instanceof Error ? err.message : 'Failed to fetch ownership info');
   }
 };
@@ -166,7 +167,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
       message: 'Ownership transfer initiated successfully'
     });
   } catch (err) {
-    console.error('Error transferring ownership:', err);
+    logger.error({ error: err, npub, repo }, 'Error transferring ownership');
     return error(500, err instanceof Error ? err.message : 'Failed to transfer ownership');
   }
 };

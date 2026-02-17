@@ -13,6 +13,7 @@ import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { KIND } from '$lib/types/nostr.js';
 import { nip19 } from 'nostr-tools';
 import { existsSync } from 'fs';
+import logger from '$lib/services/logger.js';
 import { join } from 'path';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
@@ -149,7 +150,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
       });
     }
   } catch (err) {
-    console.error('Error verifying repository:', err);
+    logger.error({ error: err, npub, repo }, 'Error verifying repository');
     return error(500, err instanceof Error ? err.message : 'Failed to verify repository');
   }
 };

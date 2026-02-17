@@ -7,6 +7,7 @@ import type { RequestHandler } from './$types';
 import { IssuesService } from '$lib/services/nostr/issues-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
+import logger from '$lib/services/logger.js';
 
 export const GET: RequestHandler = async ({ params, url, request }) => {
   const { npub, repo } = params;
@@ -36,7 +37,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     
     return json(issues);
   } catch (err) {
-    console.error('Error fetching issues:', err);
+    logger.error({ error: err, npub, repo }, 'Error fetching issues');
     return error(500, err instanceof Error ? err.message : 'Failed to fetch issues');
   }
 };
@@ -73,7 +74,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     return json({ success: true, event, published: result });
   } catch (err) {
-    console.error('Error creating issue:', err);
+    logger.error({ error: err, npub, repo }, 'Error creating issue');
     return error(500, err instanceof Error ? err.message : 'Failed to create issue');
   }
 };

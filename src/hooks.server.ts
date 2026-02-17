@@ -9,6 +9,7 @@ import { RepoPollingService } from './lib/services/nostr/repo-polling.js';
 import { GIT_DOMAIN, DEFAULT_NOSTR_RELAYS } from './lib/config.js';
 import { rateLimiter } from './lib/services/security/rate-limiter.js';
 import { auditLogger } from './lib/services/security/audit-logger.js';
+import logger from './lib/services/logger.js';
 
 // Initialize polling service
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
@@ -19,7 +20,7 @@ let pollingService: RepoPollingService | null = null;
 if (typeof process !== 'undefined') {
   pollingService = new RepoPollingService(DEFAULT_NOSTR_RELAYS, repoRoot, domain);
   pollingService.start();
-  console.log('Started repo polling service');
+  logger.info('Started repo polling service');
 }
 
 export const handle: Handle = async ({ event, resolve }) => {

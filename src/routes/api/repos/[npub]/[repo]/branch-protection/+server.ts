@@ -12,6 +12,7 @@ import { signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { nip19 } from 'nostr-tools';
 import type { BranchProtectionRule } from '$lib/services/nostr/branch-protection-service.js';
+import logger from '$lib/services/logger.js';
 
 const branchProtectionService = new BranchProtectionService(DEFAULT_NOSTR_RELAYS);
 const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
@@ -51,7 +52,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
   } catch (err) {
     // Security: Sanitize error messages
     const sanitizedError = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : 'Failed to get branch protection';
-    console.error('Error getting branch protection:', sanitizedError);
+    logger.error({ error: sanitizedError, npub, repo }, 'Error getting branch protection');
     return error(500, sanitizedError);
   }
 };
@@ -142,7 +143,7 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
   } catch (err) {
     // Security: Sanitize error messages
     const sanitizedError = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : 'Failed to update branch protection';
-    console.error('Error updating branch protection:', sanitizedError);
+    logger.error({ error: sanitizedError, npub, repo }, 'Error updating branch protection');
     return error(500, sanitizedError);
   }
 };

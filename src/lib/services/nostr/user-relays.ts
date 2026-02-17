@@ -5,6 +5,8 @@
 import { NostrClient } from './nostr-client.js';
 import type { NostrEvent } from '../../types/nostr.js';
 import { KIND } from '../../types/nostr.js';
+import logger from '../logger.js';
+import { truncatePubkey } from '../../utils/security.js';
 
 export async function getUserRelays(
   pubkey: string,
@@ -68,7 +70,7 @@ export async function getUserRelays(
       }
     }
   } catch (error) {
-    console.error('Failed to fetch user relays:', error);
+    logger.error({ error, pubkey: truncatePubkey(pubkey) }, 'Failed to fetch user relays');
   }
 
   return { inbox, outbox };

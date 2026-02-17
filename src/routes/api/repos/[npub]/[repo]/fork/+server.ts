@@ -19,6 +19,7 @@ import { join } from 'path';
 import { ResourceLimits } from '$lib/services/security/resource-limits.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 import { ForkCountService } from '$lib/services/nostr/fork-count-service.js';
+import logger from '$lib/services/logger.js';
 
 const execAsync = promisify(exec);
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
@@ -45,29 +46,27 @@ async function publishEventWithRetry(
   const logContext = context || `[event:${eventId}]`;
   
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    console.log(`[Fork] ${logContext} Publishing ${eventName} - Attempt ${attempt}/${maxAttempts}...`);
+    logger.info({ logContext, eventName, attempt, maxAttempts }, `[Fork] Publishing ${eventName} - Attempt ${attempt}/${maxAttempts}...`);
     
     lastResult = await nostrClient.publishEvent(event, relays);
     
     if (lastResult.success.length > 0) {
-      console.log(`[Fork] ${logContext} ✓ ${eventName} published successfully to ${lastResult.success.length} relay(s): ${lastResult.success.join(', ')}`);
+      logger.info({ logContext, eventName, successCount: lastResult.success.length, relays: lastResult.success }, `[Fork] ${eventName} published successfully`);
       if (lastResult.failed.length > 0) {
-        console.warn(`[Fork] ${logContext} ⚠ Some relays failed: ${lastResult.failed.map(f => `${f.relay}: ${f.error}`).join(', ')}`);
+        logger.warn({ logContext, eventName, failed: lastResult.failed }, `[Fork] Some relays failed`);
       }
       return lastResult;
     }
     
     if (attempt < maxAttempts) {
       const delayMs = Math.pow(2, attempt - 1) * 1000; // 1s, 2s, 4s
-      console.warn(`[Fork] ${logContext} ✗ ${eventName} failed on attempt ${attempt}. Retrying in ${delayMs}ms...`);
-      console.warn(`[Fork] ${logContext} Failed relays: ${lastResult.failed.map(f => `${f.relay}: ${f.error}`).join(', ')}`);
+      logger.warn({ logContext, eventName, attempt, delayMs, failed: lastResult.failed }, `[Fork] ${eventName} failed on attempt ${attempt}. Retrying...`);
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
   }
   
   // All attempts failed
-  console.error(`[Fork] ${logContext} ✗ ${eventName} failed after ${maxAttempts} attempts`);
-  console.error(`[Fork] ${logContext} All relay failures: ${lastResult?.failed.map(f => `${f.relay}: ${f.error}`).join(', ')}`);
+  logger.error({ logContext, eventName, maxAttempts, failed: lastResult?.failed }, `[Fork] ${eventName} failed after ${maxAttempts} attempts`);
   return lastResult!;
 }
 
@@ -233,8 +232,8 @@ export const POST: RequestHandler = async ({ params, request }) => {
     const truncatedOriginalNpub = npub.length > 16 ? `${npub.slice(0, 12)}...` : npub;
     const context = `[${truncatedOriginalNpub}/${repo} → ${truncatedNpub}/${forkRepoName}]`;
     
-    console.log(`[Fork] ${context} Starting fork process`);
-    console.log(`[Fork] ${context} Using ${combinedRelays.length} relay(s): ${combinedRelays.join(', ')}`);
+    const forkLogger = logger.child({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}` });
+    forkLogger.info({ relayCount: combinedRelays.length, relays: combinedRelays }, 'Starting fork process');
 
     const publishResult = await publishEventWithRetry(
       signedForkAnnouncement,
@@ -246,7 +245,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     if (publishResult.success.length === 0) {
       // Clean up repo if announcement failed
-      console.error(`[Fork] ${context} ✗ Fork announcement failed after all retries. Cleaning up repository.`);
+      forkLogger.error({ failed: publishResult.failed }, 'Fork announcement failed after all retries. Cleaning up repository.');
       await execAsync(`rm -rf "${forkRepoPath}"`).catch(() => {});
       const errorDetails = `All relays failed: ${publishResult.failed.map(f => `${f.relay}: ${f.error}`).join('; ')}`;
       return json({
@@ -273,11 +272,11 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     if (ownershipPublishResult.success.length === 0) {
       // Clean up repo if ownership proof failed
-      console.error(`[Fork] ${context} ✗ Ownership transfer event failed after all retries. Cleaning up repository and publishing deletion request.`);
+      forkLogger.error({ failed: ownershipPublishResult.failed }, 'Ownership transfer event failed after all retries. Cleaning up repository and publishing deletion request.');
       await execAsync(`rm -rf "${forkRepoPath}"`).catch(() => {});
       
       // Publish deletion request (NIP-09) for the announcement since it's invalid without ownership proof
-      console.log(`[Fork] ${context} Publishing deletion request for invalid fork announcement...`);
+      forkLogger.info('Publishing deletion request for invalid fork announcement...');
       const deletionRequest = {
         kind: KIND.DELETION_REQUEST, // NIP-09: Event Deletion Request
         pubkey: userPubkeyHex,
@@ -299,9 +298,9 @@ export const POST: RequestHandler = async ({ params, request }) => {
       );
       
       if (deletionResult.success.length > 0) {
-        console.log(`[Fork] ${context} ✓ Deletion request published successfully`);
+        forkLogger.info('Deletion request published successfully');
       } else {
-        console.error(`[Fork] ${context} ✗ Failed to publish deletion request: ${deletionResult.failed.map(f => `${f.relay}: ${f.error}`).join(', ')}`);
+        forkLogger.error({ failed: deletionResult.failed }, 'Failed to publish deletion request');
       }
       
       const errorDetails = `Fork is invalid without ownership proof. All relays failed: ${ownershipPublishResult.failed.map(f => `${f.relay}: ${f.error}`).join('; ')}. Deletion request ${deletionResult.success.length > 0 ? 'published' : 'failed to publish'}.`;
@@ -314,17 +313,15 @@ export const POST: RequestHandler = async ({ params, request }) => {
     }
 
     // Provision the fork repo (this will create verification file and include self-transfer)
-    console.log(`[Fork] Provisioning fork repository...`);
+    forkLogger.info('Provisioning fork repository...');
     await repoManager.provisionRepo(signedForkAnnouncement, signedOwnershipEvent, false);
 
-    console.log(`[Fork] ✓ Fork completed successfully!`);
-    // Security: Truncate npub in logs
-    const truncatedNpub2 = userNpub.length > 16 ? `${userNpub.slice(0, 12)}...` : userNpub;
-    console.log(`[Fork]   - Repository: ${truncatedNpub2}/${forkRepoName}`);
-    console.log(`[Fork]   - Announcement ID: ${signedForkAnnouncement.id}`);
-    console.log(`[Fork]   - Ownership transfer ID: ${signedOwnershipEvent.id}`);
-    console.log(`[Fork]   - Published to ${publishResult.success.length} relay(s) for announcement`);
-    console.log(`[Fork]   - Published to ${ownershipPublishResult.success.length} relay(s) for ownership transfer`);
+    forkLogger.info({
+      announcementId: signedForkAnnouncement.id,
+      ownershipTransferId: signedOwnershipEvent.id,
+      announcementRelays: publishResult.success.length,
+      ownershipRelays: ownershipPublishResult.success.length
+    }, 'Fork completed successfully');
 
     return json({
       success: true,
@@ -345,7 +342,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
     // Security: Sanitize error messages to prevent leaking sensitive data
     const sanitizedError = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : 'Failed to fork repository';
     const context = npub && repo ? `[${npub}/${repo}]` : '[unknown]';
-    console.error(`[Fork] ${context} Error forking repository:`, sanitizedError);
+    logger.error({ error: sanitizedError, npub, repo }, `[Fork] ${context} Error forking repository`);
     return error(500, sanitizedError);
   }
 };
@@ -418,7 +415,7 @@ export const GET: RequestHandler = async ({ params }) => {
       } catch (err) {
         // Log but don't fail the request
         const context = npub && repo ? `[${npub}/${repo}]` : '[unknown]';
-        console.warn(`[Fork] ${context} Failed to get fork count:`, err instanceof Error ? err.message : String(err));
+        logger.warn({ error: err, npub, repo }, `[Fork] ${context} Failed to get fork count`);
       }
     }
 
@@ -431,7 +428,7 @@ export const GET: RequestHandler = async ({ params }) => {
     // Security: Sanitize error messages
     const sanitizedError = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : 'Failed to get fork information';
     const context = npub && repo ? `[${npub}/${repo}]` : '[unknown]';
-    console.error(`[Fork] ${context} Error getting fork information:`, sanitizedError);
+    logger.error({ error: sanitizedError, npub, repo }, `[Fork] ${context} Error getting fork information`);
     return error(500, sanitizedError);
   }
 };

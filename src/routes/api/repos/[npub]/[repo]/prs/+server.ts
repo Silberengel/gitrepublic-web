@@ -8,6 +8,7 @@ import type { RequestHandler } from './$types';
 import { PRsService } from '$lib/services/nostr/prs-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
+import logger from '$lib/services/logger.js';
 
 export const GET: RequestHandler = async ({ params, url, request }: { params: { npub?: string; repo?: string }; url: URL; request: Request }) => {
   const { npub, repo } = params;
@@ -43,7 +44,7 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
     
     return json(prs);
   } catch (err) {
-    console.error('Error fetching pull requests:', err);
+    logger.error({ error: err, npub, repo }, 'Error fetching pull requests');
     return error(500, err instanceof Error ? err.message : 'Failed to fetch pull requests');
   }
 };
@@ -79,7 +80,7 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
 
     return json({ success: true, event, published: result });
   } catch (err) {
-    console.error('Error creating pull request:', err);
+    logger.error({ error: err, npub, repo }, 'Error creating pull request');
     return error(500, err instanceof Error ? err.message : 'Failed to create pull request');
   }
 };

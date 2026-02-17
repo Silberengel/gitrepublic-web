@@ -8,6 +8,7 @@ import { FileManager } from '$lib/services/git/file-manager.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
+import logger from '$lib/services/logger.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -82,7 +83,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       }
     });
   } catch (err) {
-    console.error('Error getting raw file:', err);
+    logger.error({ error: err, npub, repo, filePath }, 'Error getting raw file');
     return error(500, err instanceof Error ? err.message : 'Failed to get raw file');
   }
 };

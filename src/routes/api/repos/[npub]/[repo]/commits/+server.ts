@@ -5,6 +5,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { FileManager } from '$lib/services/git/file-manager.js';
+import logger from '$lib/services/logger.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -35,7 +36,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     const commits = await fileManager.getCommitHistory(npub, repo, branch, limit, path);
     return json(commits);
   } catch (err) {
-    console.error('Error getting commit history:', err);
+    logger.error({ error: err, npub, repo, branch }, 'Error getting commit history');
     return error(500, err instanceof Error ? err.message : 'Failed to get commit history');
   }
 };

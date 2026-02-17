@@ -12,6 +12,7 @@ import type { NostrEvent } from '$lib/types/nostr.js';
 import { combineRelays } from '$lib/config.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
+import logger from '$lib/services/logger.js';
 
 const highlightsService = new HighlightsService(DEFAULT_NOSTR_RELAYS);
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
@@ -74,7 +75,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
       comments: prComments
     });
   } catch (err) {
-    console.error('Error fetching highlights:', err);
+    logger.error({ error: err, npub, repo }, 'Error fetching highlights');
     return error(500, err instanceof Error ? err.message : 'Failed to fetch highlights');
   }
 };
@@ -123,7 +124,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     return json({ success: true, event, published: result });
   } catch (err) {
-    console.error('Error creating highlight/comment:', err);
+    logger.error({ error: err, npub, repo }, 'Error creating highlight/comment');
     return error(500, err instanceof Error ? err.message : 'Failed to create highlight/comment');
   }
 };

@@ -8,6 +8,7 @@ import { KIND } from '../../types/nostr.js';
 import type { NostrEvent } from '../../types/nostr.js';
 import { verifyEvent } from 'nostr-tools';
 import { nip19 } from 'nostr-tools';
+import logger from '../logger.js';
 
 export interface OwnershipTransfer {
   event: NostrEvent;
@@ -100,7 +101,7 @@ export class OwnershipTransferService {
       this.cache.set(cacheKey, { owner: currentOwner, timestamp: Date.now() });
       return currentOwner;
     } catch (error) {
-      console.error('Error fetching ownership transfers:', error);
+      logger.error({ error, originalOwnerPubkey, repoName }, 'Error fetching ownership transfers');
       // Fallback to original owner
       return originalOwnerPubkey;
     }
@@ -305,7 +306,7 @@ export class OwnershipTransferService {
       transfers.sort((a, b) => b.timestamp - a.timestamp);
       return transfers;
     } catch (error) {
-      console.error('Error fetching transfer history:', error);
+      logger.error({ error, ownerPubkey, repoName }, 'Error fetching transfer history');
       return [];
     }
   }
