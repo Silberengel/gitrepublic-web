@@ -1,0 +1,45 @@
+# NetworkPolicy for tenant isolation
+# Prevents inter-tenant communication and restricts egress
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gitrepublic-isolation
+  namespace: gitrepublic-tenant-${TENANT_ID}
+spec:
+  podSelector:
+    matchLabels:
+      app: gitrepublic
+      tenant: ${TENANT_ID}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow traffic from ingress controller only
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx  # Adjust to your ingress controller namespace
+    - podSelector:
+        matchLabels:
+          app: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 6543
+  # Deny all other ingress (including from other tenants)
+  egress:
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow egress to Nostr relays (WSS)
+  - to:
+    - namespaceSelector: {}  # Any namespace (for external services)
+    ports:
+    - protocol: TCP
+      port: 443
+  # Deny all other egress

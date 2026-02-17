@@ -1,0 +1,11 @@
+# Kubernetes namespace template for per-tenant isolation
+# This is a template - in production, create one namespace per tenant (npub)
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitrepublic-tenant-${TENANT_ID}
+  labels:
+    app: gitrepublic
+    tenant: ${TENANT_ID}
+    managed-by: gitrepublic-operator  # If using operator pattern

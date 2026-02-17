@@ -20,6 +20,8 @@ services:
     volumes:
       # Persist git repositories
       - ./repos:/repos
+      # Optional: persist audit logs
+      # - ./logs:/app/logs
       # Optional: mount config file if needed
       # - ./config:/app/config:ro
     restart: unless-stopped

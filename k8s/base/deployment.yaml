@@ -1,0 +1,78 @@
+# Deployment template for gitrepublic per tenant
+# Each tenant gets their own deployment in their own namespace
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitrepublic
+  namespace: gitrepublic-tenant-${TENANT_ID}
+  labels:
+    app: gitrepublic
+    tenant: ${TENANT_ID}
+spec:
+  replicas: 1  # Scale as needed
+  selector:
+    matchLabels:
+      app: gitrepublic
+      tenant: ${TENANT_ID}
+  template:
+    metadata:
+      labels:
+        app: gitrepublic
+        tenant: ${TENANT_ID}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+      - name: gitrepublic
+        image: gitrepublic-web:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 6543
+          name: http
+          protocol: TCP
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: GIT_REPO_ROOT
+          value: "/repos"
+        - name: GIT_DOMAIN
+          value: "${GIT_DOMAIN}"  # Tenant-specific domain or shared
+        - name: NOSTR_RELAYS
+          value: "${NOSTR_RELAYS}"
+        - name: PORT
+          value: "6543"
+        - name: SECURITY_MODE
+          value: "enterprise"  # Use enterprise mode in K8s
+        volumeMounts:
+        - name: repos
+          mountPath: /repos
+        resources:
+          requests:
+            cpu: "500m"
+            memory: 512Mi
+          limits:
+            cpu: "2"
+            memory: 2Gi
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 6543
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 6543
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+      volumes:
+      - name: repos
+        persistentVolumeClaim:
+          claimName: gitrepublic-repos

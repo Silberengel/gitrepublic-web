@@ -16,11 +16,14 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { ResourceLimits } from '$lib/services/security/resource-limits.js';
+import { auditLogger } from '$lib/services/security/audit-logger.js';
 
 const execAsync = promisify(exec);
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const repoManager = new RepoManager(repoRoot);
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+const resourceLimits = new ResourceLimits(repoRoot);
 
 /**
  * Retry publishing an event with exponential backoff
@@ -93,6 +96,20 @@ export const POST: RequestHandler = async ({ params, request }) => {
       return error(400, 'Invalid npub format');
     }
 
+    // Check resource limits before forking
+    const resourceCheck = await resourceLimits.canCreateRepo(userNpub);
+    if (!resourceCheck.allowed) {
+      const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+      auditLogger.logRepoFork(
+        userPubkeyHex,
+        `${npub}/${repo}`,
+        `${userNpub}/${forkRepoName}`,
+        'denied',
+        resourceCheck.reason
+      );
+      return error(403, resourceCheck.reason || 'Resource limit exceeded');
+    }
+
     // Decode user pubkey if needed
     let userPubkeyHex = userPubkey;
     try {
@@ -139,7 +156,18 @@ export const POST: RequestHandler = async ({ params, request }) => {
     }
 
     // Clone the repository
+    const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+    auditLogger.logRepoFork(
+      userPubkeyHex,
+      `${npub}/${repo}`,
+      `${userNpub}/${forkRepoName}`,
+      'success'
+    );
+    
     await execAsync(`git clone --bare "${originalRepoPath}" "${forkRepoPath}"`);
+    
+    // Invalidate resource limit cache after creating repo
+    resourceLimits.invalidateCache(userNpub);
 
     // Create fork announcement
     const gitDomain = process.env.GIT_DOMAIN || 'localhost:6543';

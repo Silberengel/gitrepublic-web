@@ -1,0 +1,17 @@
+# LimitRange for default resource limits per container
+# Ensures containers have resource requests/limits even if not specified
+
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: gitrepublic-limits
+  namespace: gitrepublic-tenant-${TENANT_ID}
+spec:
+  limits:
+  - default:
+      cpu: "1"
+      memory: 1Gi
+    defaultRequest:
+      cpu: "500m"
+      memory: 512Mi
+    type: Container

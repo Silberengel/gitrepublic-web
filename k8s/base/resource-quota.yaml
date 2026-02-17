@@ -1,0 +1,30 @@
+# Resource quotas per tenant namespace
+# Limits CPU, memory, storage, and pod count per tenant
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: gitrepublic-quota
+  namespace: gitrepublic-tenant-${TENANT_ID}
+spec:
+  hard:
+    # CPU limits
+    requests.cpu: "2"
+    limits.cpu: "4"
+    
+    # Memory limits
+    requests.memory: 2Gi
+    limits.memory: 4Gi
+    
+    # Storage limits
+    persistentvolumeclaims: "1"
+    requests.storage: 100Gi
+    limits.storage: 200Gi
+    
+    # Pod limits
+    pods: "2"  # Application pod + optional sidecar
+    
+    # Optional: Limit other resources
+    services: "1"
+    secrets: "5"
+    configmaps: "3"

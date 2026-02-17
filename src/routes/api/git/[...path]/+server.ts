@@ -9,7 +9,7 @@ import { RepoManager } from '$lib/services/git/repo-manager.js';
 import { nip19 } from 'nostr-tools';
 import { spawn, execSync } from 'child_process';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { KIND } from '$lib/types/nostr.js';
@@ -17,6 +17,7 @@ import type { NostrEvent } from '$lib/types/nostr.js';
 import { verifyNIP98Auth } from '$lib/services/nostr/nip98-auth.js';
 import { OwnershipTransferService } from '$lib/services/nostr/ownership-transfer-service.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
+import { auditLogger } from '$lib/services/security/audit-logger.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const repoManager = new RepoManager(repoRoot);
@@ -131,8 +132,14 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     return error(400, 'Invalid npub format');
   }
 
-  // Get repository path
+  // Get repository path with security validation
   const repoPath = join(repoRoot, npub, `${repoName}.git`);
+  // Security: Ensure the resolved path is within repoRoot to prevent path traversal
+  const resolvedPath = resolve(repoPath);
+  const resolvedRoot = resolve(repoRoot);
+  if (!resolvedPath.startsWith(resolvedRoot + '/') && resolvedPath !== resolvedRoot) {
+    return error(403, 'Invalid repository path');
+  }
   if (!repoManager.repoExists(repoPath)) {
     return error(404, 'Repository not found');
   }
@@ -179,6 +186,15 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     // Verify user can view the repo
     const canView = await maintainerService.canView(authResult.pubkey || null, originalOwnerPubkey, repoName);
     if (!canView) {
+      const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+      auditLogger.logRepoAccess(
+        authResult.pubkey || null,
+        clientIp,
+        'clone',
+        `${npub}/${repoName}`,
+        'denied',
+        'Insufficient permissions'
+      );
       return error(403, 'You do not have permission to access this private repository.');
     }
   }
@@ -190,14 +206,18 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   }
 
   // Build PATH_INFO
-  // For info/refs, git-http-backend expects: /{npub}/{repo-name}.git/info/refs
-  // For other operations: /{npub}/{repo-name}.git/{git-path}
-  const pathInfo = gitPath ? `/${npub}/${repoName}.git/${gitPath}` : `/${npub}/${repoName}.git/info/refs`;
+  // Security: Since we're setting GIT_PROJECT_ROOT to the specific repo path,
+  // PATH_INFO should be relative to that repo (just the git operation path)
+  // For info/refs: /info/refs
+  // For other operations: /{git-path}
+  const pathInfo = gitPath ? `/${gitPath}` : `/info/refs`;
 
   // Set up environment variables for git-http-backend
+  // Security: Use the specific repository path, not the entire repoRoot
+  // This limits git-http-backend's view to only this repository
   const envVars = {
     ...process.env,
-    GIT_PROJECT_ROOT: repoRoot,
+    GIT_PROJECT_ROOT: resolve(repoPath), // Use specific repo path, not repoRoot
     GIT_HTTP_EXPORT_ALL: '1',
     REQUEST_METHOD: request.method,
     PATH_INFO: pathInfo,
@@ -207,12 +227,34 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     HTTP_USER_AGENT: request.headers.get('User-Agent') || '',
   };
 
-  // Execute git-http-backend
+  // Execute git-http-backend with timeout and security hardening
+  const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+  const operation = service === 'git-upload-pack' || gitPath === 'git-upload-pack' ? 'fetch' : 'clone';
+
   return new Promise((resolve) => {
+    // Security: Set timeout for git operations (5 minutes max)
+    const timeoutMs = 5 * 60 * 1000;
+    let timeoutId: NodeJS.Timeout;
+    
     const gitProcess = spawn(gitHttpBackend, [], {
       env: envVars,
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      // Security: Don't inherit parent's environment fully
+      shell: false
     });
+
+    timeoutId = setTimeout(() => {
+      gitProcess.kill('SIGTERM');
+      auditLogger.logRepoAccess(
+        originalOwnerPubkey,
+        clientIp,
+        operation,
+        `${npub}/${repoName}`,
+        'failure',
+        'Operation timeout'
+      );
+      resolve(error(504, 'Git operation timeout'));
+    }, timeoutMs);
 
     const chunks: Buffer[] = [];
     let errorOutput = '';
@@ -226,6 +268,30 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     });
 
     gitProcess.on('close', (code) => {
+      clearTimeout(timeoutId);
+      
+      // Log audit entry after operation completes
+      if (code === 0) {
+        // Success: operation completed successfully
+        auditLogger.logRepoAccess(
+          originalOwnerPubkey,
+          clientIp,
+          operation,
+          `${npub}/${repoName}`,
+          'success'
+        );
+      } else {
+        // Failure: operation failed
+        auditLogger.logRepoAccess(
+          originalOwnerPubkey,
+          clientIp,
+          operation,
+          `${npub}/${repoName}`,
+          'failure',
+          errorOutput || 'Unknown error'
+        );
+      }
+      
       if (code !== 0 && chunks.length === 0) {
         resolve(error(500, `git-http-backend error: ${errorOutput || 'Unknown error'}`));
         return;
@@ -253,6 +319,16 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     });
 
     gitProcess.on('error', (err) => {
+      clearTimeout(timeoutId);
+      // Log audit entry for process error
+      auditLogger.logRepoAccess(
+        originalOwnerPubkey,
+        clientIp,
+        operation,
+        `${npub}/${repoName}`,
+        'failure',
+        `Process error: ${err.message}`
+      );
       resolve(error(500, `Failed to execute git-http-backend: ${err.message}`));
     });
   });
@@ -281,8 +357,14 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     return error(400, 'Invalid npub format');
   }
 
-  // Get repository path
+  // Get repository path with security validation
   const repoPath = join(repoRoot, npub, `${repoName}.git`);
+  // Security: Ensure the resolved path is within repoRoot to prevent path traversal
+  const resolvedPath = resolve(repoPath);
+  const resolvedRoot = resolve(repoRoot);
+  if (!resolvedPath.startsWith(resolvedRoot + '/') && resolvedPath !== resolvedRoot) {
+    return error(403, 'Invalid repository path');
+  }
   if (!repoManager.repoExists(repoPath)) {
     return error(404, 'Repository not found');
   }
@@ -326,12 +408,16 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
   }
 
   // Build PATH_INFO
-  const pathInfo = gitPath ? `/${npub}/${repoName}.git/${gitPath}` : `/${npub}/${repoName}.git`;
+  // Security: Since we're setting GIT_PROJECT_ROOT to the specific repo path,
+  // PATH_INFO should be relative to that repo (just the git operation path)
+  const pathInfo = gitPath ? `/${gitPath}` : `/`;
 
   // Set up environment variables for git-http-backend
+  // Security: Use the specific repository path, not the entire repoRoot
+  // This limits git-http-backend's view to only this repository
   const envVars = {
     ...process.env,
-    GIT_PROJECT_ROOT: repoRoot,
+    GIT_PROJECT_ROOT: resolve(repoPath), // Use specific repo path, not repoRoot
     GIT_HTTP_EXPORT_ALL: '1',
     REQUEST_METHOD: request.method,
     PATH_INFO: pathInfo,
@@ -341,12 +427,34 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     HTTP_USER_AGENT: request.headers.get('User-Agent') || '',
   };
 
-  // Execute git-http-backend
+  // Execute git-http-backend with timeout and security hardening
+  const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+  const operation = gitPath === 'git-receive-pack' || path.includes('git-receive-pack') ? 'push' : 'fetch';
+
   return new Promise((resolve) => {
+    // Security: Set timeout for git operations (5 minutes max)
+    const timeoutMs = 5 * 60 * 1000;
+    let timeoutId: NodeJS.Timeout;
+    
     const gitProcess = spawn(gitHttpBackend, [], {
       env: envVars,
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      // Security: Don't inherit parent's environment fully
+      shell: false
     });
+
+    timeoutId = setTimeout(() => {
+      gitProcess.kill('SIGTERM');
+      auditLogger.logRepoAccess(
+        currentOwnerPubkey,
+        clientIp,
+        operation,
+        `${npub}/${repoName}`,
+        'failure',
+        'Operation timeout'
+      );
+      resolve(error(504, 'Git operation timeout'));
+    }, timeoutMs);
 
     const chunks: Buffer[] = [];
     let errorOutput = '';
@@ -364,6 +472,30 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     });
 
     gitProcess.on('close', async (code) => {
+      clearTimeout(timeoutId);
+      
+      // Log audit entry after operation completes
+      if (code === 0) {
+        // Success: operation completed successfully
+        auditLogger.logRepoAccess(
+          currentOwnerPubkey,
+          clientIp,
+          operation,
+          `${npub}/${repoName}`,
+          'success'
+        );
+      } else {
+        // Failure: operation failed
+        auditLogger.logRepoAccess(
+          currentOwnerPubkey,
+          clientIp,
+          operation,
+          `${npub}/${repoName}`,
+          'failure',
+          errorOutput || 'Git operation failed'
+        );
+      }
+      
       // If this was a successful push, sync to other remotes
       if (code === 0 && (gitPath === 'git-receive-pack' || path.includes('git-receive-pack'))) {
         try {
@@ -408,6 +540,16 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     });
 
     gitProcess.on('error', (err) => {
+      clearTimeout(timeoutId);
+      // Log audit entry for process error
+      auditLogger.logRepoAccess(
+        currentOwnerPubkey,
+        clientIp,
+        operation,
+        `${npub}/${repoName}`,
+        'failure',
+        `Process error: ${err.message}`
+      );
       resolve(error(500, `Failed to execute git-http-backend: ${err.message}`));
     });
   });

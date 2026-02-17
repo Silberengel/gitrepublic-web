@@ -318,12 +318,48 @@ npm install
 npm run dev
 ```
 
-### Environment Variables
+### Security Features
+
+### Lightweight Mode (Single Container)
+- **Resource Limits**: Per-user repository count and disk quota limits
+- **Rate Limiting**: Per-IP and per-user rate limiting for all operations
+- **Audit Logging**: Comprehensive logging of all security-relevant events
+- **Path Validation**: Strict path validation to prevent traversal attacks
+- **git-http-backend Hardening**: Timeouts, process isolation, scoped access
+
+### Enterprise Mode (Kubernetes)
+- **Process Isolation**: Container-per-tenant architecture
+- **Network Isolation**: Kubernetes Network Policies
+- **Resource Quotas**: Per-tenant CPU, memory, and storage limits
+- **Separate Volumes**: Each tenant has their own PersistentVolume
+
+See `SECURITY.md` and `SECURITY_IMPLEMENTATION.md` for detailed information.
+
+## Environment Variables
 
 - `NOSTRGIT_SECRET_KEY`: Server's nsec (bech32 or hex) for signing repo announcements and initial commits (optional)
 - `GIT_REPO_ROOT`: Path to store git repositories (default: `/repos`)
 - `GIT_DOMAIN`: Domain for git repositories (default: `localhost:6543`)
 - `NOSTR_RELAYS`: Comma-separated list of Nostr relays (default: `wss://theforest.nostr1.com,wss://nostr.land,wss://relay.damus.io`)
+
+### Security Configuration
+
+- `SECURITY_MODE`: `lightweight` (single container) or `enterprise` (Kubernetes) (default: `lightweight`)
+- `MAX_REPOS_PER_USER`: Maximum repositories per user (default: `100`)
+- `MAX_DISK_QUOTA_PER_USER`: Maximum disk quota per user in bytes (default: `10737418240` = 10GB)
+- `RATE_LIMIT_ENABLED`: Enable rate limiting (default: `true`)
+- `RATE_LIMIT_WINDOW_MS`: Rate limit window in milliseconds (default: `60000` = 1 minute)
+- `RATE_LIMIT_GIT_MAX`: Max git operations per window (default: `60`)
+- `RATE_LIMIT_API_MAX`: Max API requests per window (default: `120`)
+- `RATE_LIMIT_FILE_MAX`: Max file operations per window (default: `30`)
+- `RATE_LIMIT_SEARCH_MAX`: Max search requests per window (default: `20`)
+- `AUDIT_LOGGING_ENABLED`: Enable audit logging (default: `true`)
+- `AUDIT_LOG_FILE`: Optional file path for audit logs (default: console only)
+  - If set, logs are written to files with daily rotation (e.g., `audit-2024-01-01.log`)
+  - Example: `/var/log/gitrepublic/audit.log` → creates `audit-2024-01-01.log`, `audit-2024-01-02.log`, etc.
+- `AUDIT_LOG_RETENTION_DAYS`: Number of days to keep audit log files (default: `90`)
+  - Old log files are automatically deleted after this period
+  - Set to `0` to disable automatic cleanup
 
 ### Git HTTP Backend Setup
 
@@ -382,14 +418,34 @@ Requires NIP-98 authentication. Your git client needs to support NIP-98 or you c
 - **Forking**: Click "Fork" button on repository page
 - **Transfer Ownership**: Use the transfer API endpoint or create a kind 1641 event manually
 
+## Security Features
+
+### Lightweight Mode (Single Container)
+- **Resource Limits**: Per-user repository count and disk quota limits
+- **Rate Limiting**: Per-IP and per-user rate limiting for all operations
+- **Audit Logging**: Comprehensive logging of all security-relevant events
+- **Path Validation**: Strict path validation to prevent traversal attacks
+- **git-http-backend Hardening**: Timeouts, process isolation, scoped access
+
+### Enterprise Mode (Kubernetes)
+- **Process Isolation**: Container-per-tenant architecture
+- **Network Isolation**: Kubernetes Network Policies
+- **Resource Quotas**: Per-tenant CPU, memory, and storage limits
+- **Separate Volumes**: Each tenant has their own PersistentVolume
+
+See `SECURITY.md` and `SECURITY_IMPLEMENTATION.md` for detailed information.
+
 ## Security Considerations
 
 - **Path Traversal**: All file paths are validated and sanitized
 - **Input Validation**: Commit messages, author info, and file paths are validated
-- **Size Limits**: 2 GB per repository, 100 MB per file
+- **Size Limits**: 2 GB per repository, 500 MB per file
 - **Authentication**: All write operations require NIP-98 authentication
 - **Authorization**: Ownership and maintainer checks for all operations
 - **Private Repositories**: Access restricted to owners and maintainers
+- **Resource Limits**: Per-user repository count and disk quota limits (configurable)
+- **Rate Limiting**: Per-IP and per-user rate limiting (configurable)
+- **Audit Logging**: All security-relevant events are logged
 
 ## License
 

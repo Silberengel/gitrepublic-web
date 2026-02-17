@@ -10,6 +10,7 @@ import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
 import { verifyNIP98Auth } from '$lib/services/nostr/nip98-auth.js';
+import { auditLogger } from '$lib/services/security/audit-logger.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -45,11 +46,43 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
 
     const canView = await maintainerService.canView(userPubkey || null, repoOwnerPubkey, repo);
     if (!canView) {
+      const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+      auditLogger.logFileOperation(
+        userPubkey || null,
+        clientIp,
+        'read',
+        `${npub}/${repo}`,
+        filePath,
+        'denied',
+        'Insufficient permissions'
+      );
       return error(403, 'This repository is private. Only owners and maintainers can view it.');
     }
 
-    const fileContent = await fileManager.getFileContent(npub, repo, filePath, ref);
-    return json(fileContent);
+    const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+    try {
+      const fileContent = await fileManager.getFileContent(npub, repo, filePath, ref);
+      auditLogger.logFileOperation(
+        userPubkey || null,
+        clientIp,
+        'read',
+        `${npub}/${repo}`,
+        filePath,
+        'success'
+      );
+      return json(fileContent);
+    } catch (err) {
+      auditLogger.logFileOperation(
+        userPubkey || null,
+        clientIp,
+        'read',
+        `${npub}/${repo}`,
+        filePath,
+        'failure',
+        err instanceof Error ? err.message : String(err)
+      );
+      throw err;
+    }
   } catch (err) {
     console.error('Error reading file:', err);
     return error(500, err instanceof Error ? err.message : 'Failed to read file');
@@ -138,34 +171,78 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
     // Explicitly ignore nsecKey from client requests - it's a security risk
     // Server-side signing should use NOSTRGIT_SECRET_KEY environment variable instead
 
+    const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+    
     if (action === 'delete') {
-      await fileManager.deleteFile(
-        npub,
-        repo,
-        path,
-        commitMessage,
-        authorName,
-        authorEmail,
-        branch || 'main',
-        Object.keys(signingOptions).length > 0 ? signingOptions : undefined
-      );
-      return json({ success: true, message: 'File deleted and committed' });
+      try {
+        await fileManager.deleteFile(
+          npub,
+          repo,
+          path,
+          commitMessage,
+          authorName,
+          authorEmail,
+          branch || 'main',
+          Object.keys(signingOptions).length > 0 ? signingOptions : undefined
+        );
+        auditLogger.logFileOperation(
+          userPubkeyHex,
+          clientIp,
+          'delete',
+          `${npub}/${repo}`,
+          path,
+          'success'
+        );
+        return json({ success: true, message: 'File deleted and committed' });
+      } catch (err) {
+        auditLogger.logFileOperation(
+          userPubkeyHex,
+          clientIp,
+          'delete',
+          `${npub}/${repo}`,
+          path,
+          'failure',
+          err instanceof Error ? err.message : String(err)
+        );
+        throw err;
+      }
     } else if (action === 'create' || content !== undefined) {
       if (content === undefined) {
         return error(400, 'Content is required for create/update operations');
       }
-      await fileManager.writeFile(
-        npub,
-        repo,
-        path,
-        content,
-        commitMessage,
-        authorName,
-        authorEmail,
-        branch || 'main',
-        Object.keys(signingOptions).length > 0 ? signingOptions : undefined
-      );
-      return json({ success: true, message: 'File saved and committed' });
+      try {
+        await fileManager.writeFile(
+          npub,
+          repo,
+          path,
+          content,
+          commitMessage,
+          authorName,
+          authorEmail,
+          branch || 'main',
+          Object.keys(signingOptions).length > 0 ? signingOptions : undefined
+        );
+        auditLogger.logFileOperation(
+          userPubkeyHex,
+          clientIp,
+          action === 'create' ? 'create' : 'write',
+          `${npub}/${repo}`,
+          path,
+          'success'
+        );
+        return json({ success: true, message: 'File saved and committed' });
+      } catch (err) {
+        auditLogger.logFileOperation(
+          userPubkeyHex,
+          clientIp,
+          action === 'create' ? 'create' : 'write',
+          `${npub}/${repo}`,
+          path,
+          'failure',
+          err instanceof Error ? err.message : String(err)
+        );
+        throw err;
+      }
     } else {
       return error(400, 'Invalid action or missing content');
     }

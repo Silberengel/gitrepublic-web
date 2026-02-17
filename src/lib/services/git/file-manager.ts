@@ -58,7 +58,14 @@ export class FileManager {
    * Get the full path to a repository
    */
   private getRepoPath(npub: string, repoName: string): string {
-    return join(this.repoRoot, npub, `${repoName}.git`);
+    const repoPath = join(this.repoRoot, npub, `${repoName}.git`);
+    // Security: Ensure the resolved path is within repoRoot to prevent path traversal
+    const resolvedPath = resolve(repoPath);
+    const resolvedRoot = resolve(this.repoRoot);
+    if (!resolvedPath.startsWith(resolvedRoot + '/') && resolvedPath !== resolvedRoot) {
+      throw new Error('Path traversal detected: repository path outside allowed root');
+    }
+    return repoPath;
   }
 
   /**

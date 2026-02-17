@@ -1,0 +1,15 @@
+# PersistentVolumeClaim for tenant repositories
+# Each tenant gets their own volume for complete isolation
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitrepublic-repos
+  namespace: gitrepublic-tenant-${TENANT_ID}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi  # Adjust per tenant needs
+  storageClassName: ${STORAGE_CLASS}  # e.g., "fast-ssd" or "standard"

@@ -1,0 +1,21 @@
+# Service for gitrepublic tenant
+# Exposes the application within the cluster
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitrepublic
+  namespace: gitrepublic-tenant-${TENANT_ID}
+  labels:
+    app: gitrepublic
+    tenant: ${TENANT_ID}
+spec:
+  type: ClusterIP  # Use Ingress for external access
+  ports:
+  - port: 80
+    targetPort: 6543
+    protocol: TCP
+    name: http
+  selector:
+    app: gitrepublic
+    tenant: ${TENANT_ID}

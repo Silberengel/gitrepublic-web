@@ -49,13 +49,17 @@ COPY --from=builder /app/package.json ./
 # Create directory for git repositories
 RUN mkdir -p /repos && chmod 755 /repos
 
-# Create non-root user for security
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001 && \
-    chown -R nodejs:nodejs /app /repos
+# Create directory for audit logs (optional, if AUDIT_LOG_FILE is set)
+RUN mkdir -p /app/logs && chmod 755 /app/logs
+
+# Create dedicated non-root user for gitrepublic
+# Using a dedicated user (not generic 'nodejs') is better security practice
+RUN addgroup -g 1001 -S gitrepublic && \
+    adduser -S gitrepublic -u 1001 -G gitrepublic && \
+    chown -R gitrepublic:gitrepublic /app /repos /app/logs
 
 # Switch to non-root user
-USER nodejs
+USER gitrepublic
 
 # Expose port
 EXPOSE 6543
