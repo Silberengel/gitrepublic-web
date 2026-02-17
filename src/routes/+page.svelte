@@ -8,6 +8,7 @@
   import { nip19 } from 'nostr-tools';
   import { getPublicKeyWithNIP07, isNIP07Available } from '../lib/services/nostr/nip07-signer.js';
   import { ForkCountService } from '../lib/services/nostr/fork-count-service.js';
+  import ThemeToggle from '../lib/components/ThemeToggle.svelte';
 
   let repos = $state<NostrEvent[]>([]);
   let loading = $state(true);
@@ -261,6 +262,7 @@
       <a href="/signup">Sign Up</a>
       <a href="/docs/nip34">NIP-34 Docs</a>
       <div class="auth-section">
+        <ThemeToggle />
         {#if userPubkey}
           <span class="user-info">
             {nip19.npubEncode(userPubkey).slice(0, 16)}...
