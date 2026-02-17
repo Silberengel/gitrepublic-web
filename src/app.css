@@ -329,6 +329,35 @@ label small, .label small {
   font-size: 0.875rem;
 }
 
+.checkbox-label {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-top: 0.125rem;
+}
+
+.checkbox-label > span {
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.checkbox-label small {
+  display: block;
+  margin-top: 0.25rem;
+}
+
 input, textarea, select {
   padding: 0.75rem;
   border: 1px solid var(--input-border);
