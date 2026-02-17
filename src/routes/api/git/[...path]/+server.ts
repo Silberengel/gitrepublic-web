@@ -25,8 +25,11 @@ const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELA
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
 
 // Path to git-http-backend (common locations)
+// Alpine Linux: /usr/lib/git-core/git-http-backend
+// Debian/Ubuntu: /usr/lib/git-core/git-http-backend
+// macOS: /usr/local/libexec/git-core/git-http-backend or /opt/homebrew/libexec/git-core/git-http-backend
 const GIT_HTTP_BACKEND_PATHS = [
-  '/usr/lib/git-core/git-http-backend',
+  '/usr/lib/git-core/git-http-backend',  // Alpine, Debian, Ubuntu
   '/usr/libexec/git-core/git-http-backend',
   '/usr/local/libexec/git-core/git-http-backend',
   '/opt/homebrew/libexec/git-core/git-http-backend'

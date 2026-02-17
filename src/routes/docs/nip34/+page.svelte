@@ -10,8 +10,24 @@
     try {
       const docContent = $page.data.content;
       if (docContent) {
-        const { marked } = await import('marked');
-        content = marked.parse(docContent) as string;
+        const MarkdownIt = (await import('markdown-it')).default;
+        const hljsModule = await import('highlight.js');
+        const hljs = hljsModule.default || hljsModule;
+        
+        const md: any = new MarkdownIt({
+          highlight: function (str: string, lang: string): string {
+            if (lang && hljs.getLanguage(lang)) {
+              try {
+                return '<pre class="hljs"><code>' +
+                       hljs.highlight(str, { language: lang }).value +
+                       '</code></pre>';
+              } catch (__) {}
+            }
+            return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
+          }
+        });
+        
+        content = md.render(docContent);
       } else {
         error = $page.data.error || 'Failed to load NIP-34 documentation';
       }

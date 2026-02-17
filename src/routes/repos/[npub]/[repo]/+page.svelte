@@ -101,6 +101,7 @@
   let readmeIsMarkdown = $state(false);
   let loadingReadme = $state(false);
   let readmeHtml = $state<string>('');
+  let highlightedFileContent = $state<string>('');
 
   // Fork
   let forkInfo = $state<{ isFork: boolean; originalRepo: { npub: string; repo: string } | null } | null>(null);
@@ -123,8 +124,24 @@
           
           // Render markdown if needed
           if (readmeIsMarkdown && readmeContent) {
-            const { marked } = await import('marked');
-            readmeHtml = marked.parse(readmeContent) as string;
+            const MarkdownIt = (await import('markdown-it')).default;
+            const hljsModule = await import('highlight.js');
+            const hljs = hljsModule.default || hljsModule;
+            
+            const md: any = new MarkdownIt({
+              highlight: function (str: string, lang: string): string {
+                if (lang && hljs.getLanguage(lang)) {
+                  try {
+                    return '<pre class="hljs"><code>' +
+                           hljs.highlight(str, { language: lang }).value +
+                           '</code></pre>';
+                  } catch (__) {}
+                }
+                return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
+              }
+            });
+            
+            readmeHtml = md.render(readmeContent);
           }
         }
       }
@@ -132,6 +149,145 @@
       console.error('Error loading README:', err);
     } finally {
       loadingReadme = false;
+    }
+  }
+
+  // Map file extensions to highlight.js language names
+  function getHighlightLanguage(ext: string): string {
+    const langMap: Record<string, string> = {
+      'js': 'javascript',
+      'ts': 'typescript',
+      'jsx': 'javascript',
+      'tsx': 'typescript',
+      'json': 'json',
+      'css': 'css',
+      'html': 'xml',
+      'xml': 'xml',
+      'yaml': 'yaml',
+      'yml': 'yaml',
+      'py': 'python',
+      'rb': 'ruby',
+      'go': 'go',
+      'rs': 'rust',
+      'java': 'java',
+      'c': 'c',
+      'cpp': 'cpp',
+      'h': 'c',
+      'hpp': 'cpp',
+      'sh': 'bash',
+      'bash': 'bash',
+      'zsh': 'bash',
+      'sql': 'sql',
+      'php': 'php',
+      'swift': 'swift',
+      'kt': 'kotlin',
+      'scala': 'scala',
+      'r': 'r',
+      'm': 'objectivec',
+      'mm': 'objectivec',
+      'vue': 'xml',
+      'svelte': 'xml',
+      'dockerfile': 'dockerfile',
+      'toml': 'toml',
+      'ini': 'ini',
+      'conf': 'ini',
+      'log': 'plaintext',
+      'txt': 'plaintext',
+      'adoc': 'asciidoc',
+      'asciidoc': 'asciidoc',
+      'ad': 'asciidoc',
+    };
+    return langMap[ext.toLowerCase()] || 'plaintext';
+  }
+
+  async function applySyntaxHighlighting(content: string, ext: string) {
+    try {
+      const hljsModule = await import('highlight.js');
+      // highlight.js v11+ uses default export
+      const hljs = hljsModule.default || hljsModule;
+      const lang = getHighlightLanguage(ext);
+      
+      // Register AsciiDoc language if needed (not in highlight.js by default)
+      if (lang === 'asciidoc' && !hljs.getLanguage('asciidoc')) {
+        hljs.registerLanguage('asciidoc', function(hljs: any) {
+          return {
+            name: 'AsciiDoc',
+            aliases: ['adoc', 'asciidoc', 'ad'],
+            contains: [
+              // Headers
+              {
+                className: 'section',
+                begin: /^={1,6}\s+/,
+                relevance: 10
+              },
+              // Bold
+              {
+                className: 'strong',
+                begin: /\*\*[^*]+\*\*/,
+                relevance: 0
+              },
+              // Italic
+              {
+                className: 'emphasis',
+                begin: /_[^_]+_/,
+                relevance: 0
+              },
+              // Inline code
+              {
+                className: 'code',
+                begin: /`[^`]+`/,
+                relevance: 0
+              },
+              // Code blocks
+              {
+                className: 'code',
+                begin: /^----+$/,
+                end: /^----+$/,
+                contains: [{ begin: /./ }]
+              },
+              // Lists
+              {
+                className: 'bullet',
+                begin: /^(\*+|\.+|-+)\s+/,
+                relevance: 0
+              },
+              // Links
+              {
+                className: 'link',
+                begin: /link:/,
+                end: /\[/,
+                contains: [{ begin: /\[/, end: /\]/ }]
+              },
+              // Comments
+              {
+                className: 'comment',
+                begin: /^\/\/.*$/,
+                relevance: 0
+              },
+              // Attributes
+              {
+                className: 'attr',
+                begin: /^:.*:$/,
+                relevance: 0
+              }
+            ]
+          };
+        });
+      }
+      
+      // Apply highlighting
+      if (lang === 'plaintext') {
+        highlightedFileContent = `<pre><code class="hljs">${hljs.highlight(content, { language: 'plaintext' }).value}</code></pre>`;
+      } else if (hljs.getLanguage(lang)) {
+        highlightedFileContent = `<pre><code class="hljs language-${lang}">${hljs.highlight(content, { language: lang }).value}</code></pre>`;
+      } else {
+        // Fallback to auto-detection
+        highlightedFileContent = `<pre><code class="hljs">${hljs.highlightAuto(content).value}</code></pre>`;
+      }
+    } catch (err) {
+      console.error('Error applying syntax highlighting:', err);
+      // Fallback to plain text
+      highlightedFileContent = `<pre><code class="hljs">${content}</code></pre>`;
     }
   }
 
@@ -386,6 +542,17 @@
         fileLanguage = 'asciidoc';
       } else {
         fileLanguage = 'text';
+      }
+      
+      // Apply syntax highlighting for read-only view (non-maintainers)
+      if (fileContent && !isMaintainer) {
+        await applySyntaxHighlighting(fileContent, ext || '');
+      }
+      
+      // Apply syntax highlighting to file content if not in editor
+      if (fileContent && !isMaintainer) {
+        // For read-only view, apply highlight.js
+        await applySyntaxHighlighting(fileContent, ext || '');
       }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load file';
@@ -1211,7 +1378,9 @@
                 {@html readmeHtml}
               </div>
             {:else if readmeContent}
-              <pre class="readme-content"><code>{readmeContent}</code></pre>
+              <div class="readme-content">
+                <pre><code class="hljs language-text">{readmeContent}</code></pre>
+              </div>
             {/if}
           </div>
         {/if}
@@ -1245,7 +1414,11 @@
                 />
               {:else}
                 <div class="read-only-editor">
-                  <pre><code>{editedContent}</code></pre>
+                  {#if highlightedFileContent}
+                    {@html highlightedFileContent}
+                  {:else}
+                    <pre><code class="hljs">{fileContent}</code></pre>
+                  {/if}
                 </div>
               {/if}
             </div>
@@ -2234,6 +2407,42 @@
   .diff-content code {
     font-family: 'Courier New', monospace;
     white-space: pre;
+  }
+
+  .read-only-editor {
+    height: 100%;
+    overflow: auto;
+  }
+
+  .read-only-editor :global(.hljs) {
+    padding: 1rem;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin: 0;
+  }
+
+  .read-only-editor :global(pre) {
+    margin: 0;
+    padding: 0;
+  }
+
+  .read-only-editor :global(code) {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .readme-content :global(.hljs) {
+    background: #f5f5f5;
+    padding: 1rem;
+    border-radius: 4px;
+    overflow-x: auto;
+  }
+
+  .readme-content :global(pre.hljs) {
+    margin: 1rem 0;
   }
 
   /* Issues and PRs */

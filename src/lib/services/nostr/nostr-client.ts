@@ -3,6 +3,34 @@
  */
 
 import type { NostrEvent, NostrFilter } from '../../types/nostr.js';
+import { createRequire } from 'module';
+
+// Polyfill WebSocket for Node.js environments (lazy initialization)
+let wsPolyfillInitialized = false;
+function initializeWebSocketPolyfill() {
+  if (wsPolyfillInitialized) return;
+  if (typeof global === 'undefined' || typeof global.WebSocket !== 'undefined') {
+    wsPolyfillInitialized = true;
+    return;
+  }
+  
+  try {
+    // Use createRequire for ES modules compatibility
+    const requireFunc = createRequire(import.meta.url);
+    const WebSocketImpl = requireFunc('ws');
+    global.WebSocket = WebSocketImpl as any;
+    wsPolyfillInitialized = true;
+  } catch {
+    // ws package not available, will fail at runtime in Node.js
+    console.warn('WebSocket polyfill not available. Install "ws" package for Node.js support.');
+    wsPolyfillInitialized = true; // Mark as initialized to avoid repeated warnings
+  }
+}
+
+// Initialize on module load if in Node.js
+if (typeof process !== 'undefined' && process.versions?.node) {
+  initializeWebSocketPolyfill();
+}
 
 export class NostrClient {
   private relays: string[] = [];
@@ -36,6 +64,9 @@ export class NostrClient {
   }
 
   private async fetchFromRelay(relay: string, filters: NostrFilter[]): Promise<NostrEvent[]> {
+    // Ensure WebSocket polyfill is initialized
+    initializeWebSocketPolyfill();
+    
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(relay);
       const events: NostrEvent[] = [];
@@ -131,6 +162,9 @@ export class NostrClient {
   }
 
   private async publishToRelay(relay: string, nostrEvent: NostrEvent): Promise<void> {
+    // Ensure WebSocket polyfill is initialized
+    initializeWebSocketPolyfill();
+    
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(relay);
       let resolved = false;
