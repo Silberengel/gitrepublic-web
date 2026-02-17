@@ -879,7 +879,8 @@
 
       // Get git domain from layout data
       const gitDomain = $page.data.gitDomain || 'localhost:6543';
-      const protocol = gitDomain.startsWith('localhost') ? 'http' : 'https';
+      const isLocalhost = gitDomain.startsWith('localhost') || gitDomain.startsWith('127.0.0.1');
+      const protocol = isLocalhost ? 'http' : 'https';
       const gitUrl = `${protocol}://${gitDomain}/${npub}/${dTag}.git`;
 
       // Try to get Tor .onion address and add it to clone URLs
@@ -896,12 +897,40 @@
         // Tor not available, continue without it
       }
 
-      // Build clone URLs - always include our domain, and Tor .onion if available
-      const allCloneUrls = [
-        gitUrl,
-        ...(torOnionUrl ? [torOnionUrl] : []), // Add Tor .onion URL if available
-        ...cloneUrls.filter(url => url.trim() && !url.includes(gitDomain) && !url.includes('.onion'))
-      ];
+      // Filter user-provided clone URLs (exclude localhost and .onion duplicates)
+      const userCloneUrls = cloneUrls.filter(url => {
+        const trimmed = url.trim();
+        if (!trimmed) return false;
+        // Exclude if it's our domain or already a .onion
+        if (trimmed.includes(gitDomain)) return false;
+        if (trimmed.includes('.onion')) return false;
+        return true;
+      });
+
+      // Validate: If using localhost, require either Tor .onion URL or at least one other clone URL
+      if (isLocalhost && !torOnionUrl && userCloneUrls.length === 0) {
+        error = 'Cannot publish with only localhost. You need either:\n' +
+          '• A Tor .onion address (configure Tor hidden service and set TOR_ONION_ADDRESS)\n' +
+          '• At least one other clone URL (e.g., GitHub, GitLab, or another GitRepublic instance)';
+        loading = false;
+        return;
+      }
+
+      // Build clone URLs - NEVER include localhost, only include public domain or Tor .onion
+      const allCloneUrls: string[] = [];
+      
+      // Add our domain URL only if it's NOT localhost (explicitly check the URL)
+      if (!isLocalhost && !gitUrl.includes('localhost') && !gitUrl.includes('127.0.0.1')) {
+        allCloneUrls.push(gitUrl);
+      }
+      
+      // Add Tor .onion URL if available (always useful, even with localhost)
+      if (torOnionUrl) {
+        allCloneUrls.push(torOnionUrl);
+      }
+      
+      // Add user-provided clone URLs
+      allCloneUrls.push(...userCloneUrls);
 
       // Build web URLs
       const allWebUrls = webUrls.filter(url => url.trim());
@@ -1264,7 +1293,13 @@
       <div class="form-group">
         <div class="label">
           Clone URLs
-          <small>{$page.data.gitDomain || 'localhost:6543'} will be added automatically, but you can add any existing ones here.</small>
+          <small>
+            {#if ($page.data.gitDomain || 'localhost:6543').startsWith('localhost') || ($page.data.gitDomain || 'localhost:6543').startsWith('127.0.0.1')}
+              <strong>Note:</strong> Your server is using localhost, which won't work for others. You must add at least one public clone URL (e.g., GitHub, GitLab) or configure a Tor .onion address.
+            {:else}
+              {$page.data.gitDomain || 'localhost:6543'} will be added automatically, but you can add any existing ones here.
+            {/if}
+          </small>
         </div>
         {#each cloneUrls as url, index}
           <div class="input-group">

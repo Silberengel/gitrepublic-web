@@ -179,14 +179,25 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     // Create fork announcement
     const gitDomain = process.env.GIT_DOMAIN || 'localhost:6543';
-    const protocol = gitDomain.startsWith('localhost') ? 'http' : 'https';
+    const isLocalhost = gitDomain.startsWith('localhost') || gitDomain.startsWith('127.0.0.1');
+    const protocol = isLocalhost ? 'http' : 'https';
     const forkGitUrl = `${protocol}://${gitDomain}/${userNpub}/${forkRepoName}.git`;
+
+    // Get Tor .onion URL if available
+    const { getTorGitUrl } = await import('$lib/services/tor/hidden-service.js');
+    const torOnionUrl = await getTorGitUrl(userNpub, forkRepoName);
 
     // Extract original clone URLs and earliest unique commit
     const originalCloneUrls = originalAnnouncement.tags
       .filter(t => t[0] === 'clone')
       .flatMap(t => t.slice(1))
-      .filter(url => url && typeof url === 'string') as string[];
+      .filter(url => url && typeof url === 'string')
+      .filter(url => {
+        // Exclude our domain and .onion URLs (we'll add our own if available)
+        if (url.includes(gitDomain)) return false;
+        if (url.includes('.onion')) return false;
+        return true;
+      }) as string[];
 
     const earliestCommitTag = originalAnnouncement.tags.find(t => t[0] === 'r' && t[2] === 'euc');
     const earliestCommit = earliestCommitTag?.[1];
@@ -195,12 +206,33 @@ export const POST: RequestHandler = async ({ params, request }) => {
     const originalName = originalAnnouncement.tags.find(t => t[0] === 'name')?.[1] || repo;
     const originalDescription = originalAnnouncement.tags.find(t => t[0] === 'description')?.[1] || '';
 
+    // Build clone URLs for fork - NEVER include localhost, only include public domain or Tor .onion
+    const forkCloneUrls: string[] = [];
+    
+    // Add our domain URL only if it's NOT localhost (explicitly check the URL)
+    if (!isLocalhost && !forkGitUrl.includes('localhost') && !forkGitUrl.includes('127.0.0.1')) {
+      forkCloneUrls.push(forkGitUrl);
+    }
+    
+    // Add Tor .onion URL if available
+    if (torOnionUrl) {
+      forkCloneUrls.push(torOnionUrl);
+    }
+    
+    // Add original clone URLs
+    forkCloneUrls.push(...originalCloneUrls);
+
+    // Validate: If using localhost, require either Tor .onion URL or at least one other clone URL
+    if (isLocalhost && !torOnionUrl && originalCloneUrls.length === 0) {
+      return error(400, 'Cannot create fork with only localhost. The original repository must have at least one public clone URL, or you need to configure a Tor .onion address.');
+    }
+
     // Build fork announcement tags
     const tags: string[][] = [
       ['d', forkRepoName],
       ['name', `${originalName} (fork)`],
       ['description', `Fork of ${originalName}${originalDescription ? `: ${originalDescription}` : ''}`],
-      ['clone', forkGitUrl, ...originalCloneUrls.filter(url => !url.includes(gitDomain))],
+      ['clone', ...forkCloneUrls],
       ['relays', ...DEFAULT_NOSTR_RELAYS],
       ['t', 'fork'], // Mark as fork
       ['a', `${KIND.REPO_ANNOUNCEMENT}:${originalOwnerPubkey}:${repo}`], // Reference to original repo
