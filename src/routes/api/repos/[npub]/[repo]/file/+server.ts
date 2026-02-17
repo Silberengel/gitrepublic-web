@@ -84,8 +84,10 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
       throw err;
     }
   } catch (err) {
-    console.error('Error reading file:', err);
-    return error(500, err instanceof Error ? err.message : 'Failed to read file');
+    // Security: Sanitize error messages to prevent leaking sensitive data
+    const sanitizedError = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : 'Failed to read file';
+    console.error('Error reading file:', sanitizedError);
+    return error(500, sanitizedError);
   }
 };
 
@@ -170,6 +172,20 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
     }
     // Explicitly ignore nsecKey from client requests - it's a security risk
     // Server-side signing should use NOSTRGIT_SECRET_KEY environment variable instead
+    if (nsecKey) {
+      // Security: Log warning but never log the actual key value
+      const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+      console.warn(`[SECURITY] Client attempted to send nsecKey in request from IP ${clientIp}. This is not allowed for security reasons.`);
+      auditLogger.log({
+        user: userPubkeyHex || undefined,
+        ip: clientIp,
+        action: 'auth_attempt',
+        resource: 'file_operation',
+        result: 'failure',
+        error: 'Client attempted to send private key in request body',
+        metadata: { reason: 'security_violation' }
+      });
+    }
 
     const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
     
@@ -247,7 +263,9 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
       return error(400, 'Invalid action or missing content');
     }
   } catch (err) {
-    console.error('Error writing file:', err);
-    return error(500, err instanceof Error ? err.message : 'Failed to write file');
+    // Security: Sanitize error messages to prevent leaking sensitive data
+    const sanitizedError = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : 'Failed to write file';
+    console.error('Error writing file:', sanitizedError);
+    return error(500, sanitizedError);
   }
 };

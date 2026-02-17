@@ -312,7 +312,9 @@
     error = null;
 
     try {
-      console.log(`[Fork UI] Starting fork of ${npub}/${repo}...`);
+      // Security: Truncate npub in logs
+      const truncatedNpub = npub.length > 16 ? `${npub.slice(0, 12)}...` : npub;
+      console.log(`[Fork UI] Starting fork of ${truncatedNpub}/${repo}...`);
       const response = await fetch(`/api/repos/${npub}/${repo}/fork`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -324,7 +326,9 @@
       if (response.ok && data.success !== false) {
         const message = data.message || `Repository forked successfully! Published to ${data.fork?.publishedTo?.announcement || 0} relay(s).`;
         console.log(`[Fork UI] ✓ ${message}`);
-        console.log(`[Fork UI]   - Fork location: /repos/${data.fork.npub}/${data.fork.repo}`);
+        // Security: Truncate npub in logs
+        const truncatedForkNpub = data.fork.npub.length > 16 ? `${data.fork.npub.slice(0, 12)}...` : data.fork.npub;
+        console.log(`[Fork UI]   - Fork location: /repos/${truncatedForkNpub}/${data.fork.repo}`);
         console.log(`[Fork UI]   - Announcement ID: ${data.fork.announcementId}`);
         console.log(`[Fork UI]   - Ownership Transfer ID: ${data.fork.ownershipTransferId}`);
         
@@ -1084,7 +1088,7 @@
       <a href="/" class="back-link">← Back to Repositories</a>
       <div class="repo-title-section">
         {#if repoImage}
-          <img src={repoImage} alt="Repository image" class="repo-image" />
+          <img src={repoImage} alt="" class="repo-image" />
         {/if}
         <div>
           <h1>{pageData.repoName || repo}</h1>
@@ -1507,7 +1511,18 @@
               {/each}
             {:else}
               {#each prs as pr}
-                <div class="pr-detail" onclick={() => selectedPR = pr.id} style="cursor: pointer;">
+                <div 
+                  class="pr-detail" 
+                  role="button"
+                  tabindex="0"
+                  onclick={() => selectedPR = pr.id}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      selectedPR = pr.id;
+                    }
+                  }}
+                  style="cursor: pointer;">
                   <h3>{pr.subject}</h3>
                   <div class="pr-meta-detail">
                     <span class="pr-status" class:open={pr.status === 'open'} class:closed={pr.status === 'closed'} class:merged={pr.status === 'merged'}>

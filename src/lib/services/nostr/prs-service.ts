@@ -25,7 +25,15 @@ export class PRsService {
    * Get repository announcement address (a tag format)
    */
   private getRepoAddress(repoOwnerPubkey: string, repoId: string): string {
-    return `30617:${repoOwnerPubkey}:${repoId}`;
+    return `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkey}:${repoId}`;
+  }
+
+  /**
+   * Get earliest unique commit ID from repo announcement
+   */
+  private getEarliestUniqueCommit(announcement: NostrEvent): string | null {
+    const eucTag = announcement.tags.find(t => t[0] === 'r' && t[2] === 'euc');
+    return eucTag?.[1] || null;
   }
 
   /**
@@ -168,6 +176,9 @@ export class PRsService {
       ['p', prAuthor],
       ['a', repoAddress]
     ];
+
+    // Note: earliest unique commit should be added by caller if available
+    // We don't have access to repo announcement here, so it's optional
 
     if (status === 'merged' && mergeCommitId) {
       tags.push(['merge-commit', mergeCommitId]);

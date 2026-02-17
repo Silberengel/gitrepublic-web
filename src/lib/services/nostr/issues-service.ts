@@ -25,7 +25,15 @@ export class IssuesService {
    * Get repository announcement address (a tag format)
    */
   private getRepoAddress(repoOwnerPubkey: string, repoId: string): string {
-    return `30617:${repoOwnerPubkey}:${repoId}`;
+    return `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkey}:${repoId}`;
+  }
+
+  /**
+   * Get earliest unique commit ID from repo announcement
+   */
+  private getEarliestUniqueCommit(announcement: NostrEvent): string | null {
+    const eucTag = announcement.tags.find(t => t[0] === 'r' && t[2] === 'euc');
+    return eucTag?.[1] || null;
   }
 
   /**
@@ -36,7 +44,7 @@ export class IssuesService {
     if (!aTag || !aTag[1]) return null;
     
     const parts = aTag[1].split(':');
-    if (parts.length !== 3 || parts[0] !== '30617') return null;
+    if (parts.length !== 3 || parts[0] !== KIND.REPO_ANNOUNCEMENT.toString()) return null;
     
     return { owner: parts[1], id: parts[2] };
   }
@@ -106,7 +114,8 @@ export class IssuesService {
     repoId: string,
     subject: string,
     content: string,
-    labels: string[] = []
+    labels: string[] = [],
+    earliestUniqueCommit?: string | null
   ): Promise<Issue> {
     const repoAddress = this.getRepoAddress(repoOwnerPubkey, repoId);
     
@@ -115,6 +124,11 @@ export class IssuesService {
       ['p', repoOwnerPubkey],
       ['subject', subject]
     ];
+
+    // Add earliest unique commit if provided (NIP-34 compliance)
+    if (earliestUniqueCommit) {
+      tags.push(['r', earliestUniqueCommit]);
+    }
 
     // Add labels
     for (const label of labels) {

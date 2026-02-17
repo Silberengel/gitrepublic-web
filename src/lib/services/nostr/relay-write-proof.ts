@@ -8,6 +8,7 @@
 
 import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '../../types/nostr.js';
+import { KIND } from '../../types/nostr.js';
 import { NostrClient } from './nostr-client.js';
 import { DEFAULT_NOSTR_RELAYS } from '../../config.js';
 
@@ -45,7 +46,7 @@ export async function verifyRelayWriteProof(
   // Determine time window based on event kind
   // NIP-98 events (27235) should be within 60 seconds per spec
   // Other events (like kind 1) can be within 5 minutes
-  const isNIP98Event = proofEvent.kind === 27235;
+  const isNIP98Event = proofEvent.kind === KIND.NIP98_AUTH;
   const maxAge = isNIP98Event ? 60 : 300; // 60 seconds for NIP-98, 5 minutes for others
 
   // Verify the event is recent
@@ -120,7 +121,7 @@ export async function verifyRelayWriteProof(
  */
 export function createProofEvent(userPubkey: string, content: string = 'gitrepublic-write-proof'): Omit<NostrEvent, 'sig' | 'id'> {
   return {
-    kind: 1,
+    kind: KIND.TEXT_NOTE,
     pubkey: userPubkey,
     created_at: Math.floor(Date.now() / 1000),
     content: content,

@@ -14,7 +14,7 @@ This directory contains Kubernetes manifests for enterprise-grade multi-tenant d
 ### Lightweight Mode (Single Container)
 - Application-level security controls
 - Works with current Docker setup
-- See `SECURITY_IMPLEMENTATION.md` for details
+- See `../docs/SECURITY_IMPLEMENTATION.md` for details
 
 ## Directory Structure
 
@@ -51,7 +51,7 @@ export GIT_DOMAIN="git.example.com"
 export NOSTR_RELAYS="wss://relay1.com,wss://relay2.com"
 export STORAGE_CLASS="fast-ssd"
 
-# Replace variables in templates
+# Replace variables in templatesa
 envsubst < k8s/base/namespace.yaml | kubectl apply -f -
 envsubst < k8s/base/resource-quota.yaml | kubectl apply -f -
 envsubst < k8s/base/limit-range.yaml | kubectl apply -f -

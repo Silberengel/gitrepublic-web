@@ -51,14 +51,14 @@ export class HighlightsService {
    * Get repository announcement address (a tag format)
    */
   private getRepoAddress(repoOwnerPubkey: string, repoId: string): string {
-    return `30617:${repoOwnerPubkey}:${repoId}`;
+    return `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkey}:${repoId}`;
   }
 
   /**
    * Get PR address (a tag format for PR)
    */
   private getPRAddress(prId: string, prAuthor: string, repoOwnerPubkey: string, repoId: string): string {
-    return `1618:${prAuthor}:${repoId}`;
+    return `${KIND.PULL_REQUEST}:${prAuthor}:${repoId}`;
   }
 
   /**
@@ -231,7 +231,7 @@ export class HighlightsService {
     const comments = await this.nostrClient.fetchEvents([
       {
         kinds: [KIND.COMMENT],
-        '#E': [prId], // Root event (uppercase E)
+        '#e': [prId], // Root event (lowercase e for filter)
         limit: 100
       }
     ]) as NostrEvent[];
@@ -287,7 +287,7 @@ export class HighlightsService {
     context?: string,
     comment?: string
   ): Omit<NostrEvent, 'sig' | 'id'> {
-    const prAddress = `1618:${prAuthor}:${repoId}`;
+    const prAddress = `${KIND.PULL_REQUEST}:${prAuthor}:${repoId}`;
     
     const tags: string[][] = [
       ['a', prAddress], // Reference to PR
@@ -346,31 +346,33 @@ export class HighlightsService {
     parentEventId?: string,
     parentEventKind?: number,
     parentPubkey?: string,
-    rootEventAddress?: string
+    rootEventAddress?: string,
+    relayHint?: string
   ): Omit<NostrEvent, 'sig' | 'id'> {
+    const relay = relayHint || '';
     const tags: string[][] = [
-      ['E', rootEventId, '', rootPubkey], // Root event
+      ['E', rootEventId, relay, rootPubkey], // Root event (NIP-22: id, relay hint, pubkey)
       ['K', rootEventKind.toString()], // Root kind
-      ['P', rootPubkey], // Root author
+      ['P', rootPubkey, relay], // Root author (with relay hint)
     ];
 
     // Add root event address if provided (for replaceable events)
     if (rootEventAddress) {
-      tags.push(['A', rootEventAddress]);
+      tags.push(['A', rootEventAddress, relay]);
     }
 
     // Add parent references (for replies)
     if (parentEventId) {
-      tags.push(['e', parentEventId, '', parentPubkey || rootPubkey]);
+      tags.push(['e', parentEventId, relay, parentPubkey || rootPubkey]);
       tags.push(['k', (parentEventKind || rootEventKind).toString()]);
       if (parentPubkey) {
-        tags.push(['p', parentPubkey]);
+        tags.push(['p', parentPubkey, relay]);
       }
     } else {
       // Top-level comment - parent is same as root
-      tags.push(['e', rootEventId, '', rootPubkey]);
+      tags.push(['e', rootEventId, relay, rootPubkey]);
       tags.push(['k', rootEventKind.toString()]);
-      tags.push(['p', rootPubkey]);
+      tags.push(['p', rootPubkey, relay]);
     }
 
     return {

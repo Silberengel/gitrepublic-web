@@ -393,8 +393,22 @@
 
 <!-- Highlight Dialog -->
 {#if showHighlightDialog}
-  <div class="modal-overlay" onclick={() => showHighlightDialog = false}>
-    <div class="modal" onclick={(e) => e.stopPropagation()}>
+  <div 
+    class="modal-overlay" 
+    role="dialog"
+    aria-modal="true"
+    aria-label="Create highlight"
+    tabindex="-1"
+    onclick={() => showHighlightDialog = false}
+    onkeydown={(e) => {
+      if (e.key === 'Escape') {
+        showHighlightDialog = false;
+      }
+    }}
+  >
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div class="modal" role="document" onclick={(e) => e.stopPropagation()}>
       <h3>Create Highlight</h3>
       <div class="selected-code">
         <pre><code>{selectedText}</code></pre>
@@ -415,8 +429,23 @@
 
 <!-- Comment Dialog -->
 {#if showCommentDialog}
-  <div class="modal-overlay" onclick={() => { showCommentDialog = false; replyingTo = null; }}>
-    <div class="modal" onclick={(e) => e.stopPropagation()}>
+  <div 
+    class="modal-overlay" 
+    role="dialog"
+    aria-modal="true"
+    aria-label={replyingTo ? 'Reply to comment' : 'Add comment'}
+    tabindex="-1"
+    onclick={() => { showCommentDialog = false; replyingTo = null; }}
+    onkeydown={(e) => {
+      if (e.key === 'Escape') {
+        showCommentDialog = false;
+        replyingTo = null;
+      }
+    }}
+  >
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div class="modal" role="document" onclick={(e) => e.stopPropagation()}>
       <h3>{replyingTo ? 'Reply to Comment' : 'Add Comment'}</h3>
       <label>
         Comment:

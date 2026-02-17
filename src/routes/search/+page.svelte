@@ -55,7 +55,6 @@
         bind:value={query}
         placeholder="Search repositories or code..."
         class="search-input"
-        autofocus
       />
       <select bind:value={searchType} class="search-type-select">
         <option value="repos">Repositories</option>
@@ -82,7 +81,18 @@
             <h3>Repositories ({results.repos.length})</h3>
             <div class="repo-list">
               {#each results.repos as repo}
-                <div class="repo-item" onclick={() => goto(`/repos/${repo.npub}/${repo.name.toLowerCase().replace(/\s+/g, '-')}`)}>
+                <div 
+                  class="repo-item" 
+                  role="button"
+                  tabindex="0"
+                  onclick={() => goto(`/repos/${repo.npub}/${repo.name.toLowerCase().replace(/\s+/g, '-')}`)}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      goto(`/repos/${repo.npub}/${repo.name.toLowerCase().replace(/\s+/g, '-')}`);
+                    }
+                  }}
+                  style="cursor: pointer;">
                   <h4>{repo.name}</h4>
                   {#if repo.description}
                     <p class="repo-description">{repo.description}</p>
@@ -103,7 +113,18 @@
             <h3>Code Files ({results.code.length})</h3>
             <div class="code-list">
               {#each results.code as file}
-                <div class="code-item" onclick={() => goto(`/repos/${file.npub}/${file.repo}?file=${encodeURIComponent(file.file)}`)}>
+                <div 
+                  class="code-item" 
+                  role="button"
+                  tabindex="0"
+                  onclick={() => goto(`/repos/${file.npub}/${file.repo}?file=${encodeURIComponent(file.file)}`)}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      goto(`/repos/${file.npub}/${file.repo}?file=${encodeURIComponent(file.file)}`);
+                    }
+                  }}
+                  style="cursor: pointer;">
                   <div class="code-file-path">{file.file}</div>
                   <div class="code-repo">
                     <a href={`/repos/${file.npub}/${file.repo}`} onclick={(e) => e.stopPropagation()}>

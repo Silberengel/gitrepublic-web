@@ -87,7 +87,7 @@
       }
 
       if (event.kind !== KIND.REPO_ANNOUNCEMENT) {
-        error = 'The provided event is not a repository announcement (kind 30617).';
+        error = `The provided event is not a repository announcement (kind ${KIND.REPO_ANNOUNCEMENT}).`;
         loadingExisting = false;
         return;
       }

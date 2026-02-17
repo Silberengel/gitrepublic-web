@@ -138,7 +138,18 @@
         {:else}
           <div class="repo-grid">
             {#each repos as event}
-              <div class="repo-card" onclick={() => goto(`/repos/${npub}/${getRepoId(event)}`)}>
+              <div 
+                class="repo-card" 
+                role="button"
+                tabindex="0"
+                onclick={() => goto(`/repos/${npub}/${getRepoId(event)}`)}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    goto(`/repos/${npub}/${getRepoId(event)}`);
+                  }
+                }}
+                style="cursor: pointer;">
                 <h3>{getRepoName(event)}</h3>
                 {#if getRepoDescription(event)}
                   <p class="repo-description">{getRepoDescription(event)}</p>

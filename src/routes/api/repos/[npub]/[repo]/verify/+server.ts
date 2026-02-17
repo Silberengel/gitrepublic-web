@@ -31,9 +31,9 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
     // Decode npub to get pubkey
     let ownerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub') {
-        ownerPubkey = decoded.data as string;
+      const decoded = nip19.decode(npub) as { type: string; data: unknown };
+      if (decoded.type === 'npub' && typeof decoded.data === 'string') {
+        ownerPubkey = decoded.data;
       } else {
         return error(400, 'Invalid npub format');
       }
@@ -68,7 +68,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
     const announcement = events[0];
 
     // Check for ownership transfer events (including self-transfer for initial ownership)
-    const repoTag = `30617:${ownerPubkey}:${repo}`;
+    const repoTag = `${KIND.REPO_ANNOUNCEMENT}:${ownerPubkey}:${repo}`;
     const transferEvents = await nostrClient.fetchEvents([
       {
         kinds: [KIND.OWNERSHIP_TRANSFER],
@@ -86,9 +86,9 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
       // Decode npub if needed
       if (toPubkey) {
         try {
-          const decoded = nip19.decode(toPubkey);
-          if (decoded.type === 'npub') {
-            toPubkey = decoded.data as string;
+          const decoded = nip19.decode(toPubkey) as { type: string; data: unknown };
+          if (decoded.type === 'npub' && typeof decoded.data === 'string') {
+            toPubkey = decoded.data;
           }
         } catch {
           // Assume it's already hex
@@ -102,7 +102,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
     // Verify ownership - prefer self-transfer event, fall back to verification file
     let verified = false;
     let verificationMethod = '';
-    let error: string | undefined;
+    let verificationError: string | undefined;
 
     if (selfTransfer) {
       // Verify self-transfer event signature
@@ -112,7 +112,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
         verificationMethod = 'self-transfer-event';
       } else {
         verified = false;
-        error = 'Self-transfer event signature is invalid';
+        verificationError = 'Self-transfer event signature is invalid';
         verificationMethod = 'self-transfer-event';
       }
     } else {
@@ -121,11 +121,11 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
         const verificationFile = await fileManager.getFileContent(npub, repo, VERIFICATION_FILE_PATH, 'HEAD');
         const verification = verifyRepositoryOwnership(announcement, verificationFile.content);
         verified = verification.valid;
-        error = verification.error;
+        verificationError = verification.error;
         verificationMethod = 'verification-file';
       } catch (err) {
         verified = false;
-        error = 'No ownership proof found (neither self-transfer event nor verification file)';
+        verificationError = 'No ownership proof found (neither self-transfer event nor verification file)';
         verificationMethod = 'none';
       }
     }
@@ -142,7 +142,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
     } else {
       return json({
         verified: false,
-        error: error || 'Repository ownership verification failed',
+        error: verificationError || 'Repository ownership verification failed',
         announcementId: announcement.id,
         verificationMethod,
         message: 'Repository ownership verification failed'

@@ -32,9 +32,9 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     // Decode npub to get pubkey
     let repoOwnerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub') {
-        repoOwnerPubkey = decoded.data as string;
+      const decoded = nip19.decode(npub) as { type: string; data: unknown };
+      if (decoded.type === 'npub' && typeof decoded.data === 'string') {
+        repoOwnerPubkey = decoded.data;
       } else {
         return error(400, 'Invalid npub format');
       }
@@ -49,9 +49,9 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
 
     let userPubkeyHex = userPubkey;
     try {
-      const userDecoded = nip19.decode(userPubkey);
-      if (userDecoded.type === 'npub') {
-        userPubkeyHex = userDecoded.data as string;
+      const userDecoded = nip19.decode(userPubkey) as { type: string; data: unknown };
+      if (userDecoded.type === 'npub' && typeof userDecoded.data === 'string') {
+        userPubkeyHex = userDecoded.data;
       }
     } catch {
       // Assume it's already hex
@@ -87,7 +87,8 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       .filter(t => t[0] === 'maintainers')
       .flatMap(t => t.slice(1))
       .filter(m => m && typeof m === 'string') as string[];
-    const isPrivate = await maintainerService.isRepoPrivate(currentOwner, repo);
+    const privacyInfo = await maintainerService.getPrivacyInfo(currentOwner, repo);
+    const isPrivate = privacyInfo.isPrivate;
 
     return json({
       name,
@@ -125,9 +126,9 @@ export const POST: RequestHandler = async ({ params, request }) => {
     // Decode npub to get pubkey
     let repoOwnerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub') {
-        repoOwnerPubkey = decoded.data as string;
+      const decoded = nip19.decode(npub) as { type: string; data: unknown };
+      if (decoded.type === 'npub' && typeof decoded.data === 'string') {
+        repoOwnerPubkey = decoded.data;
       } else {
         return error(400, 'Invalid npub format');
       }
@@ -137,9 +138,9 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     let userPubkeyHex = userPubkey;
     try {
-      const userDecoded = nip19.decode(userPubkey);
-      if (userDecoded.type === 'npub') {
-        userPubkeyHex = userDecoded.data as string;
+      const userDecoded = nip19.decode(userPubkey) as { type: string; data: unknown };
+      if (userDecoded.type === 'npub' && typeof userDecoded.data === 'string') {
+        userPubkeyHex = userDecoded.data;
       }
     } catch {
       // Assume it's already hex

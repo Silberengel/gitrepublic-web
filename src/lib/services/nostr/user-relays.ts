@@ -4,9 +4,7 @@
 
 import { NostrClient } from './nostr-client.js';
 import type { NostrEvent } from '../../types/nostr.js';
-
-const KIND_RELAY_LIST = 10002;
-const KIND_CONTACTS = 3;
+import { KIND } from '../../types/nostr.js';
 
 export async function getUserRelays(
   pubkey: string,
@@ -19,7 +17,7 @@ export async function getUserRelays(
     // Fetch kind 10002 (relay list)
     const relayListEvents = await nostrClient.fetchEvents([
       {
-        kinds: [KIND_RELAY_LIST],
+        kinds: [KIND.RELAY_LIST],
         authors: [pubkey],
         limit: 1
       }
@@ -43,7 +41,7 @@ export async function getUserRelays(
     if (inbox.length === 0 && outbox.length === 0) {
       const contactEvents = await nostrClient.fetchEvents([
         {
-          kinds: [KIND_CONTACTS],
+          kinds: [KIND.CONTACT_LIST],
           authors: [pubkey],
           limit: 1
         }

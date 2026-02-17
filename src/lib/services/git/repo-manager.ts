@@ -300,12 +300,14 @@ export class RepoManager {
       if (nsecKey) {
         try {
           const { createGitCommitSignature } = await import('./commit-signer.js');
-          const { signedMessage } = createGitCommitSignature(
-            nsecKey,
+          const { signedMessage } = await createGitCommitSignature(
             commitMessage,
             'Nostr',
             `${event.pubkey}@nostr`,
-            event.created_at
+            {
+              nsecKey,
+              timestamp: event.created_at
+            }
           );
           commitMessage = signedMessage;
         } catch (err) {

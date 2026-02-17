@@ -44,7 +44,7 @@ export const GET: RequestHandler = async ({ params }) => {
     const currentOwner = await ownershipTransferService.getCurrentOwner(originalOwnerPubkey, repo);
 
     // Fetch transfer events for history
-    const repoTag = `30617:${originalOwnerPubkey}:${repo}`;
+    const repoTag = `${KIND.REPO_ANNOUNCEMENT}:${originalOwnerPubkey}:${repo}`;
     const transferEvents = await nostrClient.fetchEvents([
       {
         kinds: [KIND.OWNERSHIP_TRANSFER],
@@ -141,7 +141,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     // Verify the 'a' tag references this repo
     const aTag = transferEvent.tags.find(t => t[0] === 'a');
-    const expectedRepoTag = `30617:${originalOwnerPubkey}:${repo}`;
+    const expectedRepoTag = `${KIND.REPO_ANNOUNCEMENT}:${originalOwnerPubkey}:${repo}`;
     if (!aTag || aTag[1] !== expectedRepoTag) {
       return error(400, "Transfer event 'a' tag does not match this repository");
     }

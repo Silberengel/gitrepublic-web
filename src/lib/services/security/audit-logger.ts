@@ -14,6 +14,7 @@
 import { appendFile, mkdir, readdir, unlink, stat } from 'fs/promises';
 import { join, dirname } from 'path';
 import { existsSync } from 'fs';
+import { truncatePubkey, sanitizeError, redactSensitiveData } from '../../utils/security.js';
 
 export interface AuditLogEntry {
   timestamp: string;
@@ -176,23 +177,28 @@ export class AuditLogger {
 
   /**
    * Log an audit event
+   * Automatically truncates pubkeys and redacts sensitive data
    */
   log(entry: Omit<AuditLogEntry, 'timestamp'>): void {
     if (!this.enabled) return;
 
-    const fullEntry: AuditLogEntry = {
+    // Sanitize entry: truncate pubkeys, redact sensitive data
+    const sanitizedEntry: AuditLogEntry = {
       ...entry,
+      user: entry.user ? truncatePubkey(entry.user) : undefined,
+      error: entry.error ? sanitizeError(entry.error) : undefined,
+      metadata: entry.metadata ? redactSensitiveData(entry.metadata) : undefined,
       timestamp: new Date().toISOString()
     };
 
     // Log to console (structured JSON)
-    const logLine = JSON.stringify(fullEntry);
+    const logLine = JSON.stringify(sanitizedEntry);
     console.log(`[AUDIT] ${logLine}`);
 
     // Write to file if configured (async, non-blocking)
     if (this.logFile) {
       this.writeToFile(logLine).catch(err => {
-        console.error('[AUDIT] Failed to write log entry:', err);
+        console.error('[AUDIT] Failed to write log entry:', sanitizeError(err));
       });
     }
   }

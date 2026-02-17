@@ -49,7 +49,7 @@ export class OwnershipTransferService {
     try {
       // Fetch all ownership transfer events for this repo
       // We use the 'a' tag to reference the repo announcement
-      const repoTag = `30617:${originalOwnerPubkey}:${repoId}`;
+      const repoTag = `${KIND.REPO_ANNOUNCEMENT}:${originalOwnerPubkey}:${repoId}`;
       
       const transferEvents = await this.nostrClient.fetchEvents([
         {
@@ -131,7 +131,7 @@ export class OwnershipTransferService {
     }
 
     // Verify 'a' tag matches this repo
-    const expectedRepoTag = `30617:${originalOwnerPubkey}:${repoId}`;
+    const expectedRepoTag = `${KIND.REPO_ANNOUNCEMENT}:${originalOwnerPubkey}:${repoId}`;
     if (aTag[1] !== expectedRepoTag) {
       return null;
     }
@@ -224,7 +224,7 @@ export class OwnershipTransferService {
       // Assume it's already a hex pubkey
     }
 
-    const repoTag = `30617:${originalOwnerPubkey}:${repoId}`;
+    const repoTag = `${KIND.REPO_ANNOUNCEMENT}:${originalOwnerPubkey}:${repoId}`;
     const isSelfTransfer = fromPubkey === toPubkeyHex;
     const content = isSelfTransfer
       ? `Initial ownership proof for repository ${repoId}`
@@ -280,7 +280,7 @@ export class OwnershipTransferService {
    */
   async getTransferHistory(originalOwnerPubkey: string, repoId: string): Promise<OwnershipTransfer[]> {
     try {
-      const repoTag = `30617:${originalOwnerPubkey}:${repoId}`;
+      const repoTag = `${KIND.REPO_ANNOUNCEMENT}:${originalOwnerPubkey}:${repoId}`;
       
       const transferEvents = await this.nostrClient.fetchEvents([
         {

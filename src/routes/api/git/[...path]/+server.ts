@@ -17,6 +17,7 @@ import type { NostrEvent } from '$lib/types/nostr.js';
 import { verifyNIP98Auth } from '$lib/services/nostr/nip98-auth.js';
 import { OwnershipTransferService } from '$lib/services/nostr/ownership-transfer-service.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
+import { BranchProtectionService } from '$lib/services/nostr/branch-protection-service.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
@@ -24,6 +25,7 @@ const repoManager = new RepoManager(repoRoot);
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
+const branchProtectionService = new BranchProtectionService(DEFAULT_NOSTR_RELAYS);
 
 // Path to git-http-backend (common locations)
 // Alpine Linux: /usr/lib/git-core/git-http-backend
@@ -395,9 +397,43 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
       return error(401, authResult.error || 'Authentication required');
     }
 
-    // Verify pubkey matches current repo owner (may have been transferred)
-    if (authResult.pubkey !== currentOwnerPubkey) {
-      return error(403, 'Event pubkey does not match repository owner');
+    // Verify pubkey is current repo owner or maintainer
+    const isMaintainer = await maintainerService.isMaintainer(
+      authResult.pubkey || '',
+      currentOwnerPubkey,
+      repoName
+    );
+    
+    if (authResult.pubkey !== currentOwnerPubkey && !isMaintainer) {
+      return error(403, 'Event pubkey does not match repository owner or maintainer');
+    }
+
+    // Check branch protection rules
+    // Note: We need to extract the target branch from the git push request
+    // This is a simplified check - in production, you'd parse the git protocol
+    // to determine the exact branch being pushed
+    try {
+      // Try to extract branch from request body (git protocol)
+      const bodyText = bodyBuffer.toString('utf-8', 0, Math.min(bodyBuffer.length, 1000));
+      const branchMatch = bodyText.match(/refs\/heads\/([^\s\n]+)/);
+      const targetBranch = branchMatch ? branchMatch[1] : 'main'; // Default to main if can't determine
+      
+      const protectionCheck = await branchProtectionService.canPushToBranch(
+        authResult.pubkey || '',
+        currentOwnerPubkey,
+        repoName,
+        targetBranch,
+        isMaintainer
+      );
+
+      if (!protectionCheck.allowed) {
+        return error(403, protectionCheck.reason || 'Branch is protected');
+      }
+    } catch (error) {
+      // If we can't check protection, log but don't block (fail open for now)
+      // Security: Sanitize error messages
+      const sanitizedError = error instanceof Error ? error.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : String(error);
+      console.warn('Failed to check branch protection:', sanitizedError);
     }
   }
 
@@ -507,12 +543,16 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
             if (otherUrls.length > 0) {
               // Sync in background (don't wait for it)
               repoManager.syncToRemotes(repoPath, otherUrls).catch(err => {
-                console.error('Failed to sync to remotes after push:', err);
+                // Security: Sanitize error messages
+                const sanitizedErr = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : String(err);
+                console.error('Failed to sync to remotes after push:', sanitizedErr);
               });
             }
           }
         } catch (err) {
-          console.error('Failed to sync to remotes:', err);
+          // Security: Sanitize error messages
+          const sanitizedErr = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : String(err);
+          console.error('Failed to sync to remotes:', sanitizedErr);
           // Don't fail the request if sync fails
         }
       }

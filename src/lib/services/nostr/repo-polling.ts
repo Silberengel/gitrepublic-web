@@ -97,7 +97,7 @@ export class RepoPollingService {
 
           // Fetch self-transfer event for this repo
           const ownershipService = new OwnershipTransferService(this.relays);
-          const repoTag = `30617:${event.pubkey}:${dTag}`;
+          const repoTag = `${KIND.REPO_ANNOUNCEMENT}:${event.pubkey}:${dTag}`;
           
           const selfTransferEvents = await this.nostrClient.fetchEvents([
             {
@@ -134,7 +134,9 @@ export class RepoPollingService {
 
           // For existing repos without self-transfer, create one retroactively
           if (isExistingRepo && !selfTransferEvent) {
-            console.log(`Existing repo ${dTag} from ${event.pubkey} has no self-transfer event. Creating template for owner to sign and publish.`);
+            // Security: Truncate pubkey in logs
+            const truncatedPubkey = event.pubkey.length > 16 ? `${event.pubkey.slice(0, 8)}...${event.pubkey.slice(-4)}` : event.pubkey;
+            console.log(`Existing repo ${dTag} from ${truncatedPubkey} has no self-transfer event. Creating template for owner to sign and publish.`);
             
             try {
               // Create a self-transfer event template for the existing repo

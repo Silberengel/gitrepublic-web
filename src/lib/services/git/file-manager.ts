@@ -412,7 +412,9 @@ export class FileManager {
           );
           finalCommitMessage = signedMessage;
         } catch (err) {
-          console.warn('Failed to sign commit:', err);
+          // Security: Sanitize error messages (never log private keys)
+          const sanitizedErr = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : String(err);
+          console.warn('Failed to sign commit:', sanitizedErr);
           // Continue without signature if signing fails
         }
       }
@@ -581,7 +583,9 @@ export class FileManager {
           );
           finalCommitMessage = signedMessage;
         } catch (err) {
-          console.warn('Failed to sign commit:', err);
+          // Security: Sanitize error messages (never log private keys)
+          const sanitizedErr = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : String(err);
+          console.warn('Failed to sign commit:', sanitizedErr);
           // Continue without signature if signing fails
         }
       }

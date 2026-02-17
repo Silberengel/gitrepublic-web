@@ -5,6 +5,7 @@
 
 import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '../../types/nostr.js';
+import { KIND } from '../../types/nostr.js';
 import { createHash } from 'crypto';
 
 export interface NIP98AuthResult {
@@ -44,10 +45,10 @@ export function verifyNIP98Auth(
     const nostrEvent: NostrEvent = JSON.parse(eventJson);
 
     // Validate kind (must be 27235)
-    if (nostrEvent.kind !== 27235) {
+    if (nostrEvent.kind !== KIND.NIP98_AUTH) {
       return {
         valid: false,
-        error: `Invalid event kind. Expected 27235, got ${nostrEvent.kind}`
+        error: `Invalid event kind. Expected ${KIND.NIP98_AUTH}, got ${nostrEvent.kind}`
       };
     }
 
@@ -185,7 +186,7 @@ export function createNIP98AuthEvent(
   }
 
   return {
-    kind: 27235,
+    kind: KIND.NIP98_AUTH,
     pubkey,
     created_at: Math.floor(Date.now() / 1000),
     content: '',

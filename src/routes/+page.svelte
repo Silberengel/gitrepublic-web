@@ -7,13 +7,16 @@
   import type { NostrEvent } from '../lib/types/nostr.js';
   import { nip19 } from 'nostr-tools';
   import { getPublicKeyWithNIP07, isNIP07Available } from '../lib/services/nostr/nip07-signer.js';
+  import { ForkCountService } from '../lib/services/nostr/fork-count-service.js';
 
   let repos = $state<NostrEvent[]>([]);
   let loading = $state(true);
   let error = $state<string | null>(null);
   let userPubkey = $state<string | null>(null);
+  let forkCounts = $state<Map<string, number>>(new Map());
 
   import { DEFAULT_NOSTR_RELAYS } from '../lib/config.js';
+  const forkCountService = new ForkCountService(DEFAULT_NOSTR_RELAYS);
 
   const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 
@@ -83,12 +86,45 @@
       
       // Sort by created_at descending
       repos.sort((a, b) => b.created_at - a.created_at);
+
+      // Load fork counts for all repos (in parallel, but don't block)
+      loadForkCounts(repos).catch(err => {
+        console.warn('[RepoList] Failed to load some fork counts:', err);
+      });
     } catch (e) {
       error = String(e);
-      console.error('Failed to load repos:', e);
+      console.error('[RepoList] Failed to load repos:', e);
     } finally {
       loading = false;
     }
+  }
+
+  async function loadForkCounts(repoEvents: NostrEvent[]) {
+    const counts = new Map<string, number>();
+    
+    // Extract owner pubkey and repo name for each repo
+    const forkCountPromises = repoEvents.map(async (event) => {
+      try {
+        const dTag = event.tags.find(t => t[0] === 'd')?.[1];
+        if (!dTag) return;
+        
+        const repoKey = `${event.pubkey}:${dTag}`;
+        const count = await forkCountService.getForkCount(event.pubkey, dTag);
+        counts.set(repoKey, count);
+      } catch (err) {
+        // Ignore individual failures
+      }
+    });
+
+    await Promise.all(forkCountPromises);
+    forkCounts = counts;
+  }
+
+  function getForkCount(event: NostrEvent): number {
+    const dTag = event.tags.find(t => t[0] === 'd')?.[1];
+    if (!dTag) return 0;
+    const repoKey = `${event.pubkey}:${dTag}`;
+    return forkCounts.get(repoKey) || 0;
   }
 
   function goToSearch() {
@@ -256,6 +292,10 @@
               </div>
               <div class="repo-meta">
                 <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
+                {#if getForkCount(repo) > 0}
+                  {@const forkCount = getForkCount(repo)}
+                  <span class="fork-count">🍴 {forkCount} fork{forkCount === 1 ? '' : 's'}</span>
+                {/if}
               </div>
             </div>
           </div>

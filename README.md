@@ -1,6 +1,8 @@
 # gitrepublic-web
 
-A decentralized, Nostr-based git server that enables git repository hosting and collaboration using Nostr events. Repositories are announced via NIP-34, and all operations (clone, push, pull) are authenticated using NIP-98 HTTP authentication.ne
+A decentralized, Nostr-based git server that enables git repository hosting and collaboration using Nostr events. Repositories are announced via NIP-34, and all operations (clone, push, pull) are authenticated using NIP-98 HTTP authentication.
+
+See [ARCHITECTURE_FAQ.md](./docs/ARCHITECTURE_FAQ.md) for answers to common architecture questions.
 
 ## Features
 
@@ -19,6 +21,7 @@ A decentralized, Nostr-based git server that enables git repository hosting and 
 - **Maintainer Management**: Add/remove maintainers who can push to repositories
 - **Forking**: Fork repositories with automatic announcement creation and ownership setup
 - **Repository Settings**: Manage privacy, maintainers, and description via web UI
+- **Branch Protection**: Protect branches from direct pushes, require pull requests and reviews
 
 ### Collaboration Features
 - **Issues**: Create and manage issues (kind 1621) with status tracking
@@ -55,43 +58,47 @@ A decentralized, Nostr-based git server that enables git repository hosting and 
 
 ## Nostr Event Kinds Used
 
-This project uses the following Nostr event kinds:
+This project uses the following Nostr event kinds. For complete JSON examples and tag documentation, see [docs/NIP_COMPLIANCE.md](./docs/NIP_COMPLIANCE.md#complete-event-kind-reference).
 
-### Repository Management
+### Standard NIP Event Kinds
 - **30617** (`REPO_ANNOUNCEMENT`): Repository announcements (NIP-34)
-  - Tags: `d` (repo name), `name`, `description`, `clone`, `web`, `relays`, `maintainers`, `image`, `banner`, `private`
-- **30618** (`REPO_STATE`): Repository state announcements (optional)
+- **30618** (`REPO_STATE`): Repository state announcements (NIP-34, optional)
+- **1617** (`PATCH`): Git patches (NIP-34)
+- **1618** (`PULL_REQUEST`): Pull request events (NIP-34)
+- **1619** (`PULL_REQUEST_UPDATE`): Pull request updates (NIP-34)
+- **1621** (`ISSUE`): Issue events (NIP-34)
+- **1630** (`STATUS_OPEN`): Open status (NIP-34)
+- **1631** (`STATUS_APPLIED`): Applied/merged status (NIP-34)
+- **1632** (`STATUS_CLOSED`): Closed status (NIP-34)
+- **1633** (`STATUS_DRAFT`): Draft status (NIP-34)
+- **9802** (`HIGHLIGHT`): NIP-84 highlight events for code selections
+- **1111** (`COMMENT`): NIP-22 comment events for threaded discussions
+- **27235** (`NIP98_AUTH`): NIP-98 HTTP authentication events
+- **3**: Contact list (NIP-02, for relay discovery)
+- **10002**: Relay list metadata (NIP-65, for relay discovery)
+- **1**: Text note (NIP-01, for relay write proof, fallback)
+- **5**: Event deletion request (NIP-09)
+
+### Custom Event Kinds
+
+These are not part of any NIP but are used by this application:
+
+- **1640** (`COMMIT_SIGNATURE`): Git commit signature events
+  - Used to cryptographically sign git commits using Nostr keys
+  - Tags: `commit` (hash), `author` (name, email), `message` (commit message), `e` (NIP-98 auth event reference, optional)
+  - See [docs/NIP_COMPLIANCE.md](./docs/NIP_COMPLIANCE.md#1640---commit_signature) for complete example
+
 - **1641** (`OWNERSHIP_TRANSFER`): Repository ownership transfer events (non-replaceable)
   - Transfers ownership from one pubkey to another
   - Self-transfers (owner → owner) used for initial ownership proof
   - Non-replaceable to maintain immutable chain of ownership
+  - Tags: `a` (repo identifier), `p` (new owner), `d` (repo name), `t` (self-transfer marker, optional)
+  - See [docs/NIP_COMPLIANCE.md](./docs/NIP_COMPLIANCE.md#1641---ownership_transfer) for complete example
 
-### Collaboration
-- **1617** (`PATCH`): Git patches
-- **1618** (`PULL_REQUEST`): Pull request events
-- **1619** (`PULL_REQUEST_UPDATE`): Pull request updates
-- **1621** (`ISSUE`): Issue events
-- **1630** (`STATUS_OPEN`): Open status
-- **1631** (`STATUS_APPLIED`): Applied/merged status
-- **1632** (`STATUS_CLOSED`): Closed status
-- **1633** (`STATUS_DRAFT`): Draft status
-- **1640** (`COMMIT_SIGNATURE`): Git commit signature events
-  - Tags: `author` (name, email), `message` (commit message), `commit` (commit hash), `e` (NIP-98 auth event reference, optional)
-
-### Highlights & Comments
-- **9802** (`HIGHLIGHT`): NIP-84 highlight events for code selections
-  - Tags: `a` (anchor), `r` (range), `p` (position), `context`, `file`, `start_line`, `end_line`, `start_pos`, `end_pos`
-- **1111** (`COMMENT`): NIP-22 comment events for threaded discussions
-  - Tags: `A` (root event), `K` (root kind), `P` (parent event), `a`, `k`, `p` (for replies)
-
-### Authentication
-- **27235** (`NIP98_AUTH`): NIP-98 HTTP authentication events
-  - Tags: `u` (URL), `method` (HTTP method), `payload` (SHA256 hash of request body)
-
-### Relay Discovery
-- **3**: Contact list (for relay discovery)
-- **10002**: Relay list metadata (for relay discovery)
-- **1**: Text note (for relay write proof, fallback)
+- **30620** (`BRANCH_PROTECTION`): Branch protection rules (replaceable)
+  - Allows requiring pull requests, reviewers, status checks for protected branches
+  - Tags: `d` (repo name), `a` (repo identifier), `branch` (branch name and protection settings)
+  - See [docs/NIP_COMPLIANCE.md](./docs/NIP_COMPLIANCE.md#30620---branch_protection) for complete example
 
 ## How It Works
 
@@ -333,7 +340,7 @@ npm run dev
 - **Resource Quotas**: Per-tenant CPU, memory, and storage limits
 - **Separate Volumes**: Each tenant has their own PersistentVolume
 
-See `SECURITY.md` and `SECURITY_IMPLEMENTATION.md` for detailed information.
+See `docs/SECURITY.md` and `docs/SECURITY_IMPLEMENTATION.md` for detailed information.
 
 ## Environment Variables
 
@@ -433,7 +440,7 @@ Requires NIP-98 authentication. Your git client needs to support NIP-98 or you c
 - **Resource Quotas**: Per-tenant CPU, memory, and storage limits
 - **Separate Volumes**: Each tenant has their own PersistentVolume
 
-See `SECURITY.md` and `SECURITY_IMPLEMENTATION.md` for detailed information.
+See `docs/SECURITY.md` and `docs/SECURITY_IMPLEMENTATION.md` for detailed information.
 
 ## Security Considerations
 
