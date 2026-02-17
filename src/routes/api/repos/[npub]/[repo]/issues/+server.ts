@@ -8,6 +8,7 @@ import { IssuesService } from '$lib/services/nostr/issues-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
 import logger from '$lib/services/logger.js';
+import { requireNpubHex } from '$lib/utils/npub-utils.js';
 
 export const GET: RequestHandler = async ({ params, url, request }) => {
   const { npub, repo } = params;

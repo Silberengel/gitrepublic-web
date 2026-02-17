@@ -96,9 +96,9 @@ async function createWebSocketWithTor(url: string): Promise<WebSocket> {
       proxy: {
         host: proxy.host,
         port: proxy.port,
-        type: 5 // SOCKS5
+        type: 5 as const // SOCKS5
       },
-      command: 'connect',
+      command: 'connect' as const,
       destination: {
         host,
         port
@@ -108,11 +108,12 @@ async function createWebSocketWithTor(url: string): Promise<WebSocket> {
     const info = await SocksClient.createConnection(socksOptions);
     
     // Create WebSocket over the SOCKS connection
+    // socket option is supported at runtime but not in types
     const ws = new WS(url, {
       socket: info.socket,
       // For wss://, we need to handle TLS
       rejectUnauthorized: false // .onion addresses use self-signed certs
-    });
+    } as any);
     
     return ws as any as WebSocket;
   } catch (error) {
@@ -218,6 +219,7 @@ export class NostrClient {
     // Ensure WebSocket polyfill is initialized
     await initializeWebSocketPolyfill();
     
+    const self = this;
     return new Promise((resolve) => {
       let ws: WebSocket | null = null;
       const events: NostrEvent[] = [];
@@ -299,7 +301,7 @@ export class NostrClient {
           // Handle AUTH challenge
           if (message[0] === 'AUTH' && message[1] && !authHandled) {
             authHandled = true;
-            authPromise = this.handleAuthChallenge(ws!, relay, message[1]);
+            authPromise = self.handleAuthChallenge(ws!, relay, message[1]);
             const authenticated = await authPromise;
             // After authentication, send the REQ
             if (ws && ws.readyState === WebSocket.OPEN) {
@@ -373,6 +375,7 @@ export class NostrClient {
     // Ensure WebSocket polyfill is initialized
     await initializeWebSocketPolyfill();
     
+    const self = this;
     return new Promise((resolve, reject) => {
       let ws: WebSocket | null = null;
       let resolved = false;
@@ -459,7 +462,7 @@ export class NostrClient {
           // Handle AUTH challenge
           if (message[0] === 'AUTH' && message[1] && !authHandled) {
             authHandled = true;
-            authPromise = this.handleAuthChallenge(ws!, relay, message[1]);
+            authPromise = self.handleAuthChallenge(ws!, relay, message[1]);
             await authPromise;
             // After authentication attempt, send the EVENT
             if (ws && ws.readyState === WebSocket.OPEN) {

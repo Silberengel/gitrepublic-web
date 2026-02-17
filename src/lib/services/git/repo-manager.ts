@@ -109,7 +109,14 @@ export class RepoManager {
    * Get git environment variables with Tor proxy if needed for .onion addresses
    */
   private getGitEnvForUrl(url: string): Record<string, string> {
-    const env = { ...process.env };
+    const env: Record<string, string> = {};
+    
+    // Copy process.env, filtering out undefined values
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value !== undefined) {
+        env[key] = value;
+      }
+    }
     
     if (shouldUseTor(url)) {
       const proxy = getTorProxy();

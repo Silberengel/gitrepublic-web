@@ -92,7 +92,7 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
     }
 
     // Validate rules
-    const validatedRules: BranchProtectionRule[] = rules.map((rule: { branch: string; requirePullRequest?: boolean; requireReviewers?: string[]; allowForcePush?: boolean; requireStatusChecks?: string[] }) => ({
+    const validatedRules: BranchProtectionRule[] = rules.map((rule: { branch: string; requirePullRequest?: boolean; requireReviewers?: string[]; allowForcePush?: boolean; requireStatusChecks?: string[]; allowedMaintainers?: string[] }) => ({
       branch: rule.branch,
       requirePullRequest: rule.requirePullRequest || false,
       requireReviewers: rule.requireReviewers || [],

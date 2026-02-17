@@ -15,6 +15,7 @@ import { nip19 } from 'nostr-tools';
 import { existsSync } from 'fs';
 import logger from '$lib/services/logger.js';
 import { join } from 'path';
+import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);

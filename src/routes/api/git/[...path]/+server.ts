@@ -123,6 +123,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   const requestUrl = `${protocol}://${host}${url.pathname}${url.search}`;
 
   // Validate npub format
+  let pubkey: string;
   try {
     pubkey = requireNpubHex(npub);
   } catch {
