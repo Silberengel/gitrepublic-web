@@ -55,14 +55,16 @@
         placeholder="Search repositories or code..."
         class="search-input"
       />
-      <select bind:value={searchType} class="search-type-select">
-        <option value="repos">Repositories</option>
-        <option value="code">Code</option>
-        <option value="all">All</option>
-      </select>
-      <button type="submit" disabled={loading || !query.trim()} class="search-button">
-        {loading ? 'Searching...' : 'Search'}
-      </button>
+      <div class="search-controls">
+        <select bind:value={searchType} class="search-type-select">
+          <option value="repos">Repositories</option>
+          <option value="code">Code</option>
+          <option value="all">All</option>
+        </select>
+        <button type="submit" disabled={loading || !query.trim()} class="search-button">
+          {loading ? 'Searching...' : 'Search'}
+        </button>
+      </div>
     </form>
 
     {#if error}

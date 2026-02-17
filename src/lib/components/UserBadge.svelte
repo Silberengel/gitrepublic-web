@@ -57,6 +57,12 @@
       return `${pubkey.slice(0, 8)}...${pubkey.slice(-4)}`;
     }
   }
+
+  function truncateHandle(handle: string | undefined): string {
+    if (!handle) return getShortNpub();
+    if (handle.length <= 20) return handle;
+    return handle.slice(0, 20) + '...';
+  }
 </script>
 
 <div class="user-badge">
@@ -65,7 +71,7 @@
   {:else}
     <img src="/favicon.png" alt="Profile" class="user-badge-avatar user-badge-avatar-fallback" />
   {/if}
-  <span class="user-badge-name">{userProfile?.name || getShortNpub()}</span>
+  <span class="user-badge-name">{truncateHandle(userProfile?.name)}</span>
 </div>
 
 <style>
@@ -103,5 +109,16 @@
     color: var(--text-primary);
     font-weight: 500;
     white-space: nowrap;
+  }
+
+  /* Hide name on narrow screens, show only picture */
+  @media (max-width: 768px) {
+    .user-badge-name {
+      display: none;
+    }
+
+    .user-badge {
+      padding: 0.25rem;
+    }
   }
 </style>

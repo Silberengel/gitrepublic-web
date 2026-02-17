@@ -59,9 +59,6 @@
       <img src="/GR_logo.png" alt="GitRepublic Logo" class="main-logo" />
       <h1>gitrepublic</h1>
     </a>
-    <button class="mobile-menu-toggle" onclick={toggleMobileMenu} aria-label="Toggle menu">
-      <span class="hamburger-icon">☰</span>
-    </button>
     <nav class:mobile-open={mobileMenuOpen}>
       <div class="nav-links">
         <a href="/" class:active={isActive('/') && $page.url.pathname === '/'} onclick={closeMobileMenu}>Repositories</a>
@@ -80,6 +77,9 @@
           {isNIP07Available() ? 'Login' : 'NIP-07 Not Available'}
         </button>
       {/if}
+      <button class="mobile-menu-toggle" onclick={toggleMobileMenu} aria-label="Toggle menu">
+        <span class="hamburger-icon">☰</span>
+      </button>
     </div>
   </div>
 </header>
@@ -207,9 +207,17 @@
   /* Mobile responsive styles */
   @media (max-width: 768px) {
     .header-container {
+      display: flex;
       flex-wrap: wrap;
       padding: 1rem;
       gap: 1rem;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .header-logo {
+      flex-shrink: 0;
+      order: 1;
     }
 
     .header-logo h1 {
@@ -223,18 +231,18 @@
 
     .mobile-menu-toggle {
       display: block;
-      order: 2;
-      margin-left: auto;
     }
 
     nav {
       order: 3;
-      width: 100%;
+      flex: none !important;
+      width: 100% !important;
       max-height: 0;
       overflow: hidden;
       transition: max-height 0.3s ease;
       flex-direction: column;
       align-items: stretch;
+      margin-top: 0;
     }
 
     nav.mobile-open {
@@ -271,10 +279,13 @@
     }
 
     .auth-section {
-      order: 1;
-      width: auto;
-      flex-wrap: wrap;
+      order: 2;
+      display: flex !important;
+      align-items: center;
       gap: 0.5rem;
+      flex-shrink: 0;
+      margin-left: auto !important;
+      justify-content: flex-end;
     }
 
     .auth-section button {
