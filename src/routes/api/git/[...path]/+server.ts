@@ -21,6 +21,7 @@ import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { BranchProtectionService } from '$lib/services/nostr/branch-protection-service.js';
 import logger from '$lib/services/logger.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
+import { isValidBranchName, sanitizeError } from '$lib/utils/security.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const repoManager = new RepoManager(repoRoot);
@@ -133,9 +134,11 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   // Get repository path with security validation
   const repoPath = join(repoRoot, npub, `${repoName}.git`);
   // Security: Ensure the resolved path is within repoRoot to prevent path traversal
-  const resolvedPath = resolve(repoPath);
-  const resolvedRoot = resolve(repoRoot);
-  if (!resolvedPath.startsWith(resolvedRoot + '/') && resolvedPath !== resolvedRoot) {
+  // Normalize paths to handle Windows/Unix differences
+  const resolvedPath = resolve(repoPath).replace(/\\/g, '/');
+  const resolvedRoot = resolve(repoRoot).replace(/\\/g, '/');
+  // Must be a subdirectory of repoRoot, not equal to it
+  if (!resolvedPath.startsWith(resolvedRoot + '/')) {
     return error(403, 'Invalid repository path');
   }
   if (!repoManager.repoExists(repoPath)) {
@@ -207,10 +210,14 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   const pathInfo = gitPath ? `/${gitPath}` : `/info/refs`;
 
   // Set up environment variables for git-http-backend
-  // Security: Use the specific repository path, not the entire repoRoot
-  // This limits git-http-backend's view to only this repository
-  const envVars = {
-    ...process.env,
+  // Security: Whitelist only necessary environment variables
+  // This prevents leaking secrets from process.env
+  const envVars: Record<string, string> = {
+    PATH: process.env.PATH || '/usr/bin:/bin',
+    HOME: process.env.HOME || '/tmp',
+    USER: process.env.USER || 'git',
+    LANG: process.env.LANG || 'C.UTF-8',
+    LC_ALL: process.env.LC_ALL || 'C.UTF-8',
     GIT_PROJECT_ROOT: resolve(repoPath), // Use specific repo path, not repoRoot
     GIT_HTTP_EXPORT_ALL: '1',
     REQUEST_METHOD: request.method,
@@ -220,6 +227,11 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     CONTENT_LENGTH: request.headers.get('Content-Length') || '0',
     HTTP_USER_AGENT: request.headers.get('User-Agent') || '',
   };
+  
+  // Add TZ if set (for consistent timestamps)
+  if (process.env.TZ) {
+    envVars.TZ = process.env.TZ;
+  }
 
   // Execute git-http-backend with timeout and security hardening
   const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
@@ -239,6 +251,18 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
 
     timeoutId = setTimeout(() => {
       gitProcess.kill('SIGTERM');
+      // Force kill after grace period if process doesn't terminate
+      const forceKillTimeout = setTimeout(() => {
+        if (!gitProcess.killed) {
+          gitProcess.kill('SIGKILL');
+        }
+      }, 5000); // 5 second grace period
+      
+      // Clear force kill timeout if process terminates
+      gitProcess.on('close', () => {
+        clearTimeout(forceKillTimeout);
+      });
+      
       auditLogger.logRepoAccess(
         originalOwnerPubkey,
         clientIp,
@@ -287,7 +311,8 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       }
       
       if (code !== 0 && chunks.length === 0) {
-        resolve(error(500, `git-http-backend error: ${errorOutput || 'Unknown error'}`));
+        const sanitizedError = sanitizeError(errorOutput || 'Unknown error');
+        resolve(error(500, `git-http-backend error: ${sanitizedError}`));
         return;
       }
 
@@ -323,7 +348,8 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
         'failure',
         `Process error: ${err.message}`
       );
-      resolve(error(500, `Failed to execute git-http-backend: ${err.message}`));
+      const sanitizedError = sanitizeError(err);
+      resolve(error(500, `Failed to execute git-http-backend: ${sanitizedError}`));
     });
   });
 };
@@ -350,9 +376,11 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
   // Get repository path with security validation
   const repoPath = join(repoRoot, npub, `${repoName}.git`);
   // Security: Ensure the resolved path is within repoRoot to prevent path traversal
-  const resolvedPath = resolve(repoPath);
-  const resolvedRoot = resolve(repoRoot);
-  if (!resolvedPath.startsWith(resolvedRoot + '/') && resolvedPath !== resolvedRoot) {
+  // Normalize paths to handle Windows/Unix differences
+  const resolvedPath = resolve(repoPath).replace(/\\/g, '/');
+  const resolvedRoot = resolve(repoRoot).replace(/\\/g, '/');
+  // Must be a subdirectory of repoRoot, not equal to it
+  if (!resolvedPath.startsWith(resolvedRoot + '/')) {
     return error(403, 'Invalid repository path');
   }
   if (!repoManager.repoExists(repoPath)) {
@@ -407,6 +435,11 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
       const branchMatch = bodyText.match(/refs\/heads\/([^\s\n]+)/);
       targetBranch = branchMatch ? branchMatch[1] : 'main'; // Default to main if can't determine
       
+      // Validate branch name to prevent injection
+      if (!isValidBranchName(targetBranch)) {
+        return error(400, 'Invalid branch name');
+      }
+      
       const protectionCheck = await branchProtectionService.canPushToBranch(
         authResult.pubkey || '',
         currentOwnerPubkey,
@@ -421,7 +454,7 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     } catch (error) {
       // If we can't check protection, log but don't block (fail open for now)
       // Security: Sanitize error messages
-      const sanitizedError = error instanceof Error ? error.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : String(error);
+      const sanitizedError = sanitizeError(error);
       logger.warn({ error: sanitizedError, npub, repoName, targetBranch }, 'Failed to check branch protection');
     }
   }
@@ -438,10 +471,14 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
   const pathInfo = gitPath ? `/${gitPath}` : `/`;
 
   // Set up environment variables for git-http-backend
-  // Security: Use the specific repository path, not the entire repoRoot
-  // This limits git-http-backend's view to only this repository
-  const envVars = {
-    ...process.env,
+  // Security: Whitelist only necessary environment variables
+  // This prevents leaking secrets from process.env
+  const envVars: Record<string, string> = {
+    PATH: process.env.PATH || '/usr/bin:/bin',
+    HOME: process.env.HOME || '/tmp',
+    USER: process.env.USER || 'git',
+    LANG: process.env.LANG || 'C.UTF-8',
+    LC_ALL: process.env.LC_ALL || 'C.UTF-8',
     GIT_PROJECT_ROOT: resolve(repoPath), // Use specific repo path, not repoRoot
     GIT_HTTP_EXPORT_ALL: '1',
     REQUEST_METHOD: request.method,
@@ -451,6 +488,11 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     CONTENT_LENGTH: bodyBuffer.length.toString(),
     HTTP_USER_AGENT: request.headers.get('User-Agent') || '',
   };
+  
+  // Add TZ if set (for consistent timestamps)
+  if (process.env.TZ) {
+    envVars.TZ = process.env.TZ;
+  }
 
   // Execute git-http-backend with timeout and security hardening
   const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
@@ -470,6 +512,18 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
 
     timeoutId = setTimeout(() => {
       gitProcess.kill('SIGTERM');
+      // Force kill after grace period if process doesn't terminate
+      const forceKillTimeout = setTimeout(() => {
+        if (!gitProcess.killed) {
+          gitProcess.kill('SIGKILL');
+        }
+      }, 5000); // 5 second grace period
+      
+      // Clear force kill timeout if process terminates
+      gitProcess.on('close', () => {
+        clearTimeout(forceKillTimeout);
+      });
+      
       auditLogger.logRepoAccess(
         currentOwnerPubkey,
         clientIp,
@@ -540,14 +594,15 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
           }
         } catch (err) {
           // Security: Sanitize error messages
-          const sanitizedErr = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : String(err);
+          const sanitizedErr = sanitizeError(err);
           logger.error({ error: sanitizedErr, npub, repoName }, 'Failed to sync to remotes');
           // Don't fail the request if sync fails
         }
       }
 
       if (code !== 0 && chunks.length === 0) {
-        resolve(error(500, `git-http-backend error: ${errorOutput || 'Unknown error'}`));
+        const sanitizedError = sanitizeError(errorOutput || 'Unknown error');
+        resolve(error(500, `git-http-backend error: ${sanitizedError}`));
         return;
       }
 
@@ -579,7 +634,8 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
         'failure',
         `Process error: ${err.message}`
       );
-      resolve(error(500, `Failed to execute git-http-backend: ${err.message}`));
+      const sanitizedError = sanitizeError(err);
+      resolve(error(500, `Failed to execute git-http-backend: ${sanitizedError}`));
     });
   });
 };

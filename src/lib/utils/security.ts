@@ -39,6 +39,10 @@ export function sanitizeError(error: unknown): string {
     message = message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]');
     message = message.replace(/[0-9a-f]{64}/g, '[REDACTED]'); // 64-char hex keys
     
+    // Remove password patterns
+    message = message.replace(/password[=:]\s*\S+/gi, 'password=[REDACTED]');
+    message = message.replace(/pwd[=:]\s*\S+/gi, 'pwd=[REDACTED]');
+    
     // Truncate long pubkeys in error messages
     message = message.replace(/(npub[a-z0-9]{50,})/gi, (match) => truncateNpub(match));
     message = message.replace(/([0-9a-f]{50,})/g, (match) => truncatePubkey(match));
@@ -46,6 +50,24 @@ export function sanitizeError(error: unknown): string {
     return message;
   }
   return String(error);
+}
+
+/**
+ * Validate branch name to prevent injection attacks
+ */
+export function isValidBranchName(name: string): boolean {
+  if (!name || typeof name !== 'string') return false;
+  if (name.length === 0 || name.length > 255) return false;
+  if (name.startsWith('.') || name.startsWith('-')) return false;
+  if (name.includes('..') || name.includes('//')) return false;
+  // Allow alphanumeric, dots, hyphens, underscores, and forward slashes
+  // But not at the start or end
+  if (!/^[a-zA-Z0-9._/-]+$/.test(name)) return false;
+  if (name.endsWith('.') || name.endsWith('-') || name.endsWith('/')) return false;
+  // Git reserved names
+  const reserved = ['HEAD', 'MERGE_HEAD', 'FETCH_HEAD', 'ORIG_HEAD'];
+  if (reserved.includes(name.toUpperCase())) return false;
+  return true;
 }
 
 /**

@@ -3,19 +3,62 @@
  * Handles repo provisioning, syncing, and NIP-34 integration
  */
 
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { existsSync, mkdirSync, writeFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { readdir } from 'fs/promises';
+import { spawn } from 'child_process';
+import { promisify } from 'util';
 import type { NostrEvent } from '../../types/nostr.js';
 import { GIT_DOMAIN } from '../../config.js';
 import { generateVerificationFile, VERIFICATION_FILE_PATH } from '../nostr/repo-verification.js';
 import simpleGit, { type SimpleGit } from 'simple-git';
 import logger from '../logger.js';
 import { shouldUseTor, getTorProxy } from '../../utils/tor.js';
+import { sanitizeError } from '../../utils/security.js';
 
-const execAsync = promisify(exec);
+/**
+ * Execute git command with custom environment variables safely
+ * Uses spawn with argument arrays to prevent command injection
+ * Security: Only uses whitelisted environment variables, does not spread process.env
+ */
+function execGitWithEnv(
+  repoPath: string,
+  args: string[],
+  env: Record<string, string> = {}
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const gitProcess = spawn('git', args, {
+      cwd: repoPath,
+      // Security: Only use whitelisted env vars, don't spread process.env
+      // The env parameter should already contain only safe, whitelisted variables
+      env: env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    gitProcess.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+
+    gitProcess.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    gitProcess.on('close', (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        reject(new Error(`Git command failed with code ${code}: ${stderr || stdout}`));
+      }
+    });
+
+    gitProcess.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
 
 export interface RepoPath {
   npub: string;
@@ -87,7 +130,9 @@ export class RepoManager {
     // Create bare repository if it doesn't exist
     const isNewRepo = !repoExists;
     if (isNewRepo) {
-      await execAsync(`git init --bare "${repoPath.fullPath}"`);
+      // Use simple-git to create bare repo (safer than exec)
+      const git = simpleGit();
+      await git.init(['--bare', repoPath.fullPath]);
       
       // Create verification file and self-transfer event in the repository
       await this.createVerificationFile(repoPath.fullPath, event, selfTransferEvent);
@@ -107,15 +152,21 @@ export class RepoManager {
 
   /**
    * Get git environment variables with Tor proxy if needed for .onion addresses
+   * Security: Only whitelist necessary environment variables
    */
   private getGitEnvForUrl(url: string): Record<string, string> {
-    const env: Record<string, string> = {};
+    // Whitelist only necessary environment variables for security
+    const env: Record<string, string> = {
+      PATH: process.env.PATH || '/usr/bin:/bin',
+      HOME: process.env.HOME || '/tmp',
+      USER: process.env.USER || 'git',
+      LANG: process.env.LANG || 'C.UTF-8',
+      LC_ALL: process.env.LC_ALL || 'C.UTF-8',
+    };
     
-    // Copy process.env, filtering out undefined values
-    for (const [key, value] of Object.entries(process.env)) {
-      if (value !== undefined) {
-        env[key] = value;
-      }
+    // Add TZ if set (for consistent timestamps)
+    if (process.env.TZ) {
+      env.TZ = process.env.TZ;
     }
     
     if (shouldUseTor(url)) {
@@ -148,76 +199,179 @@ export class RepoManager {
   }
 
   /**
-   * Sync repository from multiple remote URLs
+   * Sync from a single remote URL (helper for parallelization)
    */
-  async syncFromRemotes(repoPath: string, remoteUrls: string[]): Promise<void> {
-    for (const url of remoteUrls) {
+  private async syncFromSingleRemote(repoPath: string, url: string, index: number): Promise<void> {
+    const remoteName = `remote-${index}`;
+    const git = simpleGit(repoPath);
+    const gitEnv = this.getGitEnvForUrl(url);
+    
+    try {
+      // Add remote if not exists (ignore error if already exists)
       try {
-        // Add remote if not exists
-        const remoteName = `remote-${remoteUrls.indexOf(url)}`;
-        await execAsync(`cd "${repoPath}" && git remote add ${remoteName} "${url}" || true`);
-        
-        // Get environment with Tor proxy if needed
-        const gitEnv = this.getGitEnvForUrl(url);
-        
-        // Configure git proxy for this remote if it's a .onion address
-        if (shouldUseTor(url)) {
-          const proxy = getTorProxy();
-          if (proxy) {
-            // Set git config for this specific URL pattern
-            try {
-              await execAsync(`cd "${repoPath}" && git config --local http.${url}.proxy socks5://${proxy.host}:${proxy.port}`, { env: gitEnv });
-            } catch {
-              // Config might fail, continue anyway
-            }
+        await git.addRemote(remoteName, url);
+      } catch {
+        // Remote might already exist, that's okay
+      }
+      
+      // Configure git proxy for this remote if it's a .onion address
+      if (shouldUseTor(url)) {
+        const proxy = getTorProxy();
+        if (proxy) {
+          try {
+            // Use simple-git to set config (safer than exec)
+            await git.addConfig(`http.${url}.proxy`, `socks5://${proxy.host}:${proxy.port}`, false, 'local');
+          } catch {
+            // Config might fail, continue anyway
           }
         }
-        
-        // Fetch from remote with appropriate environment
-        await execAsync(`cd "${repoPath}" && git fetch ${remoteName} --all`, { env: gitEnv });
-        
-        // Update all branches
-        await execAsync(`cd "${repoPath}" && git remote set-head ${remoteName} -a`, { env: gitEnv });
-      } catch (error) {
-        logger.error({ error, url, repoPath }, 'Failed to sync from remote');
-        // Continue with other remotes
       }
+      
+      // Fetch from remote with appropriate environment
+      // Use spawn with proper argument arrays for security
+      await execGitWithEnv(repoPath, ['fetch', remoteName, '--all'], gitEnv);
+      
+      // Update remote head
+      try {
+        await execGitWithEnv(repoPath, ['remote', 'set-head', remoteName, '-a'], gitEnv);
+      } catch {
+        // Ignore errors for set-head
+      }
+    } catch (error) {
+      const sanitizedError = sanitizeError(error);
+      logger.error({ error: sanitizedError, url, repoPath }, 'Failed to sync from remote');
+      throw error; // Re-throw for Promise.allSettled handling
     }
   }
 
   /**
-   * Sync repository to multiple remote URLs after a push
+   * Sync repository from multiple remote URLs (parallelized for efficiency)
    */
-  async syncToRemotes(repoPath: string, remoteUrls: string[]): Promise<void> {
-    for (const url of remoteUrls) {
+  async syncFromRemotes(repoPath: string, remoteUrls: string[]): Promise<void> {
+    if (remoteUrls.length === 0) return;
+    
+    // Sync all remotes in parallel for better performance
+    const results = await Promise.allSettled(
+      remoteUrls.map((url, index) => this.syncFromSingleRemote(repoPath, url, index))
+    );
+    
+    // Log any failures but don't throw (partial success is acceptable)
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        const sanitizedError = sanitizeError(result.reason);
+        logger.warn({ error: sanitizedError, url: remoteUrls[index], repoPath }, 'Failed to sync from one remote (continuing with others)');
+      }
+    });
+  }
+
+  /**
+   * Check if force push is safe (no divergent history)
+   * This is a simplified check - in production you might want more sophisticated validation
+   */
+  private async canSafelyForcePush(repoPath: string, remoteName: string): Promise<boolean> {
+    try {
+      const git = simpleGit(repoPath);
+      // Fetch to see if there are any remote changes
+      await git.fetch(remoteName);
+      // If fetch succeeds, check if we're ahead (safe to force) or behind (dangerous)
+      const status = await git.status();
+      // For now, default to false (safer) unless explicitly allowed
+      // In production, you'd check branch divergence more carefully
+      return false;
+    } catch {
+      // If we can't determine, default to false (safer)
+      return false;
+    }
+  }
+
+  /**
+   * Sync to a single remote URL with retry logic (helper for parallelization)
+   */
+  private async syncToSingleRemote(repoPath: string, url: string, index: number, maxRetries: number = 3): Promise<void> {
+    const remoteName = `remote-${index}`;
+    const git = simpleGit(repoPath);
+    const gitEnv = this.getGitEnvForUrl(url);
+    
+    let lastError: Error | null = null;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const remoteName = `remote-${remoteUrls.indexOf(url)}`;
-        await execAsync(`cd "${repoPath}" && git remote add ${remoteName} "${url}" || true`);
-        
-        // Get environment with Tor proxy if needed
-        const gitEnv = this.getGitEnvForUrl(url);
+        // Add remote if not exists
+        try {
+          await git.addRemote(remoteName, url);
+        } catch {
+          // Remote might already exist, that's okay
+        }
         
         // Configure git proxy for this remote if it's a .onion address
         if (shouldUseTor(url)) {
           const proxy = getTorProxy();
           if (proxy) {
-            // Set git config for this specific URL pattern
             try {
-              await execAsync(`cd "${repoPath}" && git config --local http.${url}.proxy socks5://${proxy.host}:${proxy.port}`, { env: gitEnv });
+              await git.addConfig(`http.${url}.proxy`, `socks5://${proxy.host}:${proxy.port}`, false, 'local');
             } catch {
               // Config might fail, continue anyway
             }
           }
         }
         
-        // Push to remote with appropriate environment
-        await execAsync(`cd "${repoPath}" && git push ${remoteName} --all --force`, { env: gitEnv });
-        await execAsync(`cd "${repoPath}" && git push ${remoteName} --tags --force`, { env: gitEnv });
+        // Check if force push is safe
+        const allowForce = process.env.ALLOW_FORCE_PUSH === 'true' || await this.canSafelyForcePush(repoPath, remoteName);
+        const forceFlag = allowForce ? ['--force'] : [];
+        
+        // Push branches with appropriate environment using spawn
+        await execGitWithEnv(repoPath, ['push', remoteName, '--all', ...forceFlag], gitEnv);
+        
+        // Push tags
+        await execGitWithEnv(repoPath, ['push', remoteName, '--tags', ...forceFlag], gitEnv);
+        
+        // Success - return
+        return;
       } catch (error) {
-        logger.error({ error, url, repoPath }, 'Failed to sync to remote');
-        // Continue with other remotes
+        lastError = error instanceof Error ? error : new Error(String(error));
+        const sanitizedError = sanitizeError(lastError);
+        
+        if (attempt < maxRetries) {
+          // Exponential backoff: wait 2^attempt seconds
+          const delayMs = Math.pow(2, attempt) * 1000;
+          logger.warn({ 
+            error: sanitizedError, 
+            url, 
+            repoPath, 
+            attempt, 
+            maxRetries,
+            retryIn: `${delayMs}ms`
+          }, 'Failed to sync to remote, retrying...');
+          
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        } else {
+          logger.error({ error: sanitizedError, url, repoPath, attempts: maxRetries }, 'Failed to sync to remote after all retries');
+          throw lastError;
+        }
       }
     }
+    
+    throw lastError || new Error('Failed to sync to remote');
+  }
+
+  /**
+   * Sync repository to multiple remote URLs after a push (parallelized with retry)
+   */
+  async syncToRemotes(repoPath: string, remoteUrls: string[]): Promise<void> {
+    if (remoteUrls.length === 0) return;
+    
+    // Sync all remotes in parallel for better performance
+    const results = await Promise.allSettled(
+      remoteUrls.map((url, index) => this.syncToSingleRemote(repoPath, url, index))
+    );
+    
+    // Log any failures but don't throw (partial success is acceptable)
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        const sanitizedError = sanitizeError(result.reason);
+        logger.warn({ error: sanitizedError, url: remoteUrls[index], repoPath }, 'Failed to sync to one remote (continuing with others)');
+      }
+    });
   }
 
   /**

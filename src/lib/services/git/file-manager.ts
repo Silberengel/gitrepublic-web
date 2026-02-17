@@ -7,10 +7,14 @@ import simpleGit, { type SimpleGit } from 'simple-git';
 import { readFile, readdir, stat } from 'fs/promises';
 import { join, dirname, normalize, resolve } from 'path';
 import { existsSync } from 'fs';
+import { spawn } from 'child_process';
+import { promisify } from 'util';
 import { RepoManager } from './repo-manager.js';
 import { createGitCommitSignature } from './commit-signer.js';
 import type { NostrEvent } from '../../types/nostr.js';
 import logger from '../logger.js';
+import { sanitizeError, isValidBranchName } from '../../utils/security.js';
+import { repoCache, RepoCache } from './repo-cache.js';
 
 export interface FileEntry {
   name: string;
@@ -56,14 +60,220 @@ export class FileManager {
   }
 
   /**
+   * Create or get a git worktree for a repository
+   * More efficient than cloning the entire repo for each operation
+   * Security: Validates branch name to prevent path traversal attacks
+   */
+  private async getWorktree(repoPath: string, branch: string, npub: string, repoName: string): Promise<string> {
+    // Security: Validate branch name to prevent path traversal
+    if (!isValidBranchName(branch)) {
+      throw new Error(`Invalid branch name: ${branch}`);
+    }
+    
+    const worktreeRoot = join(this.repoRoot, npub, `${repoName}.worktrees`);
+    const worktreePath = join(worktreeRoot, branch);
+    
+    // Additional security: Ensure resolved path is still within worktreeRoot
+    const resolvedPath = resolve(worktreePath).replace(/\\/g, '/');
+    const resolvedRoot = resolve(worktreeRoot).replace(/\\/g, '/');
+    if (!resolvedPath.startsWith(resolvedRoot + '/')) {
+      throw new Error('Path traversal detected: worktree path outside allowed root');
+    }
+    const { mkdir, rm } = await import('fs/promises');
+    
+    // Ensure worktree root exists
+    if (!existsSync(worktreeRoot)) {
+      await mkdir(worktreeRoot, { recursive: true });
+    }
+    
+    const git = simpleGit(repoPath);
+    
+    // Check if worktree already exists
+    if (existsSync(worktreePath)) {
+      // Verify it's a valid worktree
+      try {
+        const worktreeGit = simpleGit(worktreePath);
+        await worktreeGit.status();
+        return worktreePath;
+      } catch {
+        // Invalid worktree, remove it
+        await rm(worktreePath, { recursive: true, force: true });
+      }
+    }
+    
+    // Create new worktree
+    try {
+      // Use spawn for worktree add (safer than exec)
+      await new Promise<void>((resolve, reject) => {
+        const gitProcess = spawn('git', ['worktree', 'add', worktreePath, branch], {
+          cwd: repoPath,
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+        
+        let stderr = '';
+        gitProcess.stderr.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString();
+        });
+        
+        gitProcess.on('close', (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            // If branch doesn't exist, create it first using git branch (works on bare repos)
+            if (stderr.includes('fatal: invalid reference') || stderr.includes('fatal: not a valid object name')) {
+              // First, try to find a source branch (HEAD, main, or master)
+              const findSourceBranch = async (): Promise<string> => {
+                try {
+                  const branches = await git.branch(['-a']);
+                  // Try HEAD first, then main, then master
+                  if (branches.all.includes('HEAD') || branches.all.includes('origin/HEAD')) {
+                    return 'HEAD';
+                  }
+                  if (branches.all.includes('main') || branches.all.includes('origin/main')) {
+                    return 'main';
+                  }
+                  if (branches.all.includes('master') || branches.all.includes('origin/master')) {
+                    return 'master';
+                  }
+                  // Use the first available branch
+                  const firstBranch = branches.all.find(b => !b.includes('HEAD'));
+                  if (firstBranch) {
+                    return firstBranch.replace(/^origin\//, '');
+                  }
+                  throw new Error('No source branch found');
+                } catch {
+                  // Default to HEAD
+                  return 'HEAD';
+                }
+              };
+              
+              findSourceBranch().then((sourceBranch) => {
+                // Create branch using git branch command (works on bare repos)
+                return new Promise<void>((resolveBranch, rejectBranch) => {
+                  const branchProcess = spawn('git', ['branch', branch, sourceBranch], {
+                    cwd: repoPath,
+                    stdio: ['ignore', 'pipe', 'pipe']
+                  });
+                  
+                  let branchStderr = '';
+                  branchProcess.stderr.on('data', (chunk: Buffer) => {
+                    branchStderr += chunk.toString();
+                  });
+                  
+                  branchProcess.on('close', (branchCode) => {
+                    if (branchCode === 0) {
+                      resolveBranch();
+                    } else {
+                      rejectBranch(new Error(`Failed to create branch: ${branchStderr}`));
+                    }
+                  });
+                  
+                  branchProcess.on('error', rejectBranch);
+                });
+              }).then(() => {
+                // Retry worktree add after creating the branch
+                return new Promise<void>((resolve2, reject2) => {
+                  const gitProcess2 = spawn('git', ['worktree', 'add', worktreePath, branch], {
+                    cwd: repoPath,
+                    stdio: ['ignore', 'pipe', 'pipe']
+                  });
+                  
+                  let retryStderr = '';
+                  gitProcess2.stderr.on('data', (chunk: Buffer) => {
+                    retryStderr += chunk.toString();
+                  });
+                  
+                  gitProcess2.on('close', (code2) => {
+                    if (code2 === 0) {
+                      resolve2();
+                    } else {
+                      reject2(new Error(`Failed to create worktree after creating branch: ${retryStderr}`));
+                    }
+                  });
+                  
+                  gitProcess2.on('error', reject2);
+                });
+              }).then(resolve).catch(reject);
+            } else {
+              reject(new Error(`Failed to create worktree: ${stderr}`));
+            }
+          }
+        });
+        
+        gitProcess.on('error', reject);
+      });
+      
+      return worktreePath;
+    } catch (error) {
+      const sanitizedError = sanitizeError(error);
+      logger.error({ error: sanitizedError, repoPath, branch }, 'Failed to create worktree');
+      throw new Error(`Failed to create worktree: ${sanitizedError}`);
+    }
+  }
+
+  /**
+   * Remove a worktree
+   */
+  private async removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
+    try {
+      // Use spawn for worktree remove (safer than exec)
+      await new Promise<void>((resolve, reject) => {
+        const gitProcess = spawn('git', ['worktree', 'remove', worktreePath], {
+          cwd: repoPath,
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+        
+        gitProcess.on('close', (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            // If worktree remove fails, try force remove
+            const gitProcess2 = spawn('git', ['worktree', 'remove', '--force', worktreePath], {
+              cwd: repoPath,
+              stdio: ['ignore', 'pipe', 'pipe']
+            });
+            
+            gitProcess2.on('close', (code2) => {
+              if (code2 === 0) {
+                resolve();
+              } else {
+                // Last resort: just delete the directory
+                import('fs/promises').then(({ rm }) => {
+                  return rm(worktreePath, { recursive: true, force: true });
+                }).then(() => resolve()).catch(reject);
+              }
+            });
+            
+            gitProcess2.on('error', reject);
+          }
+        });
+        
+        gitProcess.on('error', reject);
+      });
+    } catch (error) {
+      const sanitizedError = sanitizeError(error);
+      logger.warn({ error: sanitizedError, repoPath, worktreePath }, 'Failed to remove worktree cleanly');
+      // Try to remove directory directly as fallback
+      try {
+        const { rm } = await import('fs/promises');
+        await rm(worktreePath, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  }
+
+  /**
    * Get the full path to a repository
    */
   private getRepoPath(npub: string, repoName: string): string {
     const repoPath = join(this.repoRoot, npub, `${repoName}.git`);
     // Security: Ensure the resolved path is within repoRoot to prevent path traversal
-    const resolvedPath = resolve(repoPath);
-    const resolvedRoot = resolve(this.repoRoot);
-    if (!resolvedPath.startsWith(resolvedRoot + '/') && resolvedPath !== resolvedRoot) {
+    // Normalize paths to handle Windows/Unix differences
+    const resolvedPath = resolve(repoPath).replace(/\\/g, '/');
+    const resolvedRoot = resolve(this.repoRoot).replace(/\\/g, '/');
+    // Must be a subdirectory of repoRoot, not equal to it
+    if (!resolvedPath.startsWith(resolvedRoot + '/')) {
       throw new Error('Path traversal detected: repository path outside allowed root');
     }
     return repoPath;
@@ -151,7 +361,7 @@ export class FileManager {
   }
 
   /**
-   * Check if repository exists
+   * Check if repository exists (with caching)
    */
   repoExists(npub: string, repoName: string): boolean {
     // Validate inputs
@@ -164,8 +374,20 @@ export class FileManager {
       return false;
     }
 
+    // Check cache first
+    const cacheKey = RepoCache.repoExistsKey(npub, repoName);
+    const cached = repoCache.get<boolean>(cacheKey);
+    if (cached !== null) {
+      return cached;
+    }
+
     const repoPath = this.getRepoPath(npub, repoName);
-    return this.repoManager.repoExists(repoPath);
+    const exists = this.repoManager.repoExists(repoPath);
+    
+    // Cache the result (cache for 1 minute)
+    repoCache.set(cacheKey, exists, 60 * 1000);
+    
+    return exists;
   }
 
   /**
@@ -318,6 +540,11 @@ export class FileManager {
       throw new Error(`Invalid file path: ${pathValidation.error}`);
     }
 
+    // Security: Validate branch name to prevent path traversal
+    if (!isValidBranchName(branch)) {
+      throw new Error(`Invalid branch name: ${branch}`);
+    }
+
     // Validate content size (prevent extremely large files)
     const maxFileSize = 500 * 1024 * 1024; // 500 MB per file (allows for images and demo videos)
     if (Buffer.byteLength(content, 'utf-8') > maxFileSize) {
@@ -353,29 +580,9 @@ export class FileManager {
         throw new Error(repoSizeCheck.error || 'Repository size limit exceeded');
       }
 
-      // Clone bare repo to a temporary working directory (non-bare)
-      const workDir = join(this.repoRoot, npub, `${repoName}.work`);
-      const { rm } = await import('fs/promises');
-      
-      // Remove work directory if it exists to ensure clean state
-      if (existsSync(workDir)) {
-        await rm(workDir, { recursive: true, force: true });
-      }
-
-      // Clone the bare repo to a working directory
-      const git: SimpleGit = simpleGit();
-      await git.clone(repoPath, workDir);
-
-      // Use the work directory for operations
+      // Use git worktree instead of cloning (much more efficient)
+      const workDir = await this.getWorktree(repoPath, branch, npub, repoName);
       const workGit: SimpleGit = simpleGit(workDir);
-
-      // Checkout the branch (or create it)
-      try {
-        await workGit.checkout([branch]);
-      } catch {
-        // Branch doesn't exist, create it
-        await workGit.checkout(['-b', branch]);
-      }
 
       // Write the file (use validated path)
       const validatedPath = pathValidation.normalized || filePath;
@@ -383,9 +590,10 @@ export class FileManager {
       const fileDir = dirname(fullFilePath);
       
       // Additional security: ensure the resolved path is still within workDir
-      const resolvedPath = resolve(fullFilePath);
-      const resolvedWorkDir = resolve(workDir);
-      if (!resolvedPath.startsWith(resolvedWorkDir)) {
+      // Use trailing slash to ensure directory boundary (prevents sibling directory attacks)
+      const resolvedPath = resolve(fullFilePath).replace(/\\/g, '/');
+      const resolvedWorkDir = resolve(workDir).replace(/\\/g, '/');
+      if (!resolvedPath.startsWith(resolvedWorkDir + '/') && resolvedPath !== resolvedWorkDir) {
         throw new Error('Path validation failed: resolved path outside work directory');
       }
       
@@ -414,7 +622,7 @@ export class FileManager {
           finalCommitMessage = signedMessage;
         } catch (err) {
           // Security: Sanitize error messages (never log private keys)
-          const sanitizedErr = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : String(err);
+          const sanitizedErr = sanitizeError(err);
           logger.warn({ error: sanitizedErr, repoPath, filePath }, 'Failed to sign commit');
           // Continue without signature if signing fails
         }
@@ -425,11 +633,12 @@ export class FileManager {
         '--author': `${authorName} <${authorEmail}>`
       });
 
-      // Push to bare repo
+      // Push to bare repo (worktree is already connected)
       await workGit.push(['origin', branch]);
 
-      // Clean up work directory
-      await rm(workDir, { recursive: true, force: true });
+      // Clean up worktree (but keep it for potential reuse)
+      // Note: We could keep worktrees for better performance, but clean up for now
+      await this.removeWorktree(repoPath, workDir);
     } catch (error) {
       logger.error({ error, repoPath, filePath, npub }, 'Error writing file');
       throw new Error(`Failed to write file: ${error instanceof Error ? error.message : String(error)}`);
@@ -437,7 +646,7 @@ export class FileManager {
   }
 
   /**
-   * Get list of branches
+   * Get list of branches (with caching)
    */
   async getBranches(npub: string, repoName: string): Promise<string[]> {
     const repoPath = this.getRepoPath(npub, repoName);
@@ -446,16 +655,31 @@ export class FileManager {
       throw new Error('Repository not found');
     }
 
+    // Check cache first
+    const cacheKey = RepoCache.branchesKey(npub, repoName);
+    const cached = repoCache.get<string[]>(cacheKey);
+    if (cached !== null) {
+      return cached;
+    }
+
     const git: SimpleGit = simpleGit(repoPath);
 
     try {
       const branches = await git.branch(['-r']);
-      return branches.all
+      const branchList = branches.all
         .map(b => b.replace(/^origin\//, ''))
         .filter(b => !b.includes('HEAD'));
+      
+      // Cache the result (cache for 2 minutes)
+      repoCache.set(cacheKey, branchList, 2 * 60 * 1000);
+      
+      return branchList;
     } catch (error) {
       logger.error({ error, repoPath }, 'Error getting branches');
-      return ['main', 'master']; // Default branches
+      const defaultBranches = ['main', 'master'];
+      // Cache default branches for shorter time (30 seconds)
+      repoCache.set(cacheKey, defaultBranches, 30 * 1000);
+      return defaultBranches;
     }
   }
 
@@ -515,6 +739,11 @@ export class FileManager {
       throw new Error(`Invalid file path: ${pathValidation.error}`);
     }
 
+    // Security: Validate branch name to prevent path traversal
+    if (!isValidBranchName(branch)) {
+      throw new Error(`Invalid branch name: ${branch}`);
+    }
+
     // Validate commit message
     if (!commitMessage || typeof commitMessage !== 'string' || commitMessage.trim().length === 0) {
       throw new Error('Commit message is required');
@@ -535,32 +764,19 @@ export class FileManager {
     }
 
     try {
-      const workDir = join(this.repoRoot, npub, `${repoName}.work`);
-      const { rm } = await import('fs/promises');
-      
-      if (existsSync(workDir)) {
-        await rm(workDir, { recursive: true, force: true });
-      }
-
-      const git: SimpleGit = simpleGit();
-      await git.clone(repoPath, workDir);
-
+      // Use git worktree instead of cloning (much more efficient)
+      const workDir = await this.getWorktree(repoPath, branch, npub, repoName);
       const workGit: SimpleGit = simpleGit(workDir);
-
-      try {
-        await workGit.checkout([branch]);
-      } catch {
-        await workGit.checkout(['-b', branch]);
-      }
 
       // Remove the file (use validated path)
       const validatedPath = pathValidation.normalized || filePath;
       const fullFilePath = join(workDir, validatedPath);
       
       // Additional security: ensure the resolved path is still within workDir
-      const resolvedPath = resolve(fullFilePath);
-      const resolvedWorkDir = resolve(workDir);
-      if (!resolvedPath.startsWith(resolvedWorkDir)) {
+      // Use trailing slash to ensure directory boundary (prevents sibling directory attacks)
+      const resolvedPath = resolve(fullFilePath).replace(/\\/g, '/');
+      const resolvedWorkDir = resolve(workDir).replace(/\\/g, '/');
+      if (!resolvedPath.startsWith(resolvedWorkDir + '/') && resolvedPath !== resolvedWorkDir) {
         throw new Error('Path validation failed: resolved path outside work directory');
       }
       
@@ -585,7 +801,7 @@ export class FileManager {
           finalCommitMessage = signedMessage;
         } catch (err) {
           // Security: Sanitize error messages (never log private keys)
-          const sanitizedErr = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : String(err);
+          const sanitizedErr = sanitizeError(err);
           logger.warn({ error: sanitizedErr, repoPath, filePath }, 'Failed to sign commit');
           // Continue without signature if signing fails
         }
@@ -596,11 +812,11 @@ export class FileManager {
         '--author': `${authorName} <${authorEmail}>`
       });
 
-      // Push to bare repo
+      // Push to bare repo (worktree is already connected)
       await workGit.push(['origin', branch]);
 
-      // Clean up
-      await rm(workDir, { recursive: true, force: true });
+      // Clean up worktree
+      await this.removeWorktree(repoPath, workDir);
     } catch (error) {
       logger.error({ error, repoPath, filePath, npub }, 'Error deleting file');
       throw new Error(`Failed to delete file: ${error instanceof Error ? error.message : String(error)}`);
@@ -616,6 +832,14 @@ export class FileManager {
     branchName: string,
     fromBranch: string = 'main'
   ): Promise<void> {
+    // Security: Validate branch names to prevent path traversal
+    if (!isValidBranchName(branchName)) {
+      throw new Error(`Invalid branch name: ${branchName}`);
+    }
+    if (!isValidBranchName(fromBranch)) {
+      throw new Error(`Invalid source branch name: ${fromBranch}`);
+    }
+
     const repoPath = this.getRepoPath(npub, repoName);
     
     if (!this.repoExists(npub, repoName)) {
@@ -623,20 +847,9 @@ export class FileManager {
     }
 
     try {
-      const workDir = join(this.repoRoot, npub, `${repoName}.work`);
-      const { rm } = await import('fs/promises');
-      
-      if (existsSync(workDir)) {
-        await rm(workDir, { recursive: true, force: true });
-      }
-
-      const git: SimpleGit = simpleGit();
-      await git.clone(repoPath, workDir);
-
+      // Use git worktree instead of cloning (much more efficient)
+      const workDir = await this.getWorktree(repoPath, fromBranch, npub, repoName);
       const workGit: SimpleGit = simpleGit(workDir);
-
-      // Checkout source branch
-      await workGit.checkout([fromBranch]);
 
       // Create and checkout new branch
       await workGit.checkout(['-b', branchName]);
@@ -644,8 +857,8 @@ export class FileManager {
       // Push new branch
       await workGit.push(['origin', branchName]);
 
-      // Clean up
-      await rm(workDir, { recursive: true, force: true });
+      // Clean up worktree
+      await this.removeWorktree(repoPath, workDir);
     } catch (error) {
       logger.error({ error, repoPath, branchName, npub }, 'Error creating branch');
       throw new Error(`Failed to create branch: ${error instanceof Error ? error.message : String(error)}`);
