@@ -126,6 +126,9 @@
   let repoImage = $state<string | null>(null);
   let repoBanner = $state<string | null>(null);
 
+  // Mobile view toggle for file list/file viewer
+  let showFileListOnMobile = $state(true);
+
   async function loadReadme() {
     if (repoNotFound) return;
     loadingReadme = true;
@@ -212,6 +215,12 @@
       'conf': 'ini',
       'log': 'plaintext',
       'txt': 'plaintext',
+      'md': 'markdown',
+      'markdown': 'markdown',
+      'mdown': 'markdown',
+      'mkdn': 'markdown',
+      'mkd': 'markdown',
+      'mdwn': 'markdown',
       'adoc': 'asciidoc',
       'asciidoc': 'asciidoc',
       'ad': 'asciidoc',
@@ -225,6 +234,96 @@
       // highlight.js v11+ uses default export
       const hljs = hljsModule.default || hljsModule;
       const lang = getHighlightLanguage(ext);
+      
+      // Register Markdown language if needed (not in highlight.js by default)
+      if (lang === 'markdown' && !hljs.getLanguage('markdown')) {
+        hljs.registerLanguage('markdown', function(hljs) {
+          return {
+            name: 'Markdown',
+            aliases: ['md', 'mkdown', 'mkd'],
+            contains: [
+              // Headers
+              {
+                className: 'section',
+                begin: /^#{1,6}\s+/,
+                relevance: 10
+              },
+              // Bold
+              {
+                className: 'strong',
+                begin: /\*\*[^*]+\*\*/,
+                relevance: 0
+              },
+              {
+                className: 'strong',
+                begin: /__[^_]+__/,
+                relevance: 0
+              },
+              // Italic
+              {
+                className: 'emphasis',
+                begin: /\*[^*]+\*/,
+                relevance: 0
+              },
+              {
+                className: 'emphasis',
+                begin: /_[^_]+_/,
+                relevance: 0
+              },
+              // Inline code
+              {
+                className: 'code',
+                begin: /`[^`]+`/,
+                relevance: 0
+              },
+              // Code blocks
+              {
+                className: 'code',
+                begin: /^```[\w]*/,
+                end: /^```$/,
+                contains: [{ begin: /./ }]
+              },
+              // Links
+              {
+                className: 'link',
+                begin: /\[/,
+                end: /\]/,
+                contains: [
+                  {
+                    className: 'string',
+                    begin: /\(/,
+                    end: /\)/
+                  }
+                ]
+              },
+              // Images
+              {
+                className: 'string',
+                begin: /!\[/,
+                end: /\]/
+              },
+              // Lists
+              {
+                className: 'bullet',
+                begin: /^(\s*)([*+-]|\d+\.)\s+/,
+                relevance: 0
+              },
+              // Blockquotes
+              {
+                className: 'quote',
+                begin: /^>\s+/,
+                relevance: 0
+              },
+              // Horizontal rules
+              {
+                className: 'horizontal_rule',
+                begin: /^(\*{3,}|-{3,}|_{3,})$/,
+                relevance: 0
+              }
+            ]
+          };
+        });
+      }
       
       // Register AsciiDoc language if needed (not in highlight.js by default)
       if (lang === 'asciidoc' && !hljs.getLanguage('asciidoc')) {
@@ -692,6 +791,10 @@
       loadFiles(file.path);
     } else {
       loadFile(file.path);
+      // On mobile, switch to file viewer when a file is clicked
+      if (window.innerWidth <= 768) {
+        showFileListOnMobile = false;
+      }
     }
   }
 
@@ -1184,10 +1287,10 @@
   <meta property="og:title" content={pageData.title || `${pageData.repoName || repo} - Repository`} />
   <meta property="og:description" content={pageData.description || pageData.repoDescription || `Repository: ${pageData.repoName || repo}`} />
   <meta property="og:url" content={pageData.repoUrl || `https://${$page.url.host}${$page.url.pathname}`} />
-  {#if pageData.image || repoImage}
+  {#if (pageData.image || repoImage) && String(pageData.image || repoImage).trim()}
     <meta property="og:image" content={pageData.image || repoImage} />
   {/if}
-  {#if pageData.banner || repoBanner}
+  {#if (pageData.banner || repoBanner) && String(pageData.banner || repoBanner).trim()}
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
   {/if}
@@ -1390,14 +1493,14 @@
         class:active={activeTab === 'docs'}
         onclick={() => activeTab = 'docs'}
       >
-        Documentation
+        Docs
       </button>
     </div>
 
     <div class="repo-layout">
       <!-- File Tree Sidebar -->
       {#if activeTab === 'files'}
-      <aside class="file-tree">
+      <aside class="file-tree" class:hide-on-mobile={!showFileListOnMobile && activeTab === 'files'}>
         <div class="file-tree-header">
           <h2>Files</h2>
           <div class="file-tree-actions">
@@ -1407,6 +1510,17 @@
             {#if userPubkey && isMaintainer}
               <button onclick={() => showCreateFileDialog = true} class="create-file-button">+ New File</button>
             {/if}
+            <button 
+              onclick={() => showFileListOnMobile = !showFileListOnMobile} 
+              class="mobile-toggle-button"
+              title={showFileListOnMobile ? 'Show file viewer' : 'Show file list'}
+            >
+              {#if showFileListOnMobile}
+                <img src="/icons/file-text.svg" alt="Show file viewer" class="icon-inline" />
+              {:else}
+                <img src="/icons/package.svg" alt="Show file list" class="icon-inline" />
+              {/if}
+            </button>
           </div>
         </div>
         {#if loading && !currentFile}
@@ -1567,7 +1681,7 @@
       {/if}
 
       <!-- Editor Area / Diff View / README -->
-      <div class="editor-area">
+      <div class="editor-area" class:hide-on-mobile={showFileListOnMobile && activeTab === 'files'}>
         {#if activeTab === 'files' && readmeContent && !currentFile}
           <div class="readme-section">
             <div class="readme-header">
@@ -1575,6 +1689,17 @@
               <div class="readme-actions">
                 <a href={`/api/repos/${npub}/${repo}/raw?path=${readmePath}`} target="_blank" class="raw-link">View Raw</a>
                 <a href={`/api/repos/${npub}/${repo}/download?format=zip`} class="download-link">Download ZIP</a>
+                <button 
+                  onclick={() => showFileListOnMobile = !showFileListOnMobile} 
+                  class="mobile-toggle-button"
+                  title={showFileListOnMobile ? 'Show file viewer' : 'Show file list'}
+                >
+                  {#if showFileListOnMobile}
+                    <img src="/icons/file-text.svg" alt="Show file viewer" class="icon-inline" />
+                  {:else}
+                    <img src="/icons/package.svg" alt="Show file list" class="icon-inline" />
+                  {/if}
+                </button>
               </div>
             </div>
             {#if loadingReadme}
@@ -1605,6 +1730,17 @@
               {:else if userPubkey}
                 <span class="non-maintainer-notice">Only maintainers can edit files. Submit a PR instead.</span>
               {/if}
+              <button 
+                onclick={() => showFileListOnMobile = !showFileListOnMobile} 
+                class="mobile-toggle-button"
+                title={showFileListOnMobile ? 'Show file viewer' : 'Show file list'}
+              >
+                {#if showFileListOnMobile}
+                  <img src="/icons/file-text.svg" alt="Show file viewer" class="icon-inline" />
+                {:else}
+                  <img src="/icons/package.svg" alt="Show file list" class="icon-inline" />
+                {/if}
+              </button>
             </div>
           </div>
           
@@ -2124,6 +2260,31 @@
   }
   
   /* Responsive design for smaller screens */
+  .mobile-toggle-button {
+    display: none; /* Hidden by default on desktop */
+    padding: 0.5rem;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.2s;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mobile-toggle-button .icon-inline {
+    width: 16px;
+    height: 16px;
+  }
+
+  .mobile-toggle-button:hover {
+    background: var(--bg-primary);
+  }
+
+  .hide-on-mobile {
+    display: none;
+  }
+
   @media (max-width: 768px) {
     .header-content {
       flex-direction: column;
@@ -2144,6 +2305,47 @@
     header:has(.repo-banner) .header-content {
       margin-top: -30px;
     }
+
+    .repo-image {
+      width: 60px;
+      height: 60px;
+    }
+
+    /* Mobile toggle button visible on narrow screens */
+    .mobile-toggle-button {
+      display: inline-flex;
+    }
+
+    /* File tree and editor area full width and height on mobile */
+    .file-tree {
+      width: 100%;
+      flex: 1 1 auto;
+      min-height: 0;
+      flex-basis: auto;
+    }
+
+    .editor-area {
+      width: 100%;
+      flex: 1;
+      min-height: 0;
+      max-height: none;
+    }
+
+    /* Hide the appropriate view based on toggle state */
+    .file-tree.hide-on-mobile {
+      display: none !important;
+    }
+
+    .editor-area.hide-on-mobile {
+      display: none !important;
+    }
+
+    /* Stack layout on mobile */
+    .repo-layout {
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
     
     .repo-image {
       width: 64px;
@@ -2152,6 +2354,64 @@
     
     .repo-title-text h1 {
       font-size: 1.5rem;
+    }
+
+    /* Editor header wraps on mobile */
+    .editor-header {
+      flex-wrap: wrap;
+      gap: 0.25rem;
+      padding: 0.5rem 0.75rem;
+      align-items: flex-start;
+    }
+
+    .file-path {
+      flex: 1 1 100%;
+      min-width: 0;
+      word-break: break-all;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .editor-actions {
+      flex: 1 1 auto;
+      justify-content: flex-end;
+      min-width: 0;
+      gap: 0.5rem;
+    }
+
+    .non-maintainer-notice {
+      font-size: 0.7rem;
+      flex: 1 1 100%;
+      order: 2;
+      margin-top: 0;
+      padding-top: 0.25rem;
+      line-height: 1.3;
+    }
+
+    /* Make tabs more compact on mobile */
+    .tabs {
+      padding: 0.4rem 0.5rem;
+      gap: 0.2rem;
+    }
+
+    .tab-button {
+      padding: 0.35rem 0.6rem;
+      font-size: 0.75rem;
+    }
+  }
+
+  /* Desktop: always show both file tree and editor */
+  @media (min-width: 769px) {
+    .file-tree.hide-on-mobile {
+      display: flex;
+    }
+
+    .editor-area.hide-on-mobile {
+      display: flex;
+    }
+
+    .mobile-toggle-button {
+      display: none;
     }
   }
 
@@ -2424,13 +2684,15 @@
 
   .file-tree {
     width: 300px;
+    min-width: 300px;
+    max-width: 300px;
     border-right: 1px solid var(--border-color);
     background: var(--bg-secondary);
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    height: 100%; /* Ensure full height */
-    max-height: calc(100vh - 200px); /* Constrain to viewport with some margin */
+    flex: 0 0 300px; /* Fixed width, don't grow or shrink */
+    min-height: 0; /* Allow flex child to shrink */
   }
 
   .file-tree-header {
@@ -2470,7 +2732,7 @@
     overflow-x: hidden;
     flex: 1;
     min-height: 0; /* Allows flex child to shrink below content size */
-    max-height: 100%; /* Constrains height for scrolling */
+    width: 100%; /* Fill horizontal space */
   }
 
   .file-item {
@@ -2514,6 +2776,7 @@
     flex-direction: column;
     overflow: hidden;
     background: var(--card-bg);
+    max-height: calc(200vh - 400px); /* Twice the original height */
   }
 
   .editor-header {
@@ -2534,11 +2797,19 @@
     display: flex;
     align-items: center;
     gap: 1rem;
+    flex-wrap: wrap;
   }
 
   .unsaved-indicator {
     color: var(--warning-text);
     font-size: 0.875rem;
+  }
+
+  .non-maintainer-notice {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    white-space: normal;
+    line-height: 1.4;
   }
 
   .save-button {
@@ -2566,6 +2837,9 @@
   .editor-container {
     flex: 1;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0; /* Allows flex child to shrink below content size */
   }
 
   .empty-state {
@@ -2677,22 +2951,41 @@
   /* Tabs */
   .tabs {
     display: flex;
-    gap: 0.5rem;
-    padding: 0.5rem 2rem;
+    gap: 0.25rem;
+    padding: 0.5rem 1rem;
     border-bottom: 1px solid var(--border-color);
     background: var(--card-bg);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tabs::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  .tabs::-webkit-scrollbar-track {
+    background: var(--bg-secondary);
+  }
+
+  .tabs::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 2px;
   }
 
   .tab-button {
-    padding: 0.5rem 1rem;
+    padding: 0.4rem 0.75rem;
     background: none;
     border: none;
     border-bottom: 2px solid transparent;
     cursor: pointer;
-    font-size: 0.875rem;
+    font-size: 0.8rem;
     color: var(--text-muted);
     font-family: 'IBM Plex Serif', serif;
     transition: color 0.2s ease, border-color 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .tab-button:hover {
@@ -2947,7 +3240,10 @@
 
   .read-only-editor {
     height: 100%;
-    overflow: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 1.5rem;
+    min-height: 0; /* Allows flex child to shrink below content size */
   }
 
   .read-only-editor :global(.hljs) {
@@ -2969,6 +3265,8 @@
     font-family: 'IBM Plex Mono', monospace;
     font-size: 14px;
     line-height: 1.5;
+    display: block;
+    white-space: pre;
   }
 
   .readme-section {

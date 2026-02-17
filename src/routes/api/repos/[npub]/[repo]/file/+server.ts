@@ -5,7 +5,7 @@
 import { json, error } from '@sveltejs/kit';
 // @ts-ignore - SvelteKit generates this type
 import type { RequestHandler } from './$types';
-import { FileManager } from '$lib/services/git/file-manager.js';
+import { fileManager, repoManager, nostrClient } from '$lib/services/service-registry.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
@@ -15,15 +15,20 @@ import logger from '$lib/services/logger.js';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
 import { handleApiError, handleValidationError, handleNotFoundError } from '$lib/utils/error-handler.js';
+import { KIND } from '$lib/types/nostr.js';
+import { join } from 'path';
+import { existsSync } from 'fs';
+import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
 
-const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
-const fileManager = new FileManager(repoRoot);
+const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
+  ? process.env.GIT_REPO_ROOT
+  : '/repos';
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
 
 export const GET: RequestHandler = async ({ params, url, request }: { params: { npub?: string; repo?: string }; url: URL; request: Request }) => {
   const { npub, repo } = params;
   const filePath = url.searchParams.get('path');
-  const ref = url.searchParams.get('ref') || 'HEAD';
+  let ref = url.searchParams.get('ref') || 'HEAD';
   const userPubkey = url.searchParams.get('userPubkey') || request.headers.get('x-user-pubkey');
 
   if (!npub || !repo || !filePath) {
@@ -31,11 +36,75 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
   }
 
   try {
-    if (!fileManager.repoExists(npub, repo)) {
+    const repoPath = join(repoRoot, npub, `${repo}.git`);
+    
+    // If repo doesn't exist, try to fetch it on-demand
+    if (!existsSync(repoPath)) {
+      try {
+        // Get repo owner pubkey
+        let repoOwnerPubkey: string;
+        try {
+          repoOwnerPubkey = requireNpubHex(npub);
+        } catch {
+          return error(400, 'Invalid npub format');
+        }
+
+        // Fetch repository announcement from Nostr
+        const events = await nostrClient.fetchEvents([
+          {
+            kinds: [KIND.REPO_ANNOUNCEMENT],
+            authors: [repoOwnerPubkey],
+            '#d': [repo],
+            limit: 1
+          }
+        ]);
+
+        if (events.length > 0) {
+          // Try to fetch the repository from remote clone URLs
+          const fetched = await repoManager.fetchRepoOnDemand(
+            npub,
+            repo,
+            events[0]
+          );
+          
+          // Always check if repo exists after fetch attempt (might have been created)
+          // Also clear cache to ensure fileManager sees it
+          if (existsSync(repoPath)) {
+            repoCache.delete(RepoCache.repoExistsKey(npub, repo));
+            // Repo exists, continue with normal flow
+          } else if (!fetched) {
+            // Fetch failed and repo doesn't exist
+            return error(404, 'Repository not found and could not be fetched from remote. The repository may not have any accessible clone URLs.');
+          } else {
+            // Fetch returned true but repo doesn't exist - this shouldn't happen, but clear cache anyway
+            repoCache.delete(RepoCache.repoExistsKey(npub, repo));
+            // Wait a moment for filesystem to sync, then check again
+            await new Promise(resolve => setTimeout(resolve, 100));
+            if (!existsSync(repoPath)) {
+              return error(404, 'Repository fetch completed but repository is not accessible');
+            }
+          }
+        } else {
+          return error(404, 'Repository announcement not found in Nostr');
+        }
+      } catch (err) {
+        // Check if repo was created by another concurrent request
+        if (existsSync(repoPath)) {
+          // Repo exists now, clear cache and continue with normal flow
+          repoCache.delete(RepoCache.repoExistsKey(npub, repo));
+        } else {
+          // If fetching fails, return 404
+          return error(404, 'Repository not found');
+        }
+      }
+    }
+
+    // Double-check repo exists after on-demand fetch
+    if (!existsSync(repoPath)) {
       return error(404, 'Repository not found');
     }
 
-    // Check repository privacy
+    // Get repo owner pubkey for access check (already validated above if we did on-demand fetch)
     let repoOwnerPubkey: string;
     try {
       repoOwnerPubkey = requireNpubHex(npub);
@@ -43,6 +112,21 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
       return error(400, 'Invalid npub format');
     }
 
+    // If ref is a branch name, validate it exists or use default branch
+    if (ref !== 'HEAD' && !ref.startsWith('refs/')) {
+      try {
+        const branches = await fileManager.getBranches(npub, repo);
+        if (!branches.includes(ref)) {
+          // Branch doesn't exist, use default branch
+          ref = await fileManager.getDefaultBranch(npub, repo);
+        }
+      } catch {
+        // If we can't get branches, fall back to HEAD
+        ref = 'HEAD';
+      }
+    }
+
+    // Check repository privacy (repoOwnerPubkey already declared above)
     const canView = await maintainerService.canView(userPubkey || null, repoOwnerPubkey, repo);
     if (!canView) {
       const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';

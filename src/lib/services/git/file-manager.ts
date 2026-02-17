@@ -282,6 +282,10 @@ export class FileManager {
    * Validate and sanitize file path to prevent path traversal attacks
    */
   private validateFilePath(filePath: string): { valid: boolean; error?: string; normalized?: string } {
+    // Allow empty string for root directory
+    if (filePath === '') {
+      return { valid: true, normalized: '' };
+    }
     if (!filePath || typeof filePath !== 'string') {
       return { valid: false, error: 'File path must be a non-empty string' };
     }
