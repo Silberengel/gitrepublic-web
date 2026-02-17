@@ -156,22 +156,45 @@
     error = null;
 
     try {
+      console.log(`[Fork UI] Starting fork of ${npub}/${repo}...`);
       const response = await fetch(`/api/repos/${npub}/${repo}/fork`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userPubkey })
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        alert(`Repository forked successfully! Visit /repos/${data.fork.npub}/${data.fork.repo}`);
+      const data = await response.json();
+      
+      if (response.ok && data.success !== false) {
+        const message = data.message || `Repository forked successfully! Published to ${data.fork?.publishedTo?.announcement || 0} relay(s).`;
+        console.log(`[Fork UI] ✓ ${message}`);
+        console.log(`[Fork UI]   - Fork location: /repos/${data.fork.npub}/${data.fork.repo}`);
+        console.log(`[Fork UI]   - Announcement ID: ${data.fork.announcementId}`);
+        console.log(`[Fork UI]   - Ownership Transfer ID: ${data.fork.ownershipTransferId}`);
+        
+        alert(`✓ ${message}\n\nRedirecting to your fork...`);
         goto(`/repos/${data.fork.npub}/${data.fork.repo}`);
       } else {
-        const data = await response.json();
-        error = data.error || 'Failed to fork repository';
+        const errorMessage = data.error || 'Failed to fork repository';
+        const errorDetails = data.details ? `\n\nDetails: ${data.details}` : '';
+        const fullError = `${errorMessage}${errorDetails}`;
+        
+        console.error(`[Fork UI] ✗ Fork failed: ${errorMessage}`);
+        if (data.details) {
+          console.error(`[Fork UI] Details: ${data.details}`);
+        }
+        if (data.eventName) {
+          console.error(`[Fork UI] Failed event: ${data.eventName}`);
+        }
+        
+        error = fullError;
+        alert(`✗ Fork failed!\n\n${fullError}`);
       }
     } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to fork repository';
+      const errorMessage = err instanceof Error ? err.message : 'Failed to fork repository';
+      console.error(`[Fork UI] ✗ Unexpected error: ${errorMessage}`, err);
+      error = errorMessage;
+      alert(`✗ Fork failed!\n\n${errorMessage}`);
     } finally {
       forking = false;
     }
