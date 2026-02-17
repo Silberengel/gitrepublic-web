@@ -26,5 +26,5 @@ export const GET: RequestHandler = createRepoGetHandler(
 
     return json({ maintainers, owner });
   },
-  { operation: 'getMaintainers', requireRepoAccess: false } // Maintainer list is public info
+  { operation: 'getMaintainers', requireRepoExists: false, requireRepoAccess: false } // Maintainer list is public info, doesn't need repo to exist
 );

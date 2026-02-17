@@ -15,7 +15,7 @@ export const GET: RequestHandler = createRepoGetHandler(
     const tags = await fileManager.getTags(context.npub, context.repo);
     return json(tags);
   },
-  { operation: 'getTags' }
+  { operation: 'getTags', requireRepoExists: false, requireRepoAccess: false } // Tags are public, handle on-demand fetching
 );
 
 export const POST: RequestHandler = createRepoPostHandler(

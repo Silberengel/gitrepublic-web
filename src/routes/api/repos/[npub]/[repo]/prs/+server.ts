@@ -16,7 +16,7 @@ export const GET: RequestHandler = createRepoGetHandler(
     const prs = await prsService.getPullRequests(context.repoOwnerPubkey, context.repo);
     return json(prs);
   },
-  { operation: 'getPRs' }
+  { operation: 'getPRs', requireRepoExists: false, requireRepoAccess: false } // PRs are stored in Nostr, don't require local repo
 );
 
 export const POST: RequestHandler = withRepoValidation(

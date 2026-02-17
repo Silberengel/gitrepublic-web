@@ -431,12 +431,14 @@
   async function loadRepoImages() {
     try {
       // Get images from page data (loaded from announcement)
-      if (pageData.image) {
-        repoImage = pageData.image;
+      // Use $page.data directly to ensure we get the latest data
+      const data = $page.data as typeof pageData;
+      if (data.image) {
+        repoImage = data.image;
         console.log('[Repo Images] Loaded image from pageData:', repoImage);
       }
-      if (pageData.banner) {
-        repoBanner = pageData.banner;
+      if (data.banner) {
+        repoBanner = data.banner;
         console.log('[Repo Images] Loaded banner from pageData:', repoBanner);
       }
 
@@ -482,12 +484,30 @@
     }
   }
 
+  // Reactively update images when pageData changes (only once, when data becomes available)
+  $effect(() => {
+    const data = $page.data as typeof pageData;
+    // Only update if we have new data and don't already have the images set
+    if (data.image && data.image !== repoImage) {
+      repoImage = data.image;
+      console.log('[Repo Images] Updated image from pageData (reactive):', repoImage);
+    }
+    if (data.banner && data.banner !== repoBanner) {
+      repoBanner = data.banner;
+      console.log('[Repo Images] Updated banner from pageData (reactive):', repoBanner);
+    }
+  });
+
   onMount(async () => {
     await loadBranches();
     // Skip other API calls if repository doesn't exist
     if (repoNotFound) {
       loading = false;
       return;
+    }
+    // Update currentBranch to first available branch if 'main' doesn't exist
+    if (branches.length > 0 && !branches.includes(currentBranch)) {
+      currentBranch = branches[0];
     }
     await loadFiles();
     await checkAuth();
@@ -1126,22 +1146,30 @@
     }
   }
 
+  // Only load tab content when tab actually changes, not on every render
+  let lastTab = $state<string | null>(null);
   $effect(() => {
-    if (activeTab === 'history') {
-      loadCommitHistory();
-    } else if (activeTab === 'tags') {
-      loadTags();
-    } else if (activeTab === 'issues') {
-      loadIssues();
-    } else if (activeTab === 'prs') {
-      loadPRs();
-    } else if (activeTab === 'docs') {
-      loadDocumentation();
+    if (activeTab !== lastTab) {
+      lastTab = activeTab;
+      if (activeTab === 'history') {
+        loadCommitHistory();
+      } else if (activeTab === 'tags') {
+        loadTags();
+      } else if (activeTab === 'issues') {
+        loadIssues();
+      } else if (activeTab === 'prs') {
+        loadPRs();
+      } else if (activeTab === 'docs') {
+        loadDocumentation();
+      }
     }
   });
 
+  // Only load readme when branch changes, not on every render
+  let lastBranch = $state<string | null>(null);
   $effect(() => {
-    if (currentBranch) {
+    if (currentBranch && currentBranch !== lastBranch) {
+      lastBranch = currentBranch;
       loadReadme();
     }
   });
@@ -2401,6 +2429,8 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    height: 100%; /* Ensure full height */
+    max-height: calc(100vh - 200px); /* Constrain to viewport with some margin */
   }
 
   .file-tree-header {
@@ -2434,10 +2464,13 @@
 
   .file-list {
     list-style: none;
-    padding: 0;
+    padding: 0.5rem 0;
     margin: 0;
     overflow-y: auto;
+    overflow-x: hidden;
     flex: 1;
+    min-height: 0; /* Allows flex child to shrink below content size */
+    max-height: 100%; /* Constrains height for scrolling */
   }
 
   .file-item {
@@ -2457,6 +2490,7 @@
     font-size: 0.875rem;
     color: var(--text-primary);
     transition: background 0.2s ease;
+    box-sizing: border-box;
   }
 
   .file-button:hover {
@@ -2935,6 +2969,84 @@
     font-family: 'IBM Plex Mono', monospace;
     font-size: 14px;
     line-height: 1.5;
+  }
+
+  .readme-section {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .readme-header {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .readme-header h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    color: var(--text-primary);
+  }
+
+  .readme-actions {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+  }
+
+  .readme-content {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 1.5rem;
+    min-height: 0; /* Allows flex child to shrink below content size */
+  }
+
+  .readme-content.markdown {
+    padding: 1.5rem;
+  }
+
+  .readme-content.markdown :global(h1),
+  .readme-content.markdown :global(h2),
+  .readme-content.markdown :global(h3),
+  .readme-content.markdown :global(h4),
+  .readme-content.markdown :global(h5),
+  .readme-content.markdown :global(h6) {
+    margin-top: 1.5rem;
+    margin-bottom: 0.75rem;
+    color: var(--text-primary);
+  }
+
+  .readme-content.markdown :global(p) {
+    margin-bottom: 1rem;
+    line-height: 1.6;
+  }
+
+  .readme-content.markdown :global(code) {
+    background: var(--bg-secondary);
+    padding: 0.2rem 0.4rem;
+    border-radius: 3px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.9em;
+  }
+
+  .readme-content.markdown :global(pre) {
+    background: var(--bg-secondary);
+    padding: 1rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    border: 1px solid var(--border-light);
+    margin: 1rem 0;
+  }
+
+  .readme-content.markdown :global(pre code) {
+    background: none;
+    padding: 0;
   }
 
   .readme-content :global(.hljs) {

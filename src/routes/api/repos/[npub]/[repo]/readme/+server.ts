@@ -66,7 +66,22 @@ export const GET: RequestHandler = createRepoGetHandler(
       }
     }
 
-    const ref = context.ref || 'HEAD';
+    // Use HEAD if no ref specified (HEAD points to default branch)
+    // If a specific branch is requested, validate it exists or use default branch
+    let ref = context.ref || 'HEAD';
+    if (ref !== 'HEAD' && !ref.startsWith('refs/')) {
+      // It's a branch name, validate it exists
+      try {
+        const branches = await fileManager.getBranches(context.npub, context.repo);
+        if (!branches.includes(ref)) {
+          // Branch doesn't exist, use default branch
+          ref = await fileManager.getDefaultBranch(context.npub, context.repo);
+        }
+      } catch {
+        // If we can't get branches, fall back to HEAD
+        ref = 'HEAD';
+      }
+    }
     
     // Try to find README file
     let readmeContent: string | null = null;

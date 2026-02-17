@@ -15,7 +15,7 @@ export const GET: RequestHandler = createRepoGetHandler(
     const issues = await issuesService.getIssues(context.repoOwnerPubkey, context.repo);
     return json(issues);
   },
-  { operation: 'getIssues' }
+  { operation: 'getIssues', requireRepoExists: false, requireRepoAccess: false } // Issues are stored in Nostr, don't require local repo
 );
 
 export const POST: RequestHandler = withRepoValidation(

@@ -374,6 +374,34 @@ export class RepoManager {
   }
 
   /**
+   * Normalize a clone URL to ensure it's in the correct format for git clone
+   * Handles Gitea URLs that might be missing .git extension
+   */
+  private normalizeCloneUrl(url: string): string {
+    // Remove trailing slash
+    url = url.trim().replace(/\/$/, '');
+    
+    // For HTTPS/HTTP URLs that don't end in .git, check if they're Gitea/GitHub/GitLab style
+    // Pattern: https://domain.com/owner/repo (without .git)
+    if ((url.startsWith('https://') || url.startsWith('http://')) && !url.endsWith('.git')) {
+      // Check if it looks like a git hosting service URL (has at least 2 path segments)
+      const urlObj = new URL(url);
+      const pathParts = urlObj.pathname.split('/').filter(p => p);
+      
+      // If it has 2+ path segments (e.g., /owner/repo), add .git
+      if (pathParts.length >= 2) {
+        // Check if it's not already a file or has an extension
+        const lastPart = pathParts[pathParts.length - 1];
+        if (!lastPart.includes('.')) {
+          return `${url}.git`;
+        }
+      }
+    }
+    
+    return url;
+  }
+
+  /**
    * Extract clone URLs from a NIP-34 repo announcement
    */
   private extractCloneUrls(event: NostrEvent): string[] {
@@ -384,7 +412,8 @@ export class RepoManager {
         for (let i = 1; i < tag.length; i++) {
           const url = tag[i];
           if (url && typeof url === 'string') {
-            urls.push(url);
+            // Normalize the URL to ensure it's cloneable
+            urls.push(this.normalizeCloneUrl(url));
           }
         }
       }
@@ -441,6 +470,13 @@ export class RepoManager {
       // If no external URLs, try any URL that's not our domain
       const remoteUrls = externalUrls.length > 0 ? externalUrls : 
                         cloneUrls.filter(url => !url.includes(this.domain));
+
+      // If still no remote URLs, but there are *any* clone URLs, try the first one
+      // This handles cases where the only clone URL is our own domain, but the repo doesn't exist locally yet
+      if (remoteUrls.length === 0 && cloneUrls.length > 0) {
+        logger.info({ npub, repoName, cloneUrls }, 'No external remote clone URLs found, attempting to clone from first available clone URL (may be local domain).');
+        remoteUrls.push(cloneUrls[0]);
+      }
 
       if (remoteUrls.length === 0) {
         logger.warn({ npub, repoName }, 'No remote clone URLs found for on-demand fetch');

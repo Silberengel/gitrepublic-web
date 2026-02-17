@@ -22,11 +22,8 @@ const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
 
 export const GET: RequestHandler = createRepoGetHandler(
   async (context: RepoRequestContext) => {
-    // Check if repository exists
-    const repoPath = join(repoRoot, context.npub, `${context.repo}.git`);
-    if (!existsSync(repoPath)) {
-      throw handleApiError(new Error('Repository not found'), { operation: 'verifyRepo', npub: context.npub, repo: context.repo }, 'Repository not found');
-    }
+    // Check if repository exists - verification doesn't require the repo to be cloned locally
+    // We can verify ownership from Nostr events alone
 
     // Fetch the repository announcement
     const events = await nostrClient.fetchEvents([
@@ -127,5 +124,5 @@ export const GET: RequestHandler = createRepoGetHandler(
       });
     }
   },
-  { operation: 'verifyRepo', requireRepoAccess: false } // Verification is public
+  { operation: 'verifyRepo', requireRepoExists: false, requireRepoAccess: false } // Verification is public, doesn't need repo to exist
 );

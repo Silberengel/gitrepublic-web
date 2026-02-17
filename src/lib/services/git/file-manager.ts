@@ -663,6 +663,64 @@ export class FileManager {
   /**
    * Get list of branches (with caching)
    */
+  /**
+   * Get the default branch name for a repository
+   * Tries to detect the actual default branch (master, main, etc.)
+   */
+  async getDefaultBranch(npub: string, repoName: string): Promise<string> {
+    const repoPath = this.getRepoPath(npub, repoName);
+    
+    if (!this.repoExists(npub, repoName)) {
+      throw new Error('Repository not found');
+    }
+
+    const git: SimpleGit = simpleGit(repoPath);
+
+    try {
+      // Try to get the default branch from symbolic-ref
+      // For bare repos, this points to the default branch
+      const defaultRef = await git.raw(['symbolic-ref', 'HEAD']);
+      if (defaultRef) {
+        const match = defaultRef.trim().match(/^refs\/heads\/(.+)$/);
+        if (match) {
+          return match[1];
+        }
+      }
+    } catch {
+      // If symbolic-ref fails, try to get from remote HEAD
+      try {
+        const remoteHead = await git.raw(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+        if (remoteHead) {
+          const match = remoteHead.trim().match(/^refs\/remotes\/origin\/(.+)$/);
+          if (match) {
+            return match[1];
+          }
+        }
+      } catch {
+        // Fall through to branch detection
+      }
+    }
+
+    // Fallback: get branches and prefer 'main', then 'master', then first branch
+    try {
+      const branches = await git.branch(['-r']);
+      const branchList = branches.all
+        .map(b => b.replace(/^origin\//, ''))
+        .filter(b => !b.includes('HEAD'));
+      
+      if (branchList.length === 0) {
+        return 'main'; // Ultimate fallback
+      }
+
+      // Prefer 'main', then 'master', then first branch
+      if (branchList.includes('main')) return 'main';
+      if (branchList.includes('master')) return 'master';
+      return branchList[0];
+    } catch {
+      return 'main'; // Ultimate fallback
+    }
+  }
+
   async getBranches(npub: string, repoName: string): Promise<string[]> {
     const repoPath = this.getRepoPath(npub, repoName);
     

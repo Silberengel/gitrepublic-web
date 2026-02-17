@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Nostr-based git server with NIP-34 repo announcements",
   "scripts": {
-    "dev": "vite dev",
+    "dev": "GIT_REPO_ROOT=./repos vite dev",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
