@@ -9,6 +9,7 @@
   import { getPublicKeyWithNIP07, isNIP07Available } from '../lib/services/nostr/nip07-signer.js';
   import { ForkCountService } from '../lib/services/nostr/fork-count-service.js';
   import ThemeToggle from '../lib/components/ThemeToggle.svelte';
+  import UserBadge from '../lib/components/UserBadge.svelte';
 
   let repos = $state<NostrEvent[]>([]);
   let loading = $state(true);
@@ -255,18 +256,21 @@
 
 <div class="container">
   <header>
-    <h1>gitrepublic</h1>
+    <a href="/" class="header-logo">
+      <img src="/GR_logo.png" alt="GitRepublic Logo" class="main-logo" />
+      <h1>gitrepublic</h1>
+    </a>
     <nav>
-      <a href="/">Repositories</a>
-      <a href="/search">Search</a>
-      <a href="/signup">Sign Up</a>
-      <a href="/docs/nip34">NIP-34 Docs</a>
+      <div class="nav-links">
+        <a href="/">Repositories</a>
+        <a href="/search">Search</a>
+        <a href="/signup">Sign Up</a>
+        <a href="/docs">Docs</a>
+      </div>
       <div class="auth-section">
         <ThemeToggle />
         {#if userPubkey}
-          <span class="user-info">
-            {nip19.npubEncode(userPubkey).slice(0, 16)}...
-          </span>
+          <UserBadge pubkey={userPubkey} />
           <button onclick={logout} class="logout-button">Logout</button>
         {:else}
           <button onclick={login} class="login-button" disabled={!isNIP07Available()}>

@@ -24,9 +24,25 @@ if (typeof process !== 'undefined') {
 }
 
 export const handle: Handle = async ({ event, resolve }) => {
-  // Rate limiting
-  const clientIp = event.getClientAddress();
+  // Get client IP, with fallback for dev/internal requests
+  let clientIp: string;
+  try {
+    clientIp = event.getClientAddress();
+  } catch {
+    // Fallback for internal Vite dev server requests or when client address can't be determined
+    clientIp = event.request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 
+               event.request.headers.get('x-real-ip') || 
+               '127.0.0.1';
+  }
+  
   const url = event.url;
+  
+  // Skip rate limiting for Vite internal requests in dev mode
+  const isViteInternalRequest = url.pathname.startsWith('/@') || 
+                                 url.pathname.startsWith('/src/') ||
+                                 url.pathname.startsWith('/node_modules/') ||
+                                 url.pathname.includes('react-refresh') ||
+                                 url.pathname.includes('vite-plugin-pwa');
   
   // Determine rate limit type based on path
   let rateLimitType = 'api';
@@ -38,8 +54,10 @@ export const handle: Handle = async ({ event, resolve }) => {
     rateLimitType = 'search';
   }
 
-  // Check rate limit
-  const rateLimitResult = rateLimiter.check(rateLimitType, clientIp);
+  // Check rate limit (skip for Vite internal requests)
+  const rateLimitResult = isViteInternalRequest 
+    ? { allowed: true, resetAt: Date.now() }
+    : rateLimiter.check(rateLimitType, clientIp);
   if (!rateLimitResult.allowed) {
     auditLogger.log({
       ip: clientIp,

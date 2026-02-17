@@ -15,31 +15,31 @@
   --bg-primary: var(--snow);
   --bg-secondary: var(--lavender-blush);
   --bg-tertiary: var(--thistle);
-  --text-primary: #1a1a1a;
-  --text-secondary: #4a4a4a;
-  --text-muted: #6b7280;
+  --text-primary: #0a0a0a; /* Darker for better contrast */
+  --text-secondary: #2a2a2a; /* Darker for better contrast */
+  --text-muted: #4a4a4a; /* Darker for better contrast */
   --border-color: var(--thistle);
   --border-light: var(--lavender-blush);
   --accent: var(--royal-plum);
   --accent-hover: #6a1f4d;
   --accent-light: var(--lilac);
-  --link-color: var(--royal-plum);
-  --link-hover: var(--accent-hover);
+  --link-color: #5a0d4f; /* Darker plum for better contrast on light bg */
+  --link-hover: #4a0a3f; /* Even darker for hover */
   --card-bg: #ffffff;
   --card-border: var(--border-color);
   --button-primary: var(--royal-plum);
   --button-primary-hover: var(--accent-hover);
-  --button-secondary: var(--lilac);
-  --button-secondary-hover: var(--thistle);
+  --button-secondary: #8b5a7a; /* Darker for better contrast */
+  --button-secondary-hover: #7a4a6a; /* Even darker for hover */
   --input-bg: #ffffff;
   --input-border: var(--border-color);
   --input-focus: var(--royal-plum);
   --error-bg: #fee2e2;
-  --error-text: #991b1b;
+  --error-text: #7a0a0a; /* Darker for better contrast */
   --success-bg: #d1fae5;
-  --success-text: #065f46;
+  --success-text: #034a2e; /* Darker for better contrast */
   --warning-bg: #fef3c7;
-  --warning-text: #92400e;
+  --warning-text: #6a3000; /* Darker for better contrast */
 }
 
 [data-theme="dark"] {
@@ -54,31 +54,31 @@
   --bg-primary: var(--snow);
   --bg-secondary: var(--lavender-blush);
   --bg-tertiary: var(--thistle);
-  --text-primary: #f5f5f5;
-  --text-secondary: #d1d1d1;
-  --text-muted: #a0a0a0;
+  --text-primary: #ffffff; /* Brighter for better contrast */
+  --text-secondary: #e0e0e0; /* Brighter for better contrast */
+  --text-muted: #b0b0b0; /* Brighter for better contrast */
   --border-color: var(--thistle);
   --border-light: var(--lavender-blush);
   --accent: var(--royal-plum);
   --accent-hover: #b84a8a;
   --accent-light: var(--lilac);
-  --link-color: var(--royal-plum);
-  --link-hover: var(--accent-hover);
+  --link-color: #d84ab8; /* Brighter plum for better contrast on dark bg */
+  --link-hover: #e85ac8; /* Even brighter for hover */
   --card-bg: var(--lavender-blush);
   --card-border: var(--border-color);
   --button-primary: var(--royal-plum);
   --button-primary-hover: var(--accent-hover);
-  --button-secondary: var(--lilac);
-  --button-secondary-hover: var(--thistle);
+  --button-secondary: #7a5a6a; /* Adjusted for dark theme */
+  --button-secondary-hover: #8a6a7a; /* Lighter for hover */
   --input-bg: var(--lavender-blush);
   --input-border: var(--border-color);
   --input-focus: var(--royal-plum);
   --error-bg: #4a1f1f;
-  --error-text: #ff6b6b;
+  --error-text: #ff8a8a; /* Brighter for better contrast */
   --success-bg: #1a3a2a;
-  --success-text: #4ade80;
+  --success-text: #6aff9a; /* Brighter for better contrast */
   --warning-bg: #4a3a1f;
-  --warning-text: #fbbf24;
+  --warning-text: #ffcc44; /* Brighter for better contrast */
 }
 
 /* Base styles */
@@ -161,12 +161,59 @@ header {
   margin-bottom: 2rem;
   border-bottom: 1px solid var(--border-color);
   padding-bottom: 1rem;
+  position: relative;
+}
+
+.header-logo {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  text-decoration: none;
+  color: inherit;
+  transition: opacity 0.2s ease;
+  flex-shrink: 0;
+}
+
+.header-logo:hover {
+  opacity: 0.8;
+}
+
+.main-logo {
+  height: 48px;
+  width: auto;
+  object-fit: contain;
+}
+
+.header-logo h1 {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 nav {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 1rem;
+  flex: 1;
+  position: relative;
+}
+
+.nav-links {
+  grid-column: 2;
   display: flex;
   gap: 1rem;
   align-items: center;
+  justify-self: center;
+}
+
+.auth-section {
+  grid-column: 3;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
 }
 
 nav a {
@@ -207,7 +254,7 @@ button:disabled, .button:disabled {
 
 .btn-secondary, .logout-button {
   background: var(--button-secondary);
-  color: white;
+  color: #ffffff; /* Ensure white text for contrast */
 }
 
 .btn-secondary:hover, .logout-button:hover {
@@ -430,7 +477,7 @@ input:disabled, textarea:disabled, select:disabled {
 
 .pr-status.open, .issue-status.open {
   background: var(--accent-light);
-  color: var(--accent);
+  color: var(--text-primary); /* Better contrast */
 }
 
 .pr-status.closed, .issue-status.closed {
@@ -446,14 +493,14 @@ input:disabled, textarea:disabled, select:disabled {
 .fork-badge {
   padding: 0.25rem 0.5rem;
   background: var(--accent-light);
-  color: var(--accent);
+  color: var(--text-primary); /* Better contrast */
   border-radius: 4px;
   font-size: 0.85rem;
   margin-left: 0.5rem;
 }
 
 .fork-badge a {
-  color: var(--accent);
+  color: var(--link-color); /* Use link color for better visibility */
   text-decoration: none;
 }
 
@@ -479,7 +526,7 @@ input:disabled, textarea:disabled, select:disabled {
   color: var(--error-text);
 }
 
-/* Code blocks */
+/* Code blocks - consistent dark-gray background in both themes */
 code {
   background: var(--bg-secondary);
   padding: 0.125rem 0.25rem;
@@ -490,13 +537,13 @@ code {
 }
 
 pre {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
+  background: #1e1e1e; /* Consistent dark-gray background */
+  color: #d4d4d4; /* Light gray text for good contrast */
   padding: 1rem;
   border-radius: 0.5rem;
   overflow-x: auto;
   margin: 1rem 0;
-  border: 1px solid var(--border-color);
+  border: 1px solid #3a3a3a;
 }
 
 pre code {
@@ -767,89 +814,93 @@ pre code {
   padding: 2rem;
 }
 
-/* Highlight.js Syntax Highlighting - Custom Theme using CSS Variables */
+/* Highlight.js Syntax Highlighting - Consistent dark-gray background */
 .hljs {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
+  background: #1e1e1e !important; /* Consistent dark-gray background in both themes */
+  color: #d4d4d4 !important; /* Light gray text for good contrast */
+  border: 1px solid #3a3a3a;
   border-radius: 4px;
   padding: 1rem;
   overflow-x: auto;
 }
 
-/* Syntax highlighting colors - adapted to royal plum theme */
+/* Syntax highlighting colors - high contrast for dark-gray background */
 .hljs-comment,
 .hljs-quote {
-  color: var(--text-muted);
+  color: #6a9955; /* Green comments - good contrast */
   font-style: italic;
 }
 
 .hljs-keyword,
 .hljs-selector-tag,
 .hljs-subst {
-  color: var(--accent);
+  color: #c586c0; /* Purple/magenta keywords - good contrast */
   font-weight: 500;
 }
 
 .hljs-number,
-.hljs-literal,
+.hljs-literal {
+  color: #b5cea8; /* Light green numbers - good contrast */
+  font-weight: 500;
+}
+
 .hljs-variable,
 .hljs-template-variable,
 .hljs-tag .hljs-attr {
-  color: var(--accent-light);
+  color: #9cdcfe; /* Light blue variables - good contrast */
 }
 
 .hljs-string,
 .hljs-doctag {
-  color: var(--success-text);
+  color: #ce9178; /* Orange strings - good contrast */
 }
 
 .hljs-title,
 .hljs-section,
 .hljs-selector-id {
-  color: var(--accent);
+  color: #dcdcaa; /* Yellow titles - good contrast */
   font-weight: 600;
 }
 
 .hljs-type,
 .hljs-class .hljs-title {
-  color: var(--accent);
+  color: #4ec9b0; /* Cyan types - good contrast */
   font-weight: 500;
 }
 
 .hljs-tag,
 .hljs-name,
 .hljs-attribute {
-  color: var(--accent);
+  color: #569cd6; /* Blue tags - good contrast */
 }
 
 .hljs-regexp,
 .hljs-link {
-  color: var(--accent-light);
+  color: #d16969; /* Red regexp - good contrast */
 }
 
 .hljs-symbol,
 .hljs-bullet {
-  color: var(--warning-text);
+  color: #dcdcaa; /* Yellow symbols - good contrast */
 }
 
 .hljs-built_in,
 .hljs-builtin-name {
-  color: var(--accent-light);
+  color: #4ec9b0; /* Cyan built-ins - good contrast */
 }
 
 .hljs-meta {
-  color: var(--text-muted);
+  color: #808080; /* Gray meta - good contrast */
 }
 
 .hljs-deletion {
-  background: var(--error-bg);
-  color: var(--error-text);
+  background: #4a1f1f; /* Dark red background */
+  color: #ff8a8a; /* Light red text */
 }
 
 .hljs-addition {
-  background: var(--success-bg);
-  color: var(--success-text);
+  background: #1a3a2a; /* Dark green background */
+  color: #6aff9a; /* Light green text */
 }
 
 .hljs-emphasis {
@@ -860,30 +911,5 @@ pre code {
   font-weight: 600;
 }
 
-/* Dark theme adjustments for better contrast */
-[data-theme="dark"] .hljs {
-  background: var(--bg-tertiary);
-}
-
-[data-theme="dark"] .hljs-string,
-[data-theme="dark"] .hljs-doctag {
-  color: var(--success-text);
-}
-
-[data-theme="dark"] .hljs-keyword,
-[data-theme="dark"] .hljs-selector-tag,
-[data-theme="dark"] .hljs-subst {
-  color: var(--accent);
-}
-
-/* Light theme adjustments */
-:root:not([data-theme="dark"]) .hljs-string,
-:root:not([data-theme="dark"]) .hljs-doctag {
-  color: #065f46; /* Darker green for light mode */
-}
-
-:root:not([data-theme="dark"]) .hljs-keyword,
-:root:not([data-theme="dark"]) .hljs-selector-tag,
-:root:not([data-theme="dark"]) .hljs-subst {
-  color: #6a1f4d; /* Darker plum for light mode */
-}
+/* Code blocks use consistent dark-gray background in both themes */
+/* All syntax highlighting colors are optimized for #1e1e1e background */

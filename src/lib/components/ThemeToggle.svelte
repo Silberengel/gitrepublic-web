@@ -48,7 +48,7 @@
   }
 </script>
 
-<button class="theme-toggle" onclick={handleToggle} title="Toggle theme">
+<button class="theme-toggle" onclick={handleToggle} title={currentTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
   <span class="theme-toggle-icon">
     {#if currentTheme === 'dark'}
       ☀️
@@ -56,13 +56,12 @@
       🌙
     {/if}
   </span>
-  <span>{currentTheme === 'dark' ? 'Light' : 'Dark'}</span>
 </button>
 
 <style>
   .theme-toggle {
     cursor: pointer;
-    padding: 0.5rem 0.75rem;
+    padding: 0.5rem;
     border: 1px solid var(--border-color);
     border-radius: 0.375rem;
     background: var(--card-bg);
@@ -71,7 +70,9 @@
     font-size: 0.875rem;
     display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
+    justify-content: center;
+    width: 2.5rem;
+    height: 2.5rem;
     font-family: 'IBM Plex Serif', serif;
   }
 
