@@ -1085,7 +1085,6 @@
       </div>
     {/if}
     <div class="header-left">
-      <a href="/" class="back-link">← Back to Repositories</a>
       <div class="repo-title-section">
         {#if repoImage}
           <img src={repoImage} alt="" class="repo-image" />
@@ -1100,7 +1099,7 @@
       <span class="npub">
         by <a href={`/users/${npub}`}>{npub.slice(0, 16)}...</a>
       </span>
-      <a href="/docs" class="docs-link" target="_blank" title="GitRepublic Documentation">📖</a>
+      <a href="/docs" class="docs-link" target="_blank" title="Documentation">📖</a>
       {#if forkInfo?.isFork && forkInfo.originalRepo}
         <span class="fork-badge">Forked from <a href={`/repos/${forkInfo.originalRepo.npub}/${forkInfo.originalRepo.repo}`}>{forkInfo.originalRepo.repo}</a></span>
       {/if}
@@ -1861,17 +1860,6 @@
     text-decoration: underline;
   }
 
-  .back-link {
-    color: var(--link-color);
-    text-decoration: none;
-    font-size: 0.875rem;
-    transition: color 0.2s ease;
-  }
-
-  .back-link:hover {
-    color: var(--link-hover);
-    text-decoration: underline;
-  }
 
   header h1 {
     margin: 0;

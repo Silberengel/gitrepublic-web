@@ -116,7 +116,6 @@
 
 <div class="container">
   <header>
-    <a href={`/repos/${npub}/${repo}`} class="back-link">← Back to Repository</a>
     <h1>Repository Settings</h1>
   </header>
 

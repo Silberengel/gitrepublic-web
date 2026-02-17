@@ -153,6 +153,15 @@ a:hover {
   padding: 2rem;
 }
 
+/* Mobile responsive for containers */
+@media (max-width: 768px) {
+  .container,
+  .container-narrow,
+  .container-wide {
+    padding: 1rem;
+  }
+}
+
 /* Header and Navigation */
 header {
   display: flex;

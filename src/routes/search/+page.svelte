@@ -44,7 +44,6 @@
 
 <div class="container">
   <header>
-    <a href="/" class="back-link">← Back to Repositories</a>
     <h1>Search</h1>
   </header>
 

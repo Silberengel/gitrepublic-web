@@ -104,7 +104,6 @@
 
 <div class="container">
   <header>
-    <a href="/" class="back-link">← Back to Repositories</a>
     <div class="profile-header">
       {#if userProfile?.picture}
         <img src={userProfile.picture} alt="Profile" class="profile-picture" />

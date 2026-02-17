@@ -1,6 +1,8 @@
 <script lang="ts">
   import '../app.css';
   import { onMount, setContext } from 'svelte';
+  import Footer from '$lib/components/Footer.svelte';
+  import NavBar from '$lib/components/NavBar.svelte';
 
   // Theme management - default to dark
   let theme: 'light' | 'dark' = 'dark';
@@ -48,4 +50,8 @@
   });
 </script>
 
+<NavBar />
+
 <slot />
+
+<Footer />

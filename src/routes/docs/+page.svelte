@@ -42,8 +42,7 @@
 
 <div class="container-wide">
   <header>
-    <a href="/" class="back-link">← Back to Repositories</a>
-    <h1>GitRepublic Documentation</h1>
+    <h1>Documentation</h1>
     <p class="subtitle">Complete tutorial and walkthrough for decentralized git hosting</p>
   </header>
 
