@@ -312,7 +312,7 @@ export class RepoManager {
           );
           commitMessage = signedMessage;
         } catch (err) {
-          logger.warn({ error: err, repoPath: repoPath.fullPath }, 'Failed to sign initial commit');
+          logger.warn({ error: err, repoPath }, 'Failed to sign initial commit');
           // Continue without signature if signing fails
         }
       }
@@ -332,7 +332,7 @@ export class RepoManager {
       // Clean up
       await rm(workDir, { recursive: true, force: true });
     } catch (error) {
-      logger.error({ error, repoPath: repoPath.fullPath }, 'Failed to create verification file');
+      logger.error({ error, repoPath }, 'Failed to create verification file');
       // Don't throw - verification file creation is important but shouldn't block provisioning
     }
   }

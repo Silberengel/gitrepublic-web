@@ -6,7 +6,7 @@
  * - Direct nsec/hex keys (for server-side signing)
  */
 
-import { nip19, getPublicKey, finalizeEvent, getEventHash } from 'nostr-tools';
+import { nip19, getPublicKey, finalizeEvent } from 'nostr-tools';
 import { createHash } from 'crypto';
 import type { NostrEvent } from '../../types/nostr.js';
 import { KIND } from '../../types/nostr.js';

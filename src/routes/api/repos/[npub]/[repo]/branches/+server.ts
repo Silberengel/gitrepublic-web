@@ -42,9 +42,12 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
     return error(400, 'Missing npub or repo parameter');
   }
 
+  let branchName: string | undefined;
+  let fromBranch: string | undefined;
+  let userPubkey: string | undefined;
   try {
     const body = await request.json();
-    const { branchName, fromBranch, userPubkey } = body;
+    ({ branchName, fromBranch, userPubkey } = body);
 
     if (!branchName) {
       return error(400, 'Missing branchName parameter');

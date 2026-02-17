@@ -50,9 +50,13 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
     return error(400, 'Missing npub or repo parameter');
   }
 
+  let tagName: string | undefined;
+  let ref: string | undefined;
+  let message: string | undefined;
+  let userPubkey: string | undefined;
   try {
     const body = await request.json();
-    const { tagName, ref, message, userPubkey } = body;
+    ({ tagName, ref, message, userPubkey } = body);
 
     if (!tagName) {
       return error(400, 'Missing tagName parameter');

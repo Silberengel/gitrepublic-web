@@ -1,3 +1,6 @@
+/* Import fonts - IBM Plex Serif for classic Roman feel with modern tech aesthetic */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600;1,700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+
 /* GitRepublic Theme - Light/Dark Mode with Royal Plum Palette */
 
 :root {
@@ -77,9 +80,6 @@
   --warning-bg: #4a3a1f;
   --warning-text: #fbbf24;
 }
-
-/* Import fonts - IBM Plex Serif for classic Roman feel with modern tech aesthetic */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600;1,700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
 
 /* Base styles */
 * {

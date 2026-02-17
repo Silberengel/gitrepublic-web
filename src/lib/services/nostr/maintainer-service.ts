@@ -110,7 +110,7 @@ export class MaintainerService {
       this.cache.set(cacheKey, { ...result, timestamp: Date.now() });
       return result;
     } catch (error) {
-      logger.error({ error, ownerPubkey, repoName }, 'Error fetching maintainers');
+      logger.error({ error, repoOwnerPubkey, repoId }, 'Error fetching maintainers');
       // Fallback: only owner is maintainer, repo is public by default
       const result = { owner: repoOwnerPubkey, maintainers: [repoOwnerPubkey], isPrivate: false };
       this.cache.set(cacheKey, { ...result, timestamp: Date.now() });

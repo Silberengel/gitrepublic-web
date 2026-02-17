@@ -3,7 +3,7 @@
  * Creates and verifies cryptographic proof linking repo announcements to git repos
  */
 
-import { getEventHash, verifyEvent } from 'nostr-tools';
+import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '../../types/nostr.js';
 import { nip19 } from 'nostr-tools';
 

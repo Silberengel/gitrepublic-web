@@ -50,7 +50,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     const files = await fileManager.listFiles(npub, repo, ref, path);
     return json(files);
   } catch (err) {
-    logger.error({ error: err, npub, repo, path, branch }, 'Error listing files');
+    logger.error({ error: err, npub, repo, path, ref }, 'Error listing files');
     return error(500, err instanceof Error ? err.message : 'Failed to list files');
   }
 };

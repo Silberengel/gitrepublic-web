@@ -12,7 +12,6 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { createReadStream } from 'fs';
 import logger from '$lib/services/logger.js';
 
 const execAsync = promisify(exec);

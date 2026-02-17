@@ -101,7 +101,7 @@ export class OwnershipTransferService {
       this.cache.set(cacheKey, { owner: currentOwner, timestamp: Date.now() });
       return currentOwner;
     } catch (error) {
-      logger.error({ error, originalOwnerPubkey, repoName }, 'Error fetching ownership transfers');
+      logger.error({ error, originalOwnerPubkey, repoId }, 'Error fetching ownership transfers');
       // Fallback to original owner
       return originalOwnerPubkey;
     }
@@ -306,7 +306,7 @@ export class OwnershipTransferService {
       transfers.sort((a, b) => b.timestamp - a.timestamp);
       return transfers;
     } catch (error) {
-      logger.error({ error, ownerPubkey, repoName }, 'Error fetching transfer history');
+      logger.error({ error, originalOwnerPubkey, repoId }, 'Error fetching transfer history');
       return [];
     }
   }

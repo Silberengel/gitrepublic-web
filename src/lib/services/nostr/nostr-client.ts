@@ -3,20 +3,26 @@
  */
 
 import type { NostrEvent, NostrFilter } from '../../types/nostr.js';
-import { createRequire } from 'module';
 import logger from '../logger.js';
 
 // Polyfill WebSocket for Node.js environments (lazy initialization)
 let wsPolyfillInitialized = false;
-function initializeWebSocketPolyfill() {
+async function initializeWebSocketPolyfill() {
   if (wsPolyfillInitialized) return;
   if (typeof global === 'undefined' || typeof global.WebSocket !== 'undefined') {
     wsPolyfillInitialized = true;
     return;
   }
   
+  // Only run in Node.js/server environment
+  if (typeof process === 'undefined' || !process.versions?.node) {
+    wsPolyfillInitialized = true;
+    return;
+  }
+  
   try {
-    // Use createRequire for ES modules compatibility
+    // Dynamic import to avoid bundling for browser
+    const { createRequire } = await import('module');
     const requireFunc = createRequire(import.meta.url);
     const WebSocketImpl = requireFunc('ws');
     global.WebSocket = WebSocketImpl as any;
@@ -28,9 +34,11 @@ function initializeWebSocketPolyfill() {
   }
 }
 
-// Initialize on module load if in Node.js
+// Initialize on module load if in Node.js (fire and forget)
 if (typeof process !== 'undefined' && process.versions?.node) {
-  initializeWebSocketPolyfill();
+  initializeWebSocketPolyfill().catch(() => {
+    // Ignore errors during initialization
+  });
 }
 
 export class NostrClient {
@@ -66,7 +74,7 @@ export class NostrClient {
 
   private async fetchFromRelay(relay: string, filters: NostrFilter[]): Promise<NostrEvent[]> {
     // Ensure WebSocket polyfill is initialized
-    initializeWebSocketPolyfill();
+    await initializeWebSocketPolyfill();
     
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(relay);
@@ -164,7 +172,7 @@ export class NostrClient {
 
   private async publishToRelay(relay: string, nostrEvent: NostrEvent): Promise<void> {
     // Ensure WebSocket polyfill is initialized
-    initializeWebSocketPolyfill();
+    await initializeWebSocketPolyfill();
     
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(relay);
