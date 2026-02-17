@@ -217,7 +217,40 @@
     // Fallback to repo name from event
     return getRepoName(event);
   }
+
+  // Get page data for OpenGraph metadata
+  const pageData = $page.data as {
+    title?: string;
+    description?: string;
+    image?: string;
+    url?: string;
+    ogType?: string;
+  };
 </script>
+
+<svelte:head>
+  <title>{pageData.title || 'GitRepublic - Decentralized Git Hosting on Nostr'}</title>
+  <meta name="description" content={pageData.description || 'A decentralized git hosting platform built on Nostr. Host your repositories, collaborate with others, and maintain full control of your code.'} />
+  
+  <!-- OpenGraph / Facebook -->
+  <meta property="og:type" content={pageData.ogType || 'website'} />
+  <meta property="og:title" content={pageData.title || 'GitRepublic - Decentralized Git Hosting on Nostr'} />
+  <meta property="og:description" content={pageData.description || 'A decentralized git hosting platform built on Nostr. Host your repositories, collaborate with others, and maintain full control of your code.'} />
+  <meta property="og:url" content={pageData.url || `https://${$page.url.host}${$page.url.pathname}`} />
+  {#if pageData.image}
+    <meta property="og:image" content={pageData.image} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+  {/if}
+  
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content={pageData.title || 'GitRepublic - Decentralized Git Hosting on Nostr'} />
+  <meta name="twitter:description" content={pageData.description || 'A decentralized git hosting platform built on Nostr. Host your repositories, collaborate with others, and maintain full control of your code.'} />
+  {#if pageData.image}
+    <meta name="twitter:image" content={pageData.image} />
+  {/if}
+</svelte:head>
 
 <div class="container">
   <header>

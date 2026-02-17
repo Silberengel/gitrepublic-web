@@ -1,0 +1,113 @@
+/* GitRepublic Theme - Light/Dark Mode with Royal Plum Palette */
+
+:root {
+  /* Light theme colors */
+  --royal-plum: #7B1E6D;
+  --snow: #FBF7FA;
+  --lavender-blush: #EEE6EC;
+  --thistle: #D9C8D4;
+  --lilac: #C7A0BB;
+
+  /* Light theme semantic colors */
+  --bg-primary: var(--snow);
+  --bg-secondary: var(--lavender-blush);
+  --bg-tertiary: var(--thistle);
+  --text-primary: #1a1a1a;
+  --text-secondary: #4a4a4a;
+  --text-muted: #6b7280;
+  --border-color: var(--thistle);
+  --border-light: var(--lavender-blush);
+  --accent: var(--royal-plum);
+  --accent-hover: #6a1f4d;
+  --accent-light: var(--lilac);
+  --link-color: var(--royal-plum);
+  --link-hover: var(--accent-hover);
+  --card-bg: #ffffff;
+  --card-border: var(--border-color);
+  --button-primary: var(--royal-plum);
+  --button-primary-hover: var(--accent-hover);
+  --button-secondary: var(--lilac);
+  --button-secondary-hover: var(--thistle);
+  --input-bg: #ffffff;
+  --input-border: var(--border-color);
+  --input-focus: var(--royal-plum);
+  --error-bg: #fee2e2;
+  --error-text: #991b1b;
+  --success-bg: #d1fae5;
+  --success-text: #065f46;
+  --warning-bg: #fef3c7;
+  --warning-text: #92400e;
+}
+
+[data-theme="dark"] {
+  /* Dark theme colors - darker versions of the palette */
+  --royal-plum: #9a2a7f;
+  --snow: #1a1418;
+  --lavender-blush: #2a1f26;
+  --thistle: #3d2f38;
+  --lilac: #5a4452;
+
+  /* Dark theme semantic colors */
+  --bg-primary: var(--snow);
+  --bg-secondary: var(--lavender-blush);
+  --bg-tertiary: var(--thistle);
+  --text-primary: #f5f5f5;
+  --text-secondary: #d1d1d1;
+  --text-muted: #a0a0a0;
+  --border-color: var(--thistle);
+  --border-light: var(--lavender-blush);
+  --accent: var(--royal-plum);
+  --accent-hover: #b84a8a;
+  --accent-light: var(--lilac);
+  --link-color: var(--royal-plum);
+  --link-hover: var(--accent-hover);
+  --card-bg: var(--lavender-blush);
+  --card-border: var(--border-color);
+  --button-primary: var(--royal-plum);
+  --button-primary-hover: var(--accent-hover);
+  --button-secondary: var(--lilac);
+  --button-secondary-hover: var(--thistle);
+  --input-bg: var(--lavender-blush);
+  --input-border: var(--border-color);
+  --input-focus: var(--royal-plum);
+  --error-bg: #4a1f1f;
+  --error-text: #ff6b6b;
+  --success-bg: #1a3a2a;
+  --success-text: #4ade80;
+  --warning-bg: #4a3a1f;
+  --warning-text: #fbbf24;
+}
+
+/* Base styles */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Theme toggle utility */
+.theme-toggle {
+  cursor: pointer;
+  padding: 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.375rem;
+  background: var(--card-bg);
+  color: var(--text-primary);
+  transition: all 0.2s ease;
+}
+
+.theme-toggle:hover {
+  background: var(--bg-secondary);
+  border-color: var(--accent);
+}
