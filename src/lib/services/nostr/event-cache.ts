@@ -4,13 +4,28 @@
  */
 
 import type { NostrEvent, NostrFilter } from '../../types/nostr.js';
-import { createHash } from 'crypto';
 import logger from '../logger.js';
 
 interface CacheEntry {
   events: NostrEvent[];
   timestamp: number;
   ttl: number; // Time to live in milliseconds
+}
+
+/**
+ * Synchronous hash using a simple approach for cache keys
+ * Since we need synchronous hashing for cache keys, we'll use a simpler approach
+ * This is sufficient for cache key generation (doesn't need to be cryptographically secure)
+ */
+function simpleHash(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  // Convert to positive hex string
+  return Math.abs(hash).toString(16).padStart(8, '0');
 }
 
 /**
@@ -35,7 +50,8 @@ function generateCacheKey(filter: NostrFilter): string {
     }, {} as Record<string, unknown>);
   
   const filterStr = JSON.stringify(sortedFilter);
-  return createHash('sha256').update(filterStr).digest('hex');
+  // Use simple hash for synchronous cache key generation
+  return simpleHash(filterStr);
 }
 
 /**
@@ -43,7 +59,7 @@ function generateCacheKey(filter: NostrFilter): string {
  */
 function generateMultiFilterCacheKey(filters: NostrFilter[]): string {
   const keys = filters.map(f => generateCacheKey(f)).sort();
-  return createHash('sha256').update(keys.join('|')).digest('hex');
+  return simpleHash(keys.join('|'));
 }
 
 export class EventCache {
