@@ -26,6 +26,7 @@
 
   let loading = $state(true);
   let error = $state<string | null>(null);
+  let repoNotFound = $state(false); // Track if repository doesn't exist
   let files = $state<Array<{ name: string; path: string; type: 'file' | 'directory'; size?: number }>>([]);
   let currentPath = $state('');
   let currentFile = $state<string | null>(null);
@@ -112,6 +113,7 @@
   let repoBanner = $state<string | null>(null);
 
   async function loadReadme() {
+    if (repoNotFound) return;
     loadingReadme = true;
     try {
       const response = await fetch(`/api/repos/${npub}/${repo}/readme?ref=${currentBranch}`);
@@ -409,6 +411,11 @@
 
   onMount(async () => {
     await loadBranches();
+    // Skip other API calls if repository doesn't exist
+    if (repoNotFound) {
+      loading = false;
+      return;
+    }
     await loadFiles();
     await checkAuth();
     await loadTags();
@@ -453,7 +460,7 @@
   }
 
   async function checkMaintainerStatus() {
-    if (!userPubkey) {
+    if (repoNotFound || !userPubkey) {
       isMaintainer = false;
       return;
     }
@@ -474,6 +481,7 @@
   }
 
   async function checkVerification() {
+    if (repoNotFound) return;
     loadingVerification = true;
     try {
       const response = await fetch(`/api/repos/${npub}/${repo}/verify`);
@@ -497,6 +505,10 @@
         if (branches.length > 0 && !branches.includes(currentBranch)) {
           currentBranch = branches[0];
         }
+      } else if (response.status === 404) {
+        // Repository not provisioned yet - set error message and flag
+        repoNotFound = true;
+        error = `Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`;
       }
     } catch (err) {
       console.error('Failed to load branches:', err);
@@ -504,6 +516,9 @@
   }
 
   async function loadFiles(path: string = '') {
+    // Skip if repository doesn't exist
+    if (repoNotFound) return;
+    
     loading = true;
     error = null;
     try {
@@ -511,6 +526,10 @@
       const response = await fetch(url);
       
       if (!response.ok) {
+        if (response.status === 404) {
+          repoNotFound = true;
+          throw new Error(`Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`);
+        }
         throw new Error(`Failed to load files: ${response.statusText}`);
       }
 
@@ -824,6 +843,7 @@
   }
 
   async function loadTags() {
+    if (repoNotFound) return;
     try {
       const response = await fetch(`/api/repos/${npub}/${repo}/tags`);
       if (response.ok) {

@@ -20,17 +20,28 @@
 
     loading = true;
     error = null;
+    results = null; // Reset results
 
     try {
       const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=${searchType}`);
       if (response.ok) {
-        results = await response.json();
+        const data = await response.json();
+        // The API returns { query, type, results: { repos, code }, total }
+        // Extract the nested results structure
+        const apiResults = data.results || {};
+        results = {
+          repos: Array.isArray(apiResults.repos) ? apiResults.repos : [],
+          code: Array.isArray(apiResults.code) ? apiResults.code : [],
+          total: typeof data.total === 'number' ? data.total : (apiResults.repos?.length || 0) + (apiResults.code?.length || 0)
+        };
       } else {
         const data = await response.json();
         error = data.error || 'Search failed';
+        results = null; // Clear results on error
       }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Search failed';
+      results = null; // Clear results on error
     } finally {
       loading = false;
     }
@@ -77,10 +88,10 @@
     {#if results}
       <div class="results">
         <div class="results-header">
-          <h2>Results ({results.total})</h2>
+          <h2>Results ({results.total || 0})</h2>
         </div>
 
-        {#if (searchType === 'repos' || searchType === 'all') && results.repos.length > 0}
+        {#if (searchType === 'repos' || searchType === 'all') && results.repos && results.repos.length > 0}
           <section class="results-section">
             <h3>Repositories ({results.repos.length})</h3>
             <div class="repo-list">
@@ -112,7 +123,7 @@
           </section>
         {/if}
 
-        {#if (searchType === 'code' || searchType === 'all') && results.code.length > 0}
+        {#if (searchType === 'code' || searchType === 'all') && results.code && results.code.length > 0}
           <section class="results-section">
             <h3>Code Files ({results.code.length})</h3>
             <div class="code-list">
