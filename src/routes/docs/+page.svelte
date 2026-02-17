@@ -59,11 +59,6 @@
 </div>
 
 <style>
-  .subtitle {
-    color: var(--text-muted);
-    margin: 0;
-  }
-
   .docs-content {
     background: var(--card-bg);
     padding: 2rem;

@@ -15,7 +15,6 @@ import logger from '$lib/services/logger.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
-const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 
 export const GET: RequestHandler = async ({ url }) => {
   const query = url.searchParams.get('q');
@@ -31,6 +30,9 @@ export const GET: RequestHandler = async ({ url }) => {
   }
 
   try {
+    // Create a new client instance for each search to ensure fresh connections
+    const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+    
     const results: {
       repos: Array<{ id: string; name: string; description: string; owner: string; npub: string }>;
       code: Array<{ repo: string; npub: string; file: string; matches: number }>;
