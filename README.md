@@ -46,11 +46,12 @@ A decentralized, Nostr-based git server that enables git repository hosting and 
 - **Input Validation**: Validates commit messages, author names, emails, and file paths
 - **File Size Limits**: 500 MB maximum per file (allows for images and demo videos)
 - **Ownership Verification**: Verifies repository ownership via self-transfer events or verification files
-- **Commit Signing**: Sign commits using Nostr private keys (nsec or hex format)
-  - Supports both bech32 (nsec) and hex format keys
+- **Commit Signing**: Sign commits using Nostr private keys
   - Signatures embedded in commit messages as trailers
-  - Server-side signing via `NOSTRGIT_SECRET_KEY` environment variable
-  - Client-side signing via optional `nsecKey` parameter in API requests
+  - **Web UI**: Uses NIP-07 browser extension (secure, keys never leave browser)
+  - **Git Operations**: Uses NIP-98 HTTP authentication (ephemeral signed events)
+  - **Server-side**: Optional `NOSTRGIT_SECRET_KEY` environment variable for automated signing
+  - ⚠️ **Security Note**: Never send private keys (nsec) in API requests. Use NIP-07 for web UI or NIP-98 for git operations.
 
 ## Nostr Event Kinds Used
 

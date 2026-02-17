@@ -276,9 +276,9 @@ export class FileManager {
   /**
    * Write file and commit changes
    * @param signingOptions - Optional commit signing options:
-   *   - useNIP07: Use NIP-07 browser extension (client-side only)
+   *   - useNIP07: Use NIP-07 browser extension (client-side, secure - keys never leave browser)
    *   - nip98Event: Use NIP-98 auth event as signature (server-side, for git operations)
-   *   - nsecKey: Use direct nsec/hex key (server-side)
+   *   - nsecKey: Use direct nsec/hex key (server-side ONLY, via environment variables - NOT for client requests)
    */
   async writeFile(
     npub: string,

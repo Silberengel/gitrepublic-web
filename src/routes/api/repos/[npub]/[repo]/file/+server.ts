@@ -121,6 +121,9 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
     }
 
     // Prepare signing options
+    // NOTE: nsecKey is intentionally NOT supported from client requests for security reasons.
+    // Clients should use NIP-07 (browser extension) or NIP-98 (HTTP auth) instead.
+    // nsecKey is only for server-side use via environment variables.
     const signingOptions: {
       useNIP07?: boolean;
       nip98Event?: any;
@@ -131,9 +134,9 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
       signingOptions.useNIP07 = true;
     } else if (nip98Event) {
       signingOptions.nip98Event = nip98Event;
-    } else if (nsecKey) {
-      signingOptions.nsecKey = nsecKey;
     }
+    // Explicitly ignore nsecKey from client requests - it's a security risk
+    // Server-side signing should use NOSTRGIT_SECRET_KEY environment variable instead
 
     if (action === 'delete') {
       await fileManager.deleteFile(

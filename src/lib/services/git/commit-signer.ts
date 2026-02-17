@@ -135,17 +135,20 @@ export function createCommitSignatureEvent(
  * by embedding them in the commit message or as a trailer
  * 
  * Supports multiple signing methods:
- * - NIP-07: Browser extension signing (client-side)
+ * - NIP-07: Browser extension signing (client-side, secure - keys never leave browser)
  * - NIP-98: Use HTTP auth event as signature (server-side, for git operations)
- * - nsec/hex: Direct key signing (server-side, when key is available)
+ * - nsec/hex: Direct key signing (server-side ONLY, via environment variables)
+ * 
+ * ⚠️ SECURITY WARNING: nsecKey should NEVER be sent from client requests.
+ * It should only be used server-side via environment variables (e.g., NOSTRGIT_SECRET_KEY).
  * 
  * @param commitMessage - The commit message to sign
  * @param authorName - Author name
  * @param authorEmail - Author email
  * @param options - Signing options
- * @param options.useNIP07 - Use NIP-07 browser extension (client-side only)
+ * @param options.useNIP07 - Use NIP-07 browser extension (client-side only, secure)
  * @param options.nip98Event - Use NIP-98 auth event as signature (server-side)
- * @param options.nsecKey - Use direct nsec/hex key (server-side)
+ * @param options.nsecKey - Use direct nsec/hex key (server-side ONLY, via env vars - NOT for client requests)
  * @param options.timestamp - Optional timestamp (defaults to now)
  * @returns Signed commit message and signature event
  */
