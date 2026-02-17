@@ -27,7 +27,7 @@ export interface NostrFilter {
 
 export const KIND = {
   TEXT_NOTE: 1, // NIP-01: Text note (used for relay write proof fallback)
-  CONTACT_LIST: 3, // NIP-02: Contact list
+  CONTACT_LIST: 3, // NIP-02: Contact list - See /docs for GitRepublic usage documentation
   DELETION_REQUEST: 5, // NIP-09: Event deletion request
   REPO_ANNOUNCEMENT: 30617, // NIP-34: Repository announcement
   REPO_STATE: 30618, // NIP-34: Repository state

@@ -270,13 +270,13 @@
       <div class="form-group">
         <label for="repo-name">
           Repository Name *
-          <small>Will be used as the d-tag (normalized to lowercase with hyphens)</small>
+          <small>Enter a normal name (e.g., "My Awesome Repo"). It will be automatically converted to a d-tag format (lowercase with hyphens, such as my-awesome-repo).</small>
         </label>
         <input
           id="repo-name"
           type="text"
           bind:value={repoName}
-          placeholder="my-awesome-repo"
+          placeholder="My Awesome Repo"
           required
           disabled={loading}
         />
@@ -298,7 +298,7 @@
       <div class="form-group">
         <div class="label">
           Clone URLs
-          <small>{$page.data.gitDomain || 'localhost:6543'} will be added automatically</small>
+          <small>{$page.data.gitDomain || 'localhost:6543'} will be added automatically, but you can add any existing ones here.</small>
         </div>
         {#each cloneUrls as url, index}
           <div class="input-group">

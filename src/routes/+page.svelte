@@ -7,11 +7,17 @@
   import type { NostrEvent } from '../lib/types/nostr.js';
   import { nip19 } from 'nostr-tools';
   import { ForkCountService } from '../lib/services/nostr/fork-count-service.js';
+  import { getPublicKeyWithNIP07, isNIP07Available } from '../lib/services/nostr/nip07-signer.js';
 
   let repos = $state<NostrEvent[]>([]);
+  let allRepos = $state<NostrEvent[]>([]); // Store all repos for filtering
   let loading = $state(true);
   let error = $state<string | null>(null);
   let forkCounts = $state<Map<string, number>>(new Map());
+  let searchQuery = $state('');
+  let showOnlyMyContacts = $state(false);
+  let userPubkey = $state<string | null>(null);
+  let contactPubkeys = $state<Set<string>>(new Set());
 
   import { DEFAULT_NOSTR_RELAYS } from '../lib/config.js';
   const forkCountService = new ForkCountService(DEFAULT_NOSTR_RELAYS);
@@ -20,7 +26,52 @@
 
   onMount(async () => {
     await loadRepos();
+    await loadUserAndContacts();
   });
+
+  async function loadUserAndContacts() {
+    if (!isNIP07Available()) {
+      return;
+    }
+
+    try {
+      userPubkey = await getPublicKeyWithNIP07();
+      contactPubkeys.add(userPubkey); // Include user's own repos
+
+      // Fetch user's kind 3 contact list
+      const contactEvents = await nostrClient.fetchEvents([
+        {
+          kinds: [KIND.CONTACT_LIST],
+          authors: [userPubkey],
+          limit: 1
+        }
+      ]);
+
+      if (contactEvents.length > 0) {
+        const contactEvent = contactEvents[0];
+        // Extract pubkeys from 'p' tags
+        for (const tag of contactEvent.tags) {
+          if (tag[0] === 'p' && tag[1]) {
+            let pubkey = tag[1];
+            // Try to decode if it's an npub
+            try {
+              const decoded = nip19.decode(pubkey);
+              if (decoded.type === 'npub') {
+                pubkey = decoded.data as string;
+              }
+            } catch {
+              // Assume it's already a hex pubkey
+            }
+            if (pubkey) {
+              contactPubkeys.add(pubkey);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load user or contacts:', err);
+    }
+  }
 
   async function loadRepos() {
     loading = true;
@@ -55,6 +106,7 @@
       
       // Sort by created_at descending
       repos.sort((a, b) => b.created_at - a.created_at);
+      allRepos = [...repos]; // Store all repos for filtering
 
       // Load fork counts for all repos (in parallel, but don't block)
       loadForkCounts(repos).catch(err => {
@@ -195,6 +247,201 @@
     url?: string;
     ogType?: string;
   };
+
+  interface SearchResult {
+    repo: NostrEvent;
+    score: number;
+    matchType: string;
+  }
+
+  function performSearch() {
+    if (!searchQuery.trim()) {
+      repos = [...allRepos];
+      return;
+    }
+
+    const query = searchQuery.trim().toLowerCase();
+    const results: SearchResult[] = [];
+
+    // Filter by contacts if enabled
+    let reposToSearch = allRepos;
+    if (showOnlyMyContacts && contactPubkeys.size > 0) {
+      reposToSearch = allRepos.filter(event => {
+        // Check if owner is in contacts
+        if (contactPubkeys.has(event.pubkey)) return true;
+        
+        // Check if any maintainer is in contacts
+        const maintainerTags = event.tags.filter(t => t[0] === 'maintainers');
+        for (const tag of maintainerTags) {
+          for (let i = 1; i < tag.length; i++) {
+            let maintainerPubkey = tag[i];
+            try {
+              const decoded = nip19.decode(maintainerPubkey);
+              if (decoded.type === 'npub') {
+                maintainerPubkey = decoded.data as string;
+              }
+            } catch {
+              // Assume it's already a hex pubkey
+            }
+            if (contactPubkeys.has(maintainerPubkey)) return true;
+          }
+        }
+        return false;
+      });
+    }
+
+    for (const repo of reposToSearch) {
+      let score = 0;
+      let matchType = '';
+
+      // Extract repo fields
+      const name = getRepoName(repo).toLowerCase();
+      const dTag = repo.tags.find(t => t[0] === 'd')?.[1]?.toLowerCase() || '';
+      const description = getRepoDescription(repo).toLowerCase();
+      const cloneUrls = getCloneUrls(repo).map(url => url.toLowerCase());
+      const maintainerTags = repo.tags.filter(t => t[0] === 'maintainers');
+      const maintainers: string[] = [];
+      for (const tag of maintainerTags) {
+        for (let i = 1; i < tag.length; i++) {
+          if (tag[i]) maintainers.push(tag[i].toLowerCase());
+        }
+      }
+
+      // Try to decode query as hex id, naddr, or nevent
+      let queryHex = '';
+      try {
+        const decoded = nip19.decode(query);
+        if (decoded.type === 'naddr' || decoded.type === 'nevent') {
+          queryHex = (decoded.data as any).id || '';
+        }
+      } catch {
+        // Not a bech32 encoded value
+      }
+
+      // Check if query is a hex pubkey or npub
+      let queryPubkey = '';
+      try {
+        const decoded = nip19.decode(query);
+        if (decoded.type === 'npub') {
+          queryPubkey = decoded.data as string;
+        }
+      } catch {
+        // Check if it's a hex pubkey (64 hex chars)
+        if (/^[0-9a-f]{64}$/i.test(query)) {
+          queryPubkey = query;
+        }
+      }
+
+      // Exact matches get highest score
+      if (name === query) {
+        score += 1000;
+        matchType = 'exact-name';
+      } else if (dTag === query) {
+        score += 1000;
+        matchType = 'exact-d-tag';
+      } else if (repo.id.toLowerCase() === query || repo.id.toLowerCase() === queryHex) {
+        score += 1000;
+        matchType = 'exact-id';
+      } else if (repo.pubkey.toLowerCase() === queryPubkey.toLowerCase()) {
+        score += 800;
+        matchType = 'exact-pubkey';
+      }
+
+      // Name matches
+      if (name.includes(query)) {
+        score += name.startsWith(query) ? 100 : 50;
+        if (!matchType) matchType = 'name';
+      }
+
+      // D-tag matches
+      if (dTag.includes(query)) {
+        score += dTag.startsWith(query) ? 100 : 50;
+        if (!matchType) matchType = 'd-tag';
+      }
+
+      // Description matches
+      if (description.includes(query)) {
+        score += 30;
+        if (!matchType) matchType = 'description';
+      }
+
+      // Pubkey matches (owner)
+      if (repo.pubkey.toLowerCase().includes(query.toLowerCase()) || 
+          (queryPubkey && repo.pubkey.toLowerCase() === queryPubkey.toLowerCase())) {
+        score += 200;
+        if (!matchType) matchType = 'pubkey';
+      }
+
+      // Maintainer matches
+      for (const maintainer of maintainers) {
+        if (maintainer.includes(query.toLowerCase())) {
+          score += 150;
+          if (!matchType) matchType = 'maintainer';
+          break;
+        }
+        // Check if maintainer is npub and matches query
+        try {
+          const decoded = nip19.decode(maintainer);
+          if (decoded.type === 'npub') {
+            const maintainerPubkey = decoded.data as string;
+            if (maintainerPubkey.toLowerCase().includes(query.toLowerCase()) ||
+                (queryPubkey && maintainerPubkey.toLowerCase() === queryPubkey.toLowerCase())) {
+              score += 150;
+              if (!matchType) matchType = 'maintainer';
+              break;
+            }
+          }
+        } catch {
+          // Not an npub, already checked above
+        }
+      }
+
+      // Clone URL matches
+      for (const url of cloneUrls) {
+        if (url.includes(query)) {
+          score += 40;
+          if (!matchType) matchType = 'clone-url';
+          break;
+        }
+      }
+
+      // Fulltext search in all tags and content
+      const allText = [
+        name,
+        dTag,
+        description,
+        ...cloneUrls,
+        ...maintainers,
+        repo.content.toLowerCase()
+      ].join(' ');
+
+      if (allText.includes(query)) {
+        score += 10;
+        if (!matchType) matchType = 'fulltext';
+      }
+
+      if (score > 0) {
+        results.push({ repo, score, matchType });
+      }
+    }
+
+    // Sort by score (descending), then by created_at (descending)
+    results.sort((a, b) => {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+      return b.repo.created_at - a.repo.created_at;
+    });
+
+    repos = results.map(r => r.repo);
+  }
+
+  // Reactive search when query or filter changes
+  $effect(() => {
+    if (!loading) {
+      performSearch();
+    }
+  });
 </script>
 
 <svelte:head>
@@ -228,6 +475,29 @@
       <button onclick={loadRepos} disabled={loading}>
         {loading ? 'Loading...' : 'Refresh'}
       </button>
+    </div>
+
+    <div class="search-section">
+      <div class="search-bar-container">
+        <input
+          type="text"
+          bind:value={searchQuery}
+          placeholder="Search by name, d-tag, pubkey, maintainers, clone URL, hex id/naddr/nevent, or fulltext..."
+          class="search-input"
+          disabled={loading}
+          oninput={performSearch}
+        />
+      </div>
+      {#if isNIP07Available() && userPubkey}
+        <label class="filter-checkbox">
+          <input
+            type="checkbox"
+            bind:checked={showOnlyMyContacts}
+            onchange={performSearch}
+          />
+          <span>Show only my repos and those of my contacts</span>
+        </label>
+      {/if}
     </div>
 
     {#if error}
