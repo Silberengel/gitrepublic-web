@@ -20,6 +20,8 @@
   let cloneUrls = $state<string[]>(['']);
   let webUrls = $state<string[]>(['']);
   let maintainers = $state<string[]>(['']);
+  let relays = $state<string[]>(['']);
+  let blossoms = $state<string[]>(['']);
   let tags = $state<string[]>(['']);
   let documentation = $state<string[]>(['']);
   let alt = $state('');
@@ -94,6 +96,34 @@
     const newMaintainers = [...maintainers];
     newMaintainers[index] = value;
     maintainers = newMaintainers;
+  }
+
+  function addRelay() {
+    relays = [...relays, ''];
+  }
+
+  function removeRelay(index: number) {
+    relays = relays.filter((_, i) => i !== index);
+  }
+
+  function updateRelay(index: number, value: string) {
+    const newRelays = [...relays];
+    newRelays[index] = value;
+    relays = newRelays;
+  }
+
+  function addBlossom() {
+    blossoms = [...blossoms, ''];
+  }
+
+  function removeBlossom(index: number) {
+    blossoms = blossoms.filter((_, i) => i !== index);
+  }
+
+  function updateBlossom(index: number, value: string) {
+    const newBlossoms = [...blossoms];
+    newBlossoms[index] = value;
+    blossoms = newBlossoms;
   }
 
   function addTag() {
@@ -603,6 +633,34 @@
       }
       maintainers = maintainersList.length > 0 ? maintainersList : [''];
 
+      // Extract relays
+      const relaysList: string[] = [];
+      for (const tag of event.tags) {
+        if (tag[0] === 'relays') {
+          for (let i = 1; i < tag.length; i++) {
+            const relay = tag[i];
+            if (relay && typeof relay === 'string' && relay.trim()) {
+              relaysList.push(relay.trim());
+            }
+          }
+        }
+      }
+      relays = relaysList.length > 0 ? relaysList : [''];
+
+      // Extract blossoms
+      const blossomsList: string[] = [];
+      for (const tag of event.tags) {
+        if (tag[0] === 'blossoms') {
+          for (let i = 1; i < tag.length; i++) {
+            const blossom = tag[i];
+            if (blossom && typeof blossom === 'string' && blossom.trim()) {
+              blossomsList.push(blossom.trim());
+            }
+          }
+        }
+      }
+      blossoms = blossomsList.length > 0 ? blossomsList : [''];
+
       // Extract tags/labels
       const tagsList: string[] = [];
       for (const tag of event.tags) {
@@ -612,15 +670,90 @@
       }
       tags = tagsList.length > 0 ? tagsList : [''];
 
-      // Extract documentation - handle both formats
+      // Extract documentation - handle relay hints correctly
+      // Only treat values as multiple entries if they are in the same format
+      // If a value looks like a relay URL (wss:// or ws://), it's a relay hint for the previous value
       const docsList: string[] = [];
+      const isRelayUrl = (value: string): boolean => {
+        return typeof value === 'string' && (value.startsWith('wss://') || value.startsWith('ws://'));
+      };
+      
+      const getDocFormat = (value: string): string | null => {
+        // Check if it's naddr format (starts with naddr1)
+        if (value.startsWith('naddr1')) return 'naddr';
+        // Check if it's kind:pubkey:identifier format
+        if (/^\d+:[0-9a-f]{64}:[a-zA-Z0-9_-]+$/.test(value)) return 'kind:pubkey:identifier';
+        return null;
+      };
+      
       for (const tag of event.tags) {
         if (tag[0] === 'documentation') {
-          for (let i = 1; i < tag.length; i++) {
-            const doc = tag[i];
-            if (doc && typeof doc === 'string' && doc.trim()) {
-              docsList.push(doc.trim());
+          let i = 1;
+          
+          while (i < tag.length) {
+            const value = tag[i];
+            if (!value || typeof value !== 'string' || !value.trim()) {
+              i++;
+              continue;
             }
+            
+            const trimmed = value.trim();
+            
+            // Skip relay URLs (they're hints, not entries)
+            if (isRelayUrl(trimmed)) {
+              i++;
+              continue;
+            }
+            
+            // Check if this is a documentation reference
+            const format = getDocFormat(trimmed);
+            if (!format) {
+              i++;
+              continue; // Skip invalid formats
+            }
+            
+            // Check if next value is a relay URL (hint for this entry)
+            const nextValue = i + 1 < tag.length ? tag[i + 1] : null;
+            if (nextValue && typeof nextValue === 'string' && isRelayUrl(nextValue.trim())) {
+              // Current value has a relay hint - store just the doc reference, skip the relay
+              docsList.push(trimmed);
+              i += 2; // Skip both the doc and the relay hint
+              continue;
+            }
+            
+            // Check if we have multiple entries in the same format
+            // Collect all consecutive entries of the same format
+            const sameFormatEntries: string[] = [trimmed];
+            let j = i + 1;
+            while (j < tag.length) {
+              const nextVal = tag[j];
+              if (!nextVal || typeof nextVal !== 'string' || !nextVal.trim()) {
+                j++;
+                continue;
+              }
+              
+              const nextTrimmed = nextVal.trim();
+              
+              // Stop if we hit a relay URL (it's a hint for the previous entry)
+              if (isRelayUrl(nextTrimmed)) {
+                break;
+              }
+              
+              // Check if it's the same format
+              const nextFormat = getDocFormat(nextTrimmed);
+              if (nextFormat === format) {
+                sameFormatEntries.push(nextTrimmed);
+                j++;
+              } else {
+                // Different format - stop collecting
+                break;
+              }
+            }
+            
+            // If we have multiple entries in the same format, add them all
+            // Otherwise, just add the single entry
+            docsList.push(...sameFormatEntries);
+            i = j; // Move to the next unprocessed value
           }
         }
       }
@@ -761,27 +894,37 @@
       // Build maintainers list
       const allMaintainers = maintainers.filter(m => m.trim());
 
+      // Build relays list - combine user relays with default relays
+      const allRelays = [
+        ...relays.filter(r => r.trim()),
+        ...DEFAULT_NOSTR_RELAYS.filter(r => !relays.includes(r))
+      ];
+
+      // Build blossoms list
+      const allBlossoms = blossoms.filter(b => b.trim());
+
       // Build documentation list
       const allDocumentation = documentation.filter(d => d.trim());
 
       // Build tags/labels (excluding 'private' and 'fork' which are handled separately)
       const allTags = tags.filter(t => t.trim() && t !== 'private' && t !== 'fork');
 
-      // Build event tags - use separate tag for each value (correct format)
+      // Build event tags - use single tag with multiple values (NIP-34 format)
       const eventTags: string[][] = [
         ['d', dTag],
         ['name', repoName],
         ...(description ? [['description', description]] : []),
-        ...allCloneUrls.map(url => ['clone', url]), // Separate tag per URL
-        ...allWebUrls.map(url => ['web', url]), // Separate tag per URL
-        ...allMaintainers.map(m => ['maintainers', m]), // Separate tag per maintainer
-        ...allDocumentation.map(d => ['documentation', d]), // Separate tag per documentation
+        ...(allCloneUrls.length > 0 ? [['clone', ...allCloneUrls]] : []), // Single tag with all clone URLs
+        ...(allWebUrls.length > 0 ? [['web', ...allWebUrls]] : []), // Single tag with all web URLs
+        ...(allMaintainers.length > 0 ? [['maintainers', ...allMaintainers]] : []), // Single tag with all maintainers
+        ...(allRelays.length > 0 ? [['relays', ...allRelays]] : []), // Single tag with all relays
+        ...(allBlossoms.length > 0 ? [['blossoms', ...allBlossoms]] : []), // Single tag with all blossoms
+        ...allDocumentation.map(d => ['documentation', d]), // Documentation can have relay hints, so keep separate
         ...allTags.map(t => ['t', t]),
         ...(imageUrl.trim() ? [['image', imageUrl.trim()]] : []),
         ...(bannerUrl.trim() ? [['banner', bannerUrl.trim()]] : []),
         ...(alt.trim() ? [['alt', alt.trim()]] : []),
-        ...(earliestCommit.trim() ? [['r', earliestCommit.trim(), 'euc']] : []),
-        ...DEFAULT_NOSTR_RELAYS.map(relay => ['relays', relay]) // Separate tag per relay (correct format)
+        ...(earliestCommit.trim() ? [['r', earliestCommit.trim(), 'euc']] : [])
       ];
 
       // Add fork tags if this is a fork
@@ -1297,6 +1440,76 @@
       </div>
 
       <div class="form-group">
+        <div class="label">
+          Relays (optional)
+          <small>Nostr relays that this repository will monitor for patches and issues. Default relays will be added automatically.</small>
+        </div>
+        {#each relays as relay, index}
+          <div class="input-group">
+            <input
+              type="text"
+              value={relay}
+              oninput={(e) => updateRelay(index, e.currentTarget.value)}
+              placeholder="wss://relay.example.com"
+              disabled={loading}
+            />
+            {#if relays.length > 1}
+              <button
+                type="button"
+                onclick={() => removeRelay(index)}
+                disabled={loading}
+              >
+                Remove
+              </button>
+            {/if}
+          </div>
+        {/each}
+        <button
+          type="button"
+          onclick={addRelay}
+          disabled={loading}
+          class="add-button"
+        >
+          + Add Relay
+        </button>
+      </div>
+
+      <div class="form-group">
+        <div class="label">
+          Blossoms (optional)
+          <small>Blossom URLs for this repository. These are preserved but not actively used by GitRepublic.</small>
+        </div>
+        {#each blossoms as blossom, index}
+          <div class="input-group">
+            <input
+              type="text"
+              value={blossom}
+              oninput={(e) => updateBlossom(index, e.currentTarget.value)}
+              placeholder="https://example.com"
+              disabled={loading}
+            />
+            {#if blossoms.length > 1}
+              <button
+                type="button"
+                onclick={() => removeBlossom(index)}
+                disabled={loading}
+              >
+                Remove
+              </button>
+            {/if}
+          </div>
+        {/each}
+        <button
+          type="button"
+          onclick={addBlossom}
+          disabled={loading}
+          class="add-button"
+        >
+          + Add Blossom
+        </button>
+      </div>
+
+      <div class="form-group">
         <label for="image-url">
           Repository Image URL (optional)
           <small>URL to a repository image/logo. Example: https://example.com/repo-logo.png</small>
@@ -1390,7 +1603,7 @@
       <div class="form-group">
         <div class="label">
           Documentation (optional)
-          <small>Documentation event addresses (naddr format). Example: 30818:pubkey:nkbip-01</small>
+          <small>Documentation event addresses (naddr format). Example: 30818:fd208ee8c8f283780a9552896e4823cc9dc6bfd442063889577106940fd927c1:nkbip-01</small>
         </div>
         {#each documentation as doc, index}
           <div class="input-group">
@@ -1398,7 +1611,7 @@
               type="text"
               value={doc}
               oninput={(e) => updateDocumentation(index, e.currentTarget.value)}
-              placeholder="30818:pubkey:doc-name"
+              placeholder="30818:pubkey:d-tag"
               disabled={loading}
             />
             {#if documentation.length > 1}

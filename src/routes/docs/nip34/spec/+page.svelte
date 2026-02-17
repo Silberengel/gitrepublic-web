@@ -29,11 +29,11 @@
         
         content = md.render(docContent);
       } else {
-        error = $page.data.error || 'Failed to load NIP-34 documentation';
+        error = $page.data.error || 'Failed to load NIP-34 specification';
       }
     } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to load documentation';
-      console.error('Error parsing NIP-34.md:', err);
+      error = err instanceof Error ? err.message : 'Failed to load specification';
+      console.error('Error parsing NIP-34 specification:', err);
     } finally {
       loading = false;
     }
@@ -42,13 +42,13 @@
 
 <div class="container">
   <header>
-    <h1>GitRepublic Tutorial</h1>
-    <p class="subtitle">Complete guide to using GitRepublic</p>
+    <h1>NIP-34 Specification</h1>
+    <p class="subtitle">Nostr Improvement Proposal for Git Collaboration</p>
   </header>
 
   <main class="docs-content">
     {#if loading}
-      <div class="loading">Loading documentation...</div>
+      <div class="loading">Loading specification...</div>
     {:else if error}
       <div class="error">{error}</div>
     {:else}

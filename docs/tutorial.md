@@ -592,7 +592,7 @@ GitRepublic implements NIP-34 for repository announcements. Key event types:
 - **Kind 1621**: Issue
 - **Kind 1641**: Ownership transfer
 
-See the [NIP-34 specification](https://github.com/nostr-protocol/nips/blob/master/34.md) for full details.
+See the [NIP-34 specification](/docs/nip34/spec) for full details.
 
 ### NIP-98 HTTP Authentication
 
