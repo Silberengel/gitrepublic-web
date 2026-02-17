@@ -7,10 +7,19 @@
   import { onMount } from 'svelte';
 
   let userPubkey = $state<string | null>(null);
+  let mobileMenuOpen = $state(false);
 
   onMount(async () => {
     await checkAuth();
   });
+
+  function toggleMobileMenu() {
+    mobileMenuOpen = !mobileMenuOpen;
+  }
+
+  function closeMobileMenu() {
+    mobileMenuOpen = false;
+  }
 
   async function checkAuth() {
     try {
@@ -50,12 +59,15 @@
       <img src="/GR_logo.png" alt="GitRepublic Logo" class="main-logo" />
       <h1>gitrepublic</h1>
     </a>
-    <nav>
+    <button class="mobile-menu-toggle" onclick={toggleMobileMenu} aria-label="Toggle menu">
+      <span class="hamburger-icon">☰</span>
+    </button>
+    <nav class:mobile-open={mobileMenuOpen}>
       <div class="nav-links">
-        <a href="/" class:active={isActive('/') && $page.url.pathname === '/'}>Repositories</a>
-        <a href="/search" class:active={isActive('/search')}>Search</a>
-        <a href="/signup" class:active={isActive('/signup')}>Sign Up</a>
-        <a href="/docs" class:active={isActive('/docs')}>Docs</a>
+        <a href="/" class:active={isActive('/') && $page.url.pathname === '/'} onclick={closeMobileMenu}>Repositories</a>
+        <a href="/search" class:active={isActive('/search')} onclick={closeMobileMenu}>Search</a>
+        <a href="/signup" class:active={isActive('/signup')} onclick={closeMobileMenu}>Sign Up</a>
+        <a href="/docs" class:active={isActive('/docs')} onclick={closeMobileMenu}>Docs</a>
       </div>
     </nav>
     <div class="auth-section">
@@ -170,10 +182,32 @@
     flex-shrink: 0;
   }
 
+  .mobile-menu-toggle {
+    display: none;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 0.375rem;
+    padding: 0.5rem;
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: 1.5rem;
+    line-height: 1;
+    transition: all 0.2s ease;
+  }
+
+  .mobile-menu-toggle:hover {
+    background: var(--bg-secondary);
+    border-color: var(--accent);
+  }
+
+  .hamburger-icon {
+    display: block;
+  }
+
   /* Mobile responsive styles */
   @media (max-width: 768px) {
     .header-container {
-      flex-direction: column;
+      flex-wrap: wrap;
       padding: 1rem;
       gap: 1rem;
     }
@@ -187,20 +221,49 @@
       width: 40px;
     }
 
+    .mobile-menu-toggle {
+      display: block;
+      order: 2;
+      margin-left: auto;
+    }
+
     nav {
+      order: 3;
       width: 100%;
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    nav.mobile-open {
+      max-height: 500px;
+      padding-top: 1rem;
     }
 
     .nav-links {
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 0.5rem;
+      flex-direction: column;
       width: 100%;
+      gap: 0.5rem;
     }
 
     .nav-links a {
       font-size: 0.875rem;
-      padding: 0.4rem 0.6rem;
+      padding: 0.75rem 1rem;
+      width: 100%;
+      text-align: left;
+      border-radius: 0.375rem;
+      background: var(--bg-secondary);
+    }
+
+    .nav-links a:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .nav-links a.active {
+      background: var(--accent);
+      color: white;
     }
 
     .nav-links a.active::after {
@@ -208,9 +271,10 @@
     }
 
     .auth-section {
-      width: 100%;
-      justify-content: center;
+      order: 1;
+      width: auto;
       flex-wrap: wrap;
+      gap: 0.5rem;
     }
 
     .auth-section button {
@@ -237,14 +301,13 @@
       width: 32px;
     }
 
-    .nav-links {
-      flex-direction: column;
-      width: 100%;
+    .auth-section {
+      gap: 0.25rem;
     }
 
-    .nav-links a {
-      width: 100%;
-      text-align: center;
+    .auth-section button {
+      font-size: 0.75rem;
+      padding: 0.35rem 0.6rem;
     }
   }
 </style>

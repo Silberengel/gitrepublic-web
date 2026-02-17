@@ -40,10 +40,9 @@
   });
 </script>
 
-<div class="container-wide">
+<div class="container">
   <header>
     <h1>GitRepublic Documentation</h1>
-    <p class="subtitle">Complete tutorial and walkthrough for decentralized git hosting</p>
   </header>
 
   <main class="docs-content">

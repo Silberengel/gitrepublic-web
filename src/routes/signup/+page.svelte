@@ -221,15 +221,10 @@
 
 <div class="container">
   <header>
-    <h1>gitrepublic</h1>
-    <nav>
-      <a href="/">Repositories</a>
-      <a href="/signup">Sign Up</a>
-    </nav>
+    <h1>Create or Update Repository Announcement</h1>
   </header>
 
   <main>
-    <h2>Create or Update Repository Announcement</h2>
 
     {#if !nip07Available}
       <div class="warning">

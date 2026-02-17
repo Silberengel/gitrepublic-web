@@ -816,12 +816,7 @@ pre code {
   color: var(--text-secondary);
 }
 
-/* Docs page */
-.container-wide {
-  max-width: 1000px;
-  margin: 0 auto;
-  padding: 2rem;
-}
+/* All pages use the same container width for consistency */
 
 /* Highlight.js Syntax Highlighting - Consistent dark-gray background */
 .hljs {
