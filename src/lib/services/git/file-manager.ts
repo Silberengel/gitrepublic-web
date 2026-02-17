@@ -311,7 +311,7 @@ export class FileManager {
     }
 
     // Validate content size (prevent extremely large files)
-    const maxFileSize = 100 * 1024 * 1024; // 100 MB per file
+    const maxFileSize = 500 * 1024 * 1024; // 500 MB per file (allows for images and demo videos)
     if (Buffer.byteLength(content, 'utf-8') > maxFileSize) {
       throw new Error(`File is too large (max ${maxFileSize / 1024 / 1024} MB)`);
     }

@@ -44,7 +44,7 @@ A decentralized, Nostr-based git server that enables git repository hosting and 
 ### Security & Validation
 - **Path Traversal Protection**: Validates and sanitizes file paths
 - **Input Validation**: Validates commit messages, author names, emails, and file paths
-- **File Size Limits**: 100 MB maximum per file
+- **File Size Limits**: 500 MB maximum per file (allows for images and demo videos)
 - **Ownership Verification**: Verifies repository ownership via self-transfer events or verification files
 - **Commit Signing**: Sign commits using Nostr private keys (nsec or hex format)
   - Supports both bech32 (nsec) and hex format keys
