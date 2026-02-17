@@ -16,16 +16,18 @@ export async function getUserRelays(
   const outbox: string[] = [];
 
   try {
-    // Fetch kind 10002 (relay list)
+    // Fetch kind 10002 (relay list) - get multiple to find the newest
     const relayListEvents = await nostrClient.fetchEvents([
       {
         kinds: [KIND.RELAY_LIST],
         authors: [pubkey],
-        limit: 1
+        limit: 10 // Get multiple to ensure we find the newest
       }
     ]);
 
     if (relayListEvents.length > 0) {
+      // Sort by created_at descending to get the newest event first
+      relayListEvents.sort((a, b) => b.created_at - a.created_at);
       const event = relayListEvents[0];
       for (const tag of event.tags) {
         if (tag[0] === 'relay' && tag[1]) {
