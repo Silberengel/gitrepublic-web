@@ -11,7 +11,7 @@ import { FileManager } from '$lib/services/git/file-manager.js';
 import { nip19 } from 'nostr-tools';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import logger from '$lib/services/logger.js';
+import { handleApiError, handleValidationError } from '$lib/utils/error-handler.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -22,11 +22,11 @@ export const GET: RequestHandler = async ({ url }) => {
   const limit = parseInt(url.searchParams.get('limit') || '20', 10);
 
   if (!query || query.trim().length === 0) {
-    return error(400, 'Missing or empty query parameter');
+    return handleValidationError('Missing or empty query parameter', { operation: 'search' });
   }
 
   if (query.length < 2) {
-    return error(400, 'Query must be at least 2 characters');
+    return handleValidationError('Query must be at least 2 characters', { operation: 'search', query });
   }
 
   try {
@@ -55,10 +55,9 @@ export const GET: RequestHandler = async ({ url }) => {
           }
         ]);
         
-        logger.info({ query, eventCount: events.length }, 'NIP-50 search results');
+        // NIP-50 search succeeded
       } catch (nip50Error) {
         // Fallback to manual filtering if NIP-50 fails or isn't supported
-        logger.warn({ error: nip50Error, query }, 'NIP-50 search failed, falling back to manual filtering');
         
         const allEvents = await nostrClient.fetchEvents([
           {
@@ -189,7 +188,6 @@ export const GET: RequestHandler = async ({ url }) => {
       total: results.repos.length + results.code.length
     });
   } catch (err) {
-    logger.error({ error: err, query }, 'Error searching');
-    return error(500, err instanceof Error ? err.message : 'Failed to search');
+    return handleApiError(err, { operation: 'search', query, type }, 'Failed to search');
   }
 };

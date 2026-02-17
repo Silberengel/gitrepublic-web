@@ -57,7 +57,7 @@ export async function getTorOnionAddress(): Promise<string | null> {
     }
   }
 
-  logger.warn('Tor is enabled but .onion address not found. Set TOR_ONION_ADDRESS env var or configure Tor hidden service.');
+  logger.warn({ service: 'tor', checkedPaths: TOR_HOSTNAME_PATHS.length }, 'Tor is enabled but .onion address not found. Set TOR_ONION_ADDRESS env var or configure Tor hidden service.');
   return null;
 }
 

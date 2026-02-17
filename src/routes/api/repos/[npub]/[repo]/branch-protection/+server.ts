@@ -12,8 +12,8 @@ import { signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { nip19 } from 'nostr-tools';
 import type { BranchProtectionRule } from '$lib/services/nostr/branch-protection-service.js';
-import logger from '$lib/services/logger.js';
 import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
+import { handleApiError, handleValidationError, handleAuthError, handleAuthorizationError } from '$lib/utils/error-handler.js';
 
 const branchProtectionService = new BranchProtectionService(DEFAULT_NOSTR_RELAYS);
 const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
@@ -26,7 +26,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
   const { npub, repo } = params;
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'getBranchProtection' });
   }
 
   try {
@@ -35,7 +35,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
     try {
       ownerPubkey = requireNpubHex(npub);
     } catch {
-      return error(400, 'Invalid npub format');
+      return handleValidationError('Invalid npub format', { operation: 'getBranchProtection', npub });
     }
 
     const config = await branchProtectionService.getBranchProtection(ownerPubkey, repo);
@@ -46,10 +46,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
 
     return json(config);
   } catch (err) {
-    // Security: Sanitize error messages
-    const sanitizedError = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : 'Failed to get branch protection';
-    logger.error({ error: sanitizedError, npub, repo }, 'Error getting branch protection');
-    return error(500, sanitizedError);
+    return handleApiError(err, { operation: 'getBranchProtection', npub, repo }, 'Failed to get branch protection');
   }
 };
 
@@ -60,7 +57,7 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
   const { npub, repo } = params;
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'updateBranchProtection' });
   }
 
   try {
@@ -68,11 +65,11 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
     const { userPubkey, rules } = body;
 
     if (!userPubkey) {
-      return error(401, 'Authentication required');
+      return handleAuthError('Authentication required', { operation: 'updateBranchProtection', npub, repo });
     }
 
     if (!Array.isArray(rules)) {
-      return error(400, 'Rules must be an array');
+      return handleValidationError('Rules must be an array', { operation: 'updateBranchProtection', npub, repo });
     }
 
     // Decode npub to get pubkey
@@ -80,7 +77,7 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
     try {
       ownerPubkey = requireNpubHex(npub);
     } catch {
-      return error(400, 'Invalid npub format');
+      return handleValidationError('Invalid npub format', { operation: 'updateBranchProtection', npub });
     }
 
     const userPubkeyHex = decodeNpubToHex(userPubkey) || userPubkey;
@@ -88,7 +85,7 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
     // Check if user is owner
     const currentOwner = await ownershipTransferService.getCurrentOwner(ownerPubkey, repo);
     if (userPubkeyHex !== currentOwner) {
-      return error(403, 'Only the repository owner can update branch protection');
+      return handleAuthorizationError('Only the repository owner can update branch protection', { operation: 'updateBranchProtection', npub, repo });
     }
 
     // Validate rules
@@ -122,9 +119,6 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
 
     return json({ success: true, event: signedEvent, rules: validatedRules });
   } catch (err) {
-    // Security: Sanitize error messages
-    const sanitizedError = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : 'Failed to update branch protection';
-    logger.error({ error: sanitizedError, npub, repo }, 'Error updating branch protection');
-    return error(500, sanitizedError);
+    return handleApiError(err, { operation: 'updateBranchProtection', npub, repo }, 'Failed to update branch protection');
   }
 };

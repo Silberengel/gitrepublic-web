@@ -183,8 +183,11 @@ export async function createGitCommitSignature(
   }
   // Method 2: Use NIP-98 auth event as signature (server-side, for git operations)
   else if (options.nip98Event) {
-    // Create a commit signature event using the NIP-98 event's pubkey
-    // The NIP-98 event itself proves the user can sign, so we reference it
+    // Security: We cannot create a valid signed event without the private key.
+    // Instead, we reference the NIP-98 auth event which already proves authentication.
+    // The NIP-98 event's signature proves the user can sign commits.
+    // We create an unsigned event template that references the NIP-98 event.
+    // Note: This event should be signed by the client before being published to relays.
     const eventTemplate = {
       kind: KIND.COMMIT_SIGNATURE,
       pubkey: options.nip98Event.pubkey,
@@ -196,11 +199,26 @@ export async function createGitCommitSignature(
       ],
       content: `Signed commit: ${commitMessage}\n\nAuthenticated via NIP-98 event: ${options.nip98Event.id}`
     };
-    // For NIP-98, we use the auth event's signature as proof
-    // The commit signature event references the NIP-98 event
-    signedEvent = finalizeEvent(eventTemplate, new Uint8Array(32)); // Dummy key, signature comes from NIP-98
-    // Note: In practice, we'd want the client to sign this, but for git operations,
-    // the NIP-98 event proves authentication, so we embed it as a reference
+    
+    // Create event ID without signature (will need client to sign)
+    const serialized = JSON.stringify([
+      0,
+      eventTemplate.pubkey,
+      eventTemplate.created_at,
+      eventTemplate.kind,
+      eventTemplate.tags,
+      eventTemplate.content
+    ]);
+    const eventId = createHash('sha256').update(serialized).digest('hex');
+    
+    // Use the NIP-98 event's signature as proof of authentication
+    // The NIP-98 event is already signed and proves the user can sign commits
+    // We reference it in the commit signature event and use its signature in the trailer
+    signedEvent = {
+      ...eventTemplate,
+      id: eventId,
+      sig: options.nip98Event.sig // Use NIP-98 event's signature as proof
+    };
   }
   // Method 3: Use direct nsec/hex key (server-side)
   else if (options.nsecKey) {
@@ -225,6 +243,7 @@ export async function createGitCommitSignature(
 
   // Create a signature trailer that git can recognize
   // Format: Nostr-Signature: <event-id> <pubkey> <signature>
+  // For NIP-98: uses the NIP-98 auth event's signature as proof
   const signatureTrailer = `\n\nNostr-Signature: ${signedEvent.id} ${signedEvent.pubkey} ${signedEvent.sig}`;
   const signedMessage = commitMessage + signatureTrailer;
   

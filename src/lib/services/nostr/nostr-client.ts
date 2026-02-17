@@ -6,6 +6,7 @@ import type { NostrEvent, NostrFilter } from '../../types/nostr.js';
 import logger from '../logger.js';
 import { isNIP07Available, getPublicKeyWithNIP07, signEventWithNIP07 } from './nip07-signer.js';
 import { shouldUseTor, getTorProxy } from '../../utils/tor.js';
+import { eventCache } from './event-cache.js';
 
 // Polyfill WebSocket for Node.js environments (lazy initialization)
 // Note: The 'module' import warning in browser builds is expected and harmless.
@@ -192,6 +193,13 @@ export class NostrClient {
   }
 
   async fetchEvents(filters: NostrFilter[]): Promise<NostrEvent[]> {
+    // Check cache first
+    const cached = eventCache.get(filters);
+    if (cached !== null) {
+      logger.debug({ filters, cachedCount: cached.length }, 'Returning cached events');
+      return cached;
+    }
+    
     const events: NostrEvent[] = [];
     
     // Fetch from all relays in parallel
@@ -212,7 +220,17 @@ export class NostrClient {
       }
     }
     
-    return Array.from(uniqueEvents.values());
+    const finalEvents = Array.from(uniqueEvents.values());
+    
+    // Cache the results (use longer TTL for successful fetches)
+    if (finalEvents.length > 0 || results.some(r => r.status === 'fulfilled')) {
+      // Cache successful fetches for 5 minutes, empty results for 1 minute
+      const ttl = finalEvents.length > 0 ? 5 * 60 * 1000 : 60 * 1000;
+      eventCache.set(filters, finalEvents, ttl);
+      logger.debug({ filters, eventCount: finalEvents.length, ttl }, 'Cached events');
+    }
+    
+    return finalEvents;
   }
 
   private async fetchFromRelay(relay: string, filters: NostrFilter[]): Promise<NostrEvent[]> {
@@ -367,6 +385,13 @@ export class NostrClient {
     });
     
     await Promise.allSettled(promises);
+    
+    // Invalidate cache for events from this pubkey (new event published)
+    // This ensures fresh data on next fetch
+    if (success.length > 0) {
+      eventCache.invalidatePubkey(event.pubkey);
+      logger.debug({ eventId: event.id, pubkey: event.pubkey }, 'Invalidated cache after event publish');
+    }
     
     return { success, failed };
   }

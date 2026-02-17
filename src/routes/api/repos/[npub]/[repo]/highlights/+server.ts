@@ -13,7 +13,7 @@ import type { NostrEvent } from '$lib/types/nostr.js';
 import { combineRelays } from '$lib/config.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
-import logger from '$lib/services/logger.js';
+import { handleApiError, handleValidationError } from '$lib/utils/error-handler.js';
 
 const highlightsService = new HighlightsService(DEFAULT_NOSTR_RELAYS);
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
@@ -28,11 +28,11 @@ export const GET: RequestHandler = async ({ params, url }) => {
   const prAuthor = url.searchParams.get('prAuthor');
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'getHighlights' });
   }
 
   if (!prId || !prAuthor) {
-    return error(400, 'Missing prId or prAuthor parameter');
+    return handleValidationError('Missing prId or prAuthor parameter', { operation: 'getHighlights', npub, repo });
   }
 
   try {
@@ -41,7 +41,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
     try {
       repoOwnerPubkey = requireNpubHex(npub);
     } catch {
-      return error(400, 'Invalid npub format');
+      return handleValidationError('Invalid npub format', { operation: 'getHighlights', npub });
     }
 
     // Decode prAuthor if it's an npub
@@ -63,8 +63,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
       comments: prComments
     });
   } catch (err) {
-    logger.error({ error: err, npub, repo }, 'Error fetching highlights');
-    return error(500, err instanceof Error ? err.message : 'Failed to fetch highlights');
+    return handleApiError(err, { operation: 'getHighlights', npub, repo, prId }, 'Failed to fetch highlights');
   }
 };
 
@@ -76,7 +75,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
   const { npub, repo } = params;
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'createHighlight' });
   }
 
   try {
@@ -84,20 +83,20 @@ export const POST: RequestHandler = async ({ params, request }) => {
     const { type, event, userPubkey } = body;
 
     if (!type || !event || !userPubkey) {
-      return error(400, 'Missing type, event, or userPubkey in request body');
+      return handleValidationError('Missing type, event, or userPubkey in request body', { operation: 'createHighlight', npub, repo });
     }
 
     if (type !== 'highlight' && type !== 'comment') {
-      return error(400, 'Type must be "highlight" or "comment"');
+      return handleValidationError('Type must be "highlight" or "comment"', { operation: 'createHighlight', npub, repo });
     }
 
     // Verify the event is properly signed
     if (!event.sig || !event.id) {
-      return error(400, 'Invalid event: missing signature or ID');
+      return handleValidationError('Invalid event: missing signature or ID', { operation: 'createHighlight', npub, repo });
     }
 
     if (!verifyEvent(event)) {
-      return error(400, 'Invalid event signature');
+      return handleValidationError('Invalid event signature', { operation: 'createHighlight', npub, repo });
     }
 
     // Get user's relays and publish
@@ -112,7 +111,6 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     return json({ success: true, event, published: result });
   } catch (err) {
-    logger.error({ error: err, npub, repo }, 'Error creating highlight/comment');
-    return error(500, err instanceof Error ? err.message : 'Failed to create highlight/comment');
+    return handleApiError(err, { operation: 'createHighlight', npub, repo }, 'Failed to create highlight/comment');
   }
 };

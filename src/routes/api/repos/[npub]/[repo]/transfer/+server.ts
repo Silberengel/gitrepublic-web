@@ -13,7 +13,7 @@ import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
 import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
-import logger from '$lib/services/logger.js';
+import { handleApiError, handleValidationError, handleAuthError, handleAuthorizationError } from '$lib/utils/error-handler.js';
 
 const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
@@ -25,7 +25,7 @@ export const GET: RequestHandler = async ({ params }) => {
   const { npub, repo } = params;
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'getOwnership' });
   }
 
   try {
@@ -34,7 +34,7 @@ export const GET: RequestHandler = async ({ params }) => {
     try {
       originalOwnerPubkey = requireNpubHex(npub);
     } catch {
-      return error(400, 'Invalid npub format');
+      return handleValidationError('Invalid npub format', { operation: 'getOwnership', npub });
     }
 
     // Get current owner (may be different if transferred)
@@ -69,8 +69,7 @@ export const GET: RequestHandler = async ({ params }) => {
       })
     });
   } catch (err) {
-    logger.error({ error: err, npub, repo }, 'Error fetching ownership info');
-    return error(500, err instanceof Error ? err.message : 'Failed to fetch ownership info');
+    return handleApiError(err, { operation: 'getOwnership', npub, repo }, 'Failed to fetch ownership info');
   }
 };
 
@@ -82,7 +81,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
   const { npub, repo } = params;
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'transferOwnership' });
   }
 
   try {
@@ -90,16 +89,16 @@ export const POST: RequestHandler = async ({ params, request }) => {
     const { transferEvent, userPubkey } = body;
 
     if (!transferEvent || !userPubkey) {
-      return error(400, 'Missing transferEvent or userPubkey in request body');
+      return handleValidationError('Missing transferEvent or userPubkey in request body', { operation: 'transferOwnership', npub, repo });
     }
 
     // Verify the event is properly signed
     if (!transferEvent.sig || !transferEvent.id) {
-      return error(400, 'Invalid event: missing signature or ID');
+      return handleValidationError('Invalid event: missing signature or ID', { operation: 'transferOwnership', npub, repo });
     }
 
     if (!verifyEvent(transferEvent)) {
-      return error(400, 'Invalid event signature');
+      return handleValidationError('Invalid event signature', { operation: 'transferOwnership', npub, repo });
     }
 
     // Decode npub to get original owner pubkey
@@ -107,7 +106,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
     try {
       originalOwnerPubkey = requireNpubHex(npub);
     } catch {
-      return error(400, 'Invalid npub format');
+      return handleValidationError('Invalid npub format', { operation: 'transferOwnership', npub });
     }
 
     // Verify user is the current owner
@@ -118,24 +117,24 @@ export const POST: RequestHandler = async ({ params, request }) => {
     );
 
     if (!canTransfer) {
-      return error(403, 'Only the current repository owner can transfer ownership');
+      return handleAuthorizationError('Only the current repository owner can transfer ownership', { operation: 'transferOwnership', npub, repo });
     }
 
     // Verify the transfer event is from the current owner
     if (transferEvent.pubkey !== userPubkey) {
-      return error(403, 'Transfer event must be signed by the current owner');
+      return handleAuthorizationError('Transfer event must be signed by the current owner', { operation: 'transferOwnership', npub, repo });
     }
 
     // Verify it's an ownership transfer event
     if (transferEvent.kind !== KIND.OWNERSHIP_TRANSFER) {
-      return error(400, `Event must be kind ${KIND.OWNERSHIP_TRANSFER} (ownership transfer)`);
+      return handleValidationError(`Event must be kind ${KIND.OWNERSHIP_TRANSFER} (ownership transfer)`, { operation: 'transferOwnership', npub, repo });
     }
 
     // Verify the 'a' tag references this repo
     const aTag = transferEvent.tags.find(t => t[0] === 'a');
     const expectedRepoTag = `${KIND.REPO_ANNOUNCEMENT}:${originalOwnerPubkey}:${repo}`;
     if (!aTag || aTag[1] !== expectedRepoTag) {
-      return error(400, "Transfer event 'a' tag does not match this repository");
+      return handleValidationError("Transfer event 'a' tag does not match this repository", { operation: 'transferOwnership', npub, repo });
     }
 
     // Get user's relays and publish
@@ -158,7 +157,6 @@ export const POST: RequestHandler = async ({ params, request }) => {
       message: 'Ownership transfer initiated successfully'
     });
   } catch (err) {
-    logger.error({ error: err, npub, repo }, 'Error transferring ownership');
-    return error(500, err instanceof Error ? err.message : 'Failed to transfer ownership');
+    return handleApiError(err, { operation: 'transferOwnership', npub, repo }, 'Failed to transfer ownership');
   }
 };

@@ -16,6 +16,7 @@ import { existsSync } from 'fs';
 import logger from '$lib/services/logger.js';
 import { join } from 'path';
 import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
+import { handleApiError, handleValidationError, handleNotFoundError } from '$lib/utils/error-handler.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -26,7 +27,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
   const { npub, repo } = params;
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'verifyRepo' });
   }
 
   try {
@@ -35,13 +36,13 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
     try {
       ownerPubkey = requireNpubHex(npub);
     } catch {
-      return error(400, 'Invalid npub format');
+      return handleValidationError('Invalid npub format', { operation: 'verifyRepo', npub });
     }
 
     // Check if repository exists (using FileManager's internal method)
     const repoPath = join(repoRoot, npub, `${repo}.git`);
     if (!existsSync(repoPath)) {
-      return error(404, 'Repository not found');
+      return handleNotFoundError('Repository not found', { operation: 'verifyRepo', npub, repo });
     }
 
     // Fetch the repository announcement
@@ -143,7 +144,6 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
       });
     }
   } catch (err) {
-    logger.error({ error: err, npub, repo }, 'Error verifying repository');
-    return error(500, err instanceof Error ? err.message : 'Failed to verify repository');
+    return handleApiError(err, { operation: 'verifyRepo', npub, repo }, 'Failed to verify repository');
   }
 };

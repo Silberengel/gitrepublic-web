@@ -7,7 +7,6 @@ import { existsSync, mkdirSync, writeFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { readdir } from 'fs/promises';
 import { spawn } from 'child_process';
-import { promisify } from 'util';
 import type { NostrEvent } from '../../types/nostr.js';
 import { GIT_DOMAIN } from '../../config.js';
 import { generateVerificationFile, VERIFICATION_FILE_PATH } from '../nostr/repo-verification.js';

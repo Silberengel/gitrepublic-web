@@ -7,15 +7,15 @@ import type { RequestHandler } from './$types';
 import { IssuesService } from '$lib/services/nostr/issues-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
-import logger from '$lib/services/logger.js';
 import { requireNpubHex } from '$lib/utils/npub-utils.js';
+import { handleApiError, handleValidationError, handleNotFoundError, handleAuthorizationError } from '$lib/utils/error-handler.js';
 
 export const GET: RequestHandler = async ({ params, url, request }) => {
   const { npub, repo } = params;
   const userPubkey = url.searchParams.get('userPubkey') || request.headers.get('x-user-pubkey');
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'getIssues' });
   }
 
   try {
@@ -24,14 +24,14 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     try {
       repoOwnerPubkey = requireNpubHex(npub);
     } catch {
-      return error(400, 'Invalid npub format');
+      return handleValidationError('Invalid npub format', { operation: 'getIssues', npub });
     }
 
     // Check repository privacy
     const { checkRepoAccess } = await import('$lib/utils/repo-privacy.js');
     const access = await checkRepoAccess(npub, repo, userPubkey || null);
     if (!access.allowed) {
-      return error(403, access.error || 'Access denied');
+      return handleAuthorizationError(access.error || 'Access denied', { operation: 'getIssues', npub, repo });
     }
 
     const issuesService = new IssuesService(DEFAULT_NOSTR_RELAYS);
@@ -39,8 +39,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     
     return json(issues);
   } catch (err) {
-    logger.error({ error: err, npub, repo }, 'Error fetching issues');
-    return error(500, err instanceof Error ? err.message : 'Failed to fetch issues');
+    return handleApiError(err, { operation: 'getIssues', npub, repo }, 'Failed to fetch issues');
   }
 };
 
@@ -50,7 +49,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
   const { npub, repo } = params;
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'createIssue' });
   }
 
   try {
@@ -58,12 +57,12 @@ export const POST: RequestHandler = async ({ params, request }) => {
     const { event } = body;
 
     if (!event) {
-      return error(400, 'Missing event in request body');
+      return handleValidationError('Missing event in request body', { operation: 'createIssue', npub, repo });
     }
 
     // Verify the event is properly signed (basic check)
     if (!event.sig || !event.id) {
-      return error(400, 'Invalid event: missing signature or ID');
+      return handleValidationError('Invalid event: missing signature or ID', { operation: 'createIssue', npub, repo });
     }
 
     // Publish the event to relays
@@ -71,12 +70,11 @@ export const POST: RequestHandler = async ({ params, request }) => {
     const result = await issuesService['nostrClient'].publishEvent(event, DEFAULT_NOSTR_RELAYS);
     
     if (result.failed.length > 0 && result.success.length === 0) {
-      return error(500, 'Failed to publish issue to all relays');
+      return handleApiError(new Error('Failed to publish issue to all relays'), { operation: 'createIssue', npub, repo }, 'Failed to publish issue to all relays');
     }
 
     return json({ success: true, event, published: result });
   } catch (err) {
-    logger.error({ error: err, npub, repo }, 'Error creating issue');
-    return error(500, err instanceof Error ? err.message : 'Failed to create issue');
+    return handleApiError(err, { operation: 'createIssue', npub, repo }, 'Failed to create issue');
   }
 };

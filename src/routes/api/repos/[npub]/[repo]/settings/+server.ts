@@ -14,6 +14,7 @@ import { signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import logger from '$lib/services/logger.js';
 import { OwnershipTransferService } from '$lib/services/nostr/ownership-transfer-service.js';
+import { handleApiError, handleValidationError, handleNotFoundError, handleAuthError, handleAuthorizationError } from '$lib/utils/error-handler.js';
 
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
@@ -27,7 +28,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   const userPubkey = url.searchParams.get('userPubkey') || request.headers.get('x-user-pubkey');
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'getSettings' });
   }
 
   try {
@@ -36,19 +37,19 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     try {
       repoOwnerPubkey = requireNpubHex(npub);
     } catch {
-      return error(400, 'Invalid npub format');
+      return handleValidationError('Invalid npub format', { operation: 'getSettings', npub });
     }
 
     // Check if user is owner
     if (!userPubkey) {
-      return error(401, 'Authentication required');
+      return handleAuthError('Authentication required', { operation: 'getSettings', npub, repo });
     }
 
     const userPubkeyHex = decodeNpubToHex(userPubkey) || userPubkey;
 
     const currentOwner = await ownershipTransferService.getCurrentOwner(repoOwnerPubkey, repo);
     if (userPubkeyHex !== currentOwner) {
-      return error(403, 'Only the repository owner can access settings');
+      return handleAuthorizationError('Only the repository owner can access settings', { operation: 'getSettings', npub, repo });
     }
 
     // Get repository announcement
@@ -62,7 +63,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     ]);
 
     if (events.length === 0) {
-      return error(404, 'Repository announcement not found');
+      return handleNotFoundError('Repository announcement not found', { operation: 'getSettings', npub, repo });
     }
 
     const announcement = events[0];
@@ -89,8 +90,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       npub
     });
   } catch (err) {
-    logger.error({ error: err, npub, repo }, 'Error getting repository settings');
-    return error(500, err instanceof Error ? err.message : 'Failed to get repository settings');
+    return handleApiError(err, { operation: 'getSettings', npub, repo }, 'Failed to get repository settings');
   }
 };
 
@@ -101,7 +101,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
   const { npub, repo } = params;
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'updateSettings' });
   }
 
   try {
@@ -109,7 +109,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
     const { userPubkey, name, description, cloneUrls, maintainers, isPrivate } = body;
 
     if (!userPubkey) {
-      return error(401, 'Authentication required');
+      return handleAuthError('Authentication required', { operation: 'updateSettings', npub, repo });
     }
 
     // Decode npub to get pubkey
@@ -117,7 +117,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
     try {
       repoOwnerPubkey = requireNpubHex(npub);
     } catch {
-      return error(400, 'Invalid npub format');
+      return handleValidationError('Invalid npub format', { operation: 'updateSettings', npub });
     }
 
     const userPubkeyHex = decodeNpubToHex(userPubkey) || userPubkey;
@@ -125,7 +125,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
     // Check if user is owner
     const currentOwner = await ownershipTransferService.getCurrentOwner(repoOwnerPubkey, repo);
     if (userPubkeyHex !== currentOwner) {
-      return error(403, 'Only the repository owner can update settings');
+      return handleAuthorizationError('Only the repository owner can update settings', { operation: 'updateSettings', npub, repo });
     }
 
     // Get existing announcement
@@ -139,7 +139,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
     ]);
 
     if (events.length === 0) {
-      return error(404, 'Repository announcement not found');
+      return handleNotFoundError('Repository announcement not found', { operation: 'updateSettings', npub, repo });
     }
 
     const existingAnnouncement = events[0];
@@ -225,7 +225,6 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     return json({ success: true, event: signedEvent });
   } catch (err) {
-    logger.error({ error: err, npub, repo }, 'Error updating repository settings');
-    return error(500, err instanceof Error ? err.message : 'Failed to update repository settings');
+    return handleApiError(err, { operation: 'updateSettings', npub, repo }, 'Failed to update repository settings');
   }
 };

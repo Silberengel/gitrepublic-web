@@ -5,7 +5,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { FileManager } from '$lib/services/git/file-manager.js';
-import logger from '$lib/services/logger.js';
+import { handleApiError, handleValidationError, handleNotFoundError, handleAuthorizationError } from '$lib/utils/error-handler.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -18,25 +18,24 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   const userPubkey = url.searchParams.get('userPubkey') || request.headers.get('x-user-pubkey');
 
   if (!npub || !repo || !fromRef) {
-    return error(400, 'Missing npub, repo, or from parameter');
+    return handleValidationError('Missing npub, repo, or from parameter', { operation: 'getDiff' });
   }
 
   try {
     if (!fileManager.repoExists(npub, repo)) {
-      return error(404, 'Repository not found');
+      return handleNotFoundError('Repository not found', { operation: 'getDiff', npub, repo });
     }
 
     // Check repository privacy
     const { checkRepoAccess } = await import('$lib/utils/repo-privacy.js');
     const access = await checkRepoAccess(npub, repo, userPubkey || null);
     if (!access.allowed) {
-      return error(403, access.error || 'Access denied');
+      return handleAuthorizationError(access.error || 'Access denied', { operation: 'getDiff', npub, repo });
     }
 
     const diffs = await fileManager.getDiff(npub, repo, fromRef, toRef, filePath);
     return json(diffs);
   } catch (err) {
-    logger.error({ error: err, npub, repo, fromRef, toRef }, 'Error getting diff');
-    return error(500, err instanceof Error ? err.message : 'Failed to get diff');
+    return handleApiError(err, { operation: 'getDiff', npub, repo, fromRef, toRef }, 'Failed to get diff');
   }
 };

@@ -10,7 +10,7 @@ import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
 import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
-import logger from '$lib/services/logger.js';
+import { handleApiError, handleValidationError, handleNotFoundError, handleAuthError, handleAuthorizationError } from '$lib/utils/error-handler.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -20,19 +20,18 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
   const { npub, repo } = params;
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'getBranches' });
   }
 
   try {
     if (!fileManager.repoExists(npub, repo)) {
-      return error(404, 'Repository not found');
+      return handleNotFoundError('Repository not found', { operation: 'getBranches', npub, repo });
     }
 
     const branches = await fileManager.getBranches(npub, repo);
     return json(branches);
   } catch (err) {
-    logger.error({ error: err, npub, repo }, 'Error getting branches');
-    return error(500, err instanceof Error ? err.message : 'Failed to get branches');
+    return handleApiError(err, { operation: 'getBranches', npub, repo }, 'Failed to get branches');
   }
 };
 
@@ -40,7 +39,7 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
   const { npub, repo } = params;
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'createBranch' });
   }
 
   let branchName: string | undefined;
@@ -51,15 +50,15 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
     ({ branchName, fromBranch, userPubkey } = body);
 
     if (!branchName) {
-      return error(400, 'Missing branchName parameter');
+      return handleValidationError('Missing branchName parameter', { operation: 'createBranch', npub, repo });
     }
 
     if (!userPubkey) {
-      return error(401, 'Authentication required. Please provide userPubkey.');
+      return handleAuthError('Authentication required. Please provide userPubkey.', { operation: 'createBranch', npub, repo });
     }
 
     if (!fileManager.repoExists(npub, repo)) {
-      return error(404, 'Repository not found');
+      return handleNotFoundError('Repository not found', { operation: 'createBranch', npub, repo });
     }
 
     // Check if user is a maintainer
@@ -67,7 +66,7 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
     try {
       repoOwnerPubkey = requireNpubHex(npub);
     } catch {
-      return error(400, 'Invalid npub format');
+      return handleValidationError('Invalid npub format', { operation: 'createBranch', npub });
     }
 
     // Convert userPubkey to hex if needed
@@ -75,13 +74,12 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
 
     const isMaintainer = await maintainerService.isMaintainer(userPubkeyHex, repoOwnerPubkey, repo);
     if (!isMaintainer) {
-      return error(403, 'Only repository maintainers can create branches. Please submit a pull request instead.');
+      return handleAuthorizationError('Only repository maintainers can create branches. Please submit a pull request instead.', { operation: 'createBranch', npub, repo });
     }
 
     await fileManager.createBranch(npub, repo, branchName, fromBranch || 'main');
     return json({ success: true, message: 'Branch created successfully' });
   } catch (err) {
-    logger.error({ error: err, npub, repo, branchName }, 'Error creating branch');
-    return error(500, err instanceof Error ? err.message : 'Failed to create branch');
+    return handleApiError(err, { operation: 'createBranch', npub, repo, branchName }, 'Failed to create branch');
   }
 };

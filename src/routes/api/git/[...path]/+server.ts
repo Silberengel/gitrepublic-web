@@ -6,9 +6,8 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { RepoManager } from '$lib/services/git/repo-manager.js';
-import { nip19 } from 'nostr-tools';
 import { requireNpubHex } from '$lib/utils/npub-utils.js';
-import { spawn, execSync } from 'child_process';
+import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
@@ -43,20 +42,58 @@ const GIT_HTTP_BACKEND_PATHS = [
 
 /**
  * Find git-http-backend executable
+ * Security: Uses spawn instead of execSync to prevent command injection
  */
-function findGitHttpBackend(): string | null {
+async function findGitHttpBackend(): Promise<string | null> {
   for (const path of GIT_HTTP_BACKEND_PATHS) {
     if (existsSync(path)) {
       return path;
     }
   }
-  // Try to find it via which/whereis
+  // Try to find it via which/whereis using spawn (safer than execSync)
   try {
-    const result = execSync('which git-http-backend 2>/dev/null || whereis -b git-http-backend 2>/dev/null', { encoding: 'utf-8' });
-    const lines = result.trim().split(/\s+/);
-    for (const line of lines) {
-      if (line.includes('git-http-backend') && existsSync(line)) {
-        return line;
+    // Try 'which' first
+    try {
+      const whichResult = await new Promise<string>((resolve, reject) => {
+        const proc = spawn('which', ['git-http-backend'], { stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '';
+        proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+        proc.on('close', (code) => {
+          if (code === 0 && stdout.trim()) {
+            resolve(stdout.trim());
+          } else {
+            reject(new Error('not found'));
+          }
+        });
+        proc.on('error', reject);
+      });
+      if (whichResult && existsSync(whichResult)) {
+        return whichResult;
+      }
+    } catch {
+      // Try 'whereis' as fallback
+      try {
+        const whereisResult = await new Promise<string>((resolve, reject) => {
+          const proc = spawn('whereis', ['-b', 'git-http-backend'], { stdio: ['ignore', 'pipe', 'pipe'] });
+          let stdout = '';
+          proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+          proc.on('close', (code) => {
+            if (code === 0 && stdout.trim()) {
+              resolve(stdout.trim());
+            } else {
+              reject(new Error('not found'));
+            }
+          });
+          proc.on('error', reject);
+        });
+        const lines = whereisResult.trim().split(/\s+/);
+        for (const line of lines) {
+          if (line.includes('git-http-backend') && existsSync(line)) {
+            return line;
+          }
+        }
+      } catch {
+        // Ignore errors
       }
     }
   } catch {
@@ -90,6 +127,8 @@ async function getRepoAnnouncement(npub: string, repoName: string): Promise<Nost
 
 /**
  * Extract clone URLs from repository announcement
+ * Note: This duplicates logic from RepoManager.extractCloneUrls, but is kept here
+ * for performance (avoiding instantiation of RepoManager just for this)
  */
 function extractCloneUrls(event: NostrEvent): string[] {
   const urls: string[] = [];
@@ -197,7 +236,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   }
 
   // Find git-http-backend
-  const gitHttpBackend = findGitHttpBackend();
+  const gitHttpBackend = await findGitHttpBackend();
   if (!gitHttpBackend) {
     return error(500, 'git-http-backend not found. Please install git.');
   }
@@ -460,7 +499,7 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
   }
 
   // Find git-http-backend
-  const gitHttpBackend = findGitHttpBackend();
+  const gitHttpBackend = await findGitHttpBackend();
   if (!gitHttpBackend) {
     return error(500, 'git-http-backend not found. Please install git.');
   }

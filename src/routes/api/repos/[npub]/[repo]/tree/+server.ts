@@ -9,7 +9,7 @@ import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
 import { requireNpubHex } from '$lib/utils/npub-utils.js';
-import logger from '$lib/services/logger.js';
+import { handleApiError, handleValidationError, handleNotFoundError, handleAuthorizationError } from '$lib/utils/error-handler.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -22,12 +22,12 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   const userPubkey = url.searchParams.get('userPubkey') || request.headers.get('x-user-pubkey');
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'listFiles' });
   }
 
   try {
     if (!fileManager.repoExists(npub, repo)) {
-      return error(404, 'Repository not found');
+      return handleNotFoundError('Repository not found', { operation: 'listFiles', npub, repo });
     }
 
     // Check repository privacy
@@ -35,18 +35,17 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     try {
       repoOwnerPubkey = requireNpubHex(npub);
     } catch {
-      return error(400, 'Invalid npub format');
+      return handleValidationError('Invalid npub format', { operation: 'listFiles', npub });
     }
 
     const canView = await maintainerService.canView(userPubkey || null, repoOwnerPubkey, repo);
     if (!canView) {
-      return error(403, 'This repository is private. Only owners and maintainers can view it.');
+      return handleAuthorizationError('This repository is private. Only owners and maintainers can view it.', { operation: 'listFiles', npub, repo });
     }
 
     const files = await fileManager.listFiles(npub, repo, ref, path);
     return json(files);
   } catch (err) {
-    logger.error({ error: err, npub, repo, path, ref }, 'Error listing files');
-    return error(500, err instanceof Error ? err.message : 'Failed to list files');
+    return handleApiError(err, { operation: 'listFiles', npub, repo, path, ref }, 'Failed to list files');
   }
 };

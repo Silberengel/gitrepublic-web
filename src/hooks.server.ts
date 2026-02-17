@@ -20,7 +20,7 @@ let pollingService: RepoPollingService | null = null;
 if (typeof process !== 'undefined') {
   pollingService = new RepoPollingService(DEFAULT_NOSTR_RELAYS, repoRoot, domain);
   pollingService.start();
-  logger.info('Started repo polling service');
+  logger.info({ service: 'repo-polling', relays: DEFAULT_NOSTR_RELAYS.length }, 'Started repo polling service');
 }
 
 export const handle: Handle = async ({ event, resolve }) => {

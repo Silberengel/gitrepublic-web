@@ -13,16 +13,17 @@ import { nip19 } from 'nostr-tools';
 import { signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
 import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
 import { OwnershipTransferService } from '$lib/services/nostr/ownership-transfer-service.js';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { rm } from 'fs/promises';
+import { join, resolve } from 'path';
+import simpleGit from 'simple-git';
+import { isValidBranchName } from '$lib/utils/security.js';
 import { ResourceLimits } from '$lib/services/security/resource-limits.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 import { ForkCountService } from '$lib/services/nostr/fork-count-service.js';
 import logger from '$lib/services/logger.js';
+import { handleApiError, handleValidationError, handleNotFoundError, handleAuthorizationError } from '$lib/utils/error-handler.js';
 
-const execAsync = promisify(exec);
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const repoManager = new RepoManager(repoRoot);
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
@@ -123,6 +124,12 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     // Check if original repo exists
     const originalRepoPath = join(repoRoot, npub, `${repo}.git`);
+    // Security: Ensure resolved path is within repoRoot
+    const resolvedOriginalPath = resolve(originalRepoPath).replace(/\\/g, '/');
+    const resolvedRoot = resolve(repoRoot).replace(/\\/g, '/');
+    if (!resolvedOriginalPath.startsWith(resolvedRoot + '/')) {
+      return error(403, 'Invalid repository path');
+    }
     if (!existsSync(originalRepoPath)) {
       return error(404, 'Original repository not found');
     }
@@ -145,11 +152,16 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     // Check if fork already exists
     const forkRepoPath = join(repoRoot, userNpub, `${forkRepoName}.git`);
+    // Security: Ensure resolved path is within repoRoot
+    const resolvedForkPath = resolve(forkRepoPath).replace(/\\/g, '/');
+    if (!resolvedForkPath.startsWith(resolvedRoot + '/')) {
+      return error(403, 'Invalid fork repository path');
+    }
     if (existsSync(forkRepoPath)) {
       return error(409, 'Fork already exists');
     }
 
-    // Clone the repository
+    // Clone the repository using simple-git (safer than shell commands)
     const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
     auditLogger.logRepoFork(
       userPubkeyHex,
@@ -158,7 +170,8 @@ export const POST: RequestHandler = async ({ params, request }) => {
       'success'
     );
     
-    await execAsync(`git clone --bare "${originalRepoPath}" "${forkRepoPath}"`);
+    const git = simpleGit();
+    await git.clone(originalRepoPath, forkRepoPath, ['--bare']);
     
     // Invalidate resource limit cache after creating repo
     resourceLimits.invalidateCache(userNpub);
@@ -263,7 +276,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
     if (publishResult.success.length === 0) {
       // Clean up repo if announcement failed
       logger.error({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}`, failed: publishResult.failed }, 'Fork announcement failed after all retries. Cleaning up repository.');
-      await execAsync(`rm -rf "${forkRepoPath}"`).catch(() => {});
+      await rm(forkRepoPath, { recursive: true, force: true }).catch(() => {});
       const errorDetails = `All relays failed: ${publishResult.failed.map(f => `${f.relay}: ${f.error}`).join('; ')}`;
       return json({
         success: false,
@@ -290,7 +303,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
     if (ownershipPublishResult.success.length === 0) {
       // Clean up repo if ownership proof failed
       logger.error({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}`, failed: ownershipPublishResult.failed }, 'Ownership transfer event failed after all retries. Cleaning up repository and publishing deletion request.');
-      await execAsync(`rm -rf "${forkRepoPath}"`).catch(() => {});
+      await rm(forkRepoPath, { recursive: true, force: true }).catch(() => {});
       
       // Publish deletion request (NIP-09) for the announcement since it's invalid without ownership proof
       logger.info({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}` }, 'Publishing deletion request for invalid fork announcement...');
@@ -359,11 +372,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
       message: `Repository forked successfully! Published to ${publishResult.success.length} relay(s) for announcement and ${ownershipPublishResult.success.length} relay(s) for ownership proof.`
     });
   } catch (err) {
-    // Security: Sanitize error messages to prevent leaking sensitive data
-    const sanitizedError = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : 'Failed to fork repository';
-    const context = npub && repo ? `[${npub}/${repo}]` : '[unknown]';
-    logger.error({ error: sanitizedError, npub, repo }, `[Fork] ${context} Error forking repository`);
-    return error(500, sanitizedError);
+    return handleApiError(err, { operation: 'fork', npub, repo }, 'Failed to fork repository');
   }
 };
 
@@ -440,10 +449,6 @@ export const GET: RequestHandler = async ({ params }) => {
       forkCount
     });
   } catch (err) {
-    // Security: Sanitize error messages
-    const sanitizedError = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : 'Failed to get fork information';
-    const context = npub && repo ? `[${npub}/${repo}]` : '[unknown]';
-    logger.error({ error: sanitizedError, npub, repo }, `[Fork] ${context} Error getting fork information`);
-    return error(500, sanitizedError);
+    return handleApiError(err, { operation: 'getForkInfo', npub, repo }, 'Failed to get fork information');
   }
 };

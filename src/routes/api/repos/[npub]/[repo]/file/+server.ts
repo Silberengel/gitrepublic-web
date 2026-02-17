@@ -14,6 +14,7 @@ import { auditLogger } from '$lib/services/security/audit-logger.js';
 import logger from '$lib/services/logger.js';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
+import { handleApiError, handleValidationError, handleNotFoundError } from '$lib/utils/error-handler.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -82,10 +83,7 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
       throw err;
     }
   } catch (err) {
-    // Security: Sanitize error messages to prevent leaking sensitive data
-    const sanitizedError = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : 'Failed to read file';
-    logger.error({ error: sanitizedError, npub, repo, filePath }, 'Error reading file');
-    return error(500, sanitizedError);
+    return handleApiError(err, { operation: 'readFile', npub, repo, filePath }, 'Failed to read file');
   }
 };
 
@@ -249,9 +247,6 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
       return error(400, 'Invalid action or missing content');
     }
   } catch (err) {
-    // Security: Sanitize error messages to prevent leaking sensitive data
-    const sanitizedError = err instanceof Error ? err.message.replace(/nsec[0-9a-z]+/gi, '[REDACTED]').replace(/[0-9a-f]{64}/g, '[REDACTED]') : 'Failed to write file';
-    logger.error({ error: sanitizedError, npub, repo, path }, 'Error writing file');
-    return error(500, sanitizedError);
+    return handleApiError(err, { operation: 'writeFile', npub, repo, filePath: path }, 'Failed to write file');
   }
 };

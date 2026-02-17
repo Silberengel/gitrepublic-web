@@ -8,7 +8,6 @@ import { readFile, readdir, stat } from 'fs/promises';
 import { join, dirname, normalize, resolve } from 'path';
 import { existsSync } from 'fs';
 import { spawn } from 'child_process';
-import { promisify } from 'util';
 import { RepoManager } from './repo-manager.js';
 import { createGitCommitSignature } from './commit-signer.js';
 import type { NostrEvent } from '../../types/nostr.js';
@@ -392,6 +391,7 @@ export class FileManager {
 
   /**
    * List files and directories in a repository at a given path
+   * Uses caching to reduce redundant git operations
    */
   async listFiles(npub: string, repoName: string, ref: string = 'HEAD', path: string = ''): Promise<FileEntry[]> {
     // Validate inputs
@@ -415,6 +415,13 @@ export class FileManager {
       throw new Error('Repository not found');
     }
 
+    // Check cache first (cache for 2 minutes)
+    const cacheKey = RepoCache.fileListKey(npub, repoName, ref, path);
+    const cached = repoCache.get<FileEntry[]>(cacheKey);
+    if (cached !== null) {
+      return cached;
+    }
+
     const git: SimpleGit = simpleGit(repoPath);
     
     try {
@@ -422,7 +429,10 @@ export class FileManager {
       const tree = await git.raw(['ls-tree', '-l', ref, path || '.']);
       
       if (!tree) {
-        return [];
+        const emptyResult: FileEntry[] = [];
+        // Cache empty result for shorter time (30 seconds)
+        repoCache.set(cacheKey, emptyResult, 30 * 1000);
+        return emptyResult;
       }
 
       const entries: FileEntry[] = [];
@@ -444,13 +454,18 @@ export class FileManager {
         }
       }
 
-      return entries.sort((a, b) => {
+      const sortedEntries = entries.sort((a, b) => {
         // Directories first, then files, both alphabetically
         if (a.type !== b.type) {
           return a.type === 'directory' ? -1 : 1;
         }
         return a.name.localeCompare(b.name);
       });
+
+      // Cache the result (cache for 2 minutes)
+      repoCache.set(cacheKey, sortedEntries, 2 * 60 * 1000);
+      
+      return sortedEntries;
     } catch (error) {
       logger.error({ error, repoPath, ref }, 'Error listing files');
       throw new Error(`Failed to list files: ${error instanceof Error ? error.message : String(error)}`);

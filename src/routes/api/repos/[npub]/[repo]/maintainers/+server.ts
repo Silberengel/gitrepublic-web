@@ -9,7 +9,7 @@ import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
 import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
-import logger from '$lib/services/logger.js';
+import { handleApiError, handleValidationError } from '$lib/utils/error-handler.js';
 
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
 
@@ -18,7 +18,7 @@ export const GET: RequestHandler = async ({ params, url }: { params: { npub?: st
   const userPubkey = url.searchParams.get('userPubkey');
 
   if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
+    return handleValidationError('Missing npub or repo parameter', { operation: 'getMaintainers' });
   }
 
   try {
@@ -27,7 +27,7 @@ export const GET: RequestHandler = async ({ params, url }: { params: { npub?: st
     try {
       repoOwnerPubkey = requireNpubHex(npub);
     } catch {
-      return error(400, 'Invalid npub format');
+      return handleValidationError('Invalid npub format', { operation: 'getMaintainers', npub });
     }
 
     const { maintainers, owner } = await maintainerService.getMaintainers(repoOwnerPubkey, repo);
@@ -47,7 +47,6 @@ export const GET: RequestHandler = async ({ params, url }: { params: { npub?: st
 
     return json({ maintainers, owner });
   } catch (err) {
-    logger.error({ error: err, npub, repo }, 'Error checking maintainers');
-    return error(500, err instanceof Error ? err.message : 'Failed to check maintainers');
+    return handleApiError(err, { operation: 'getMaintainers', npub, repo }, 'Failed to check maintainers');
   }
 };
