@@ -40,7 +40,7 @@
   });
 </script>
 
-<div class="container">
+<div class="container-wide">
   <header>
     <a href="/" class="back-link">← Back to Repositories</a>
     <h1>NIP-34 Documentation</h1>
@@ -61,56 +61,17 @@
 </div>
 
 <style>
-  .container {
-    max-width: 1000px;
-    margin: 0 auto;
-    padding: 2rem;
-  }
-
-  header {
-    margin-bottom: 2rem;
-    border-bottom: 1px solid #e5e7eb;
-    padding-bottom: 1rem;
-  }
-
-  .back-link {
-    color: #3b82f6;
-    text-decoration: none;
-    font-size: 0.875rem;
-    display: inline-block;
-    margin-bottom: 0.5rem;
-  }
-
-  .back-link:hover {
-    text-decoration: underline;
-  }
-
-  header h1 {
-    margin: 0 0 0.5rem 0;
-    font-size: 2rem;
-  }
-
   .subtitle {
-    color: #6b7280;
+    color: var(--text-muted);
     margin: 0;
   }
 
   .docs-content {
-    background: white;
+    background: var(--card-bg);
     padding: 2rem;
     border-radius: 0.5rem;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  }
-
-  .loading, .error {
-    text-align: center;
-    padding: 2rem;
-  }
-
-  .error {
-    color: #dc2626;
-    background: #fee2e2;
-    border-radius: 0.5rem;
+    border: 1px solid var(--border-color);
   }
 
   :global(.markdown-content) {
@@ -121,39 +82,42 @@
     font-size: 2rem;
     margin-top: 2rem;
     margin-bottom: 1rem;
-    border-bottom: 2px solid #e5e7eb;
+    border-bottom: 2px solid var(--border-color);
     padding-bottom: 0.5rem;
+    color: var(--text-primary);
   }
 
   :global(.markdown-content h2) {
     font-size: 1.5rem;
     margin-top: 1.5rem;
     margin-bottom: 0.75rem;
-    color: #1f2937;
+    color: var(--text-primary);
   }
 
   :global(.markdown-content h3) {
     font-size: 1.25rem;
     margin-top: 1.25rem;
     margin-bottom: 0.5rem;
-    color: #374151;
+    color: var(--text-primary);
   }
 
   :global(.markdown-content code) {
-    background: #f3f4f6;
+    background: var(--bg-secondary);
     padding: 0.125rem 0.25rem;
     border-radius: 0.25rem;
-    font-family: 'Courier New', monospace;
+    font-family: 'IBM Plex Mono', monospace;
     font-size: 0.875em;
+    color: var(--text-primary);
   }
 
   :global(.markdown-content pre) {
-    background: #1f2937;
-    color: #f9fafb;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
     padding: 1rem;
     border-radius: 0.5rem;
     overflow-x: auto;
     margin: 1rem 0;
+    border: 1px solid var(--border-color);
   }
 
   :global(.markdown-content pre code) {
@@ -176,10 +140,10 @@
   }
 
   :global(.markdown-content blockquote) {
-    border-left: 4px solid #3b82f6;
+    border-left: 4px solid var(--accent);
     padding-left: 1rem;
     margin: 1rem 0;
-    color: #6b7280;
+    color: var(--text-secondary);
   }
 
   :global(.markdown-content table) {
@@ -189,13 +153,18 @@
   }
 
   :global(.markdown-content th, .markdown-content td) {
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border-color);
     padding: 0.5rem;
     text-align: left;
   }
 
   :global(.markdown-content th) {
-    background: #f9fafb;
+    background: var(--bg-secondary);
     font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  :global(.markdown-content td) {
+    color: var(--text-primary);
   }
 </style>

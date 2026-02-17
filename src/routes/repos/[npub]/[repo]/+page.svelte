@@ -1797,15 +1797,15 @@
     justify-content: space-between;
     align-items: center;
     padding: 1rem 2rem;
-    border-bottom: 1px solid #e5e7eb;
-    background: white;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--card-bg);
   }
 
   .repo-banner {
     width: 100%;
     height: 300px;
     overflow: hidden;
-    background: #f3f4f6;
+    background: var(--bg-secondary);
     margin-bottom: 1rem;
   }
 
@@ -1839,21 +1839,21 @@
 
   .repo-description-header {
     margin: 0.25rem 0 0 0;
-    color: #666;
+    color: var(--text-secondary);
     font-size: 0.9rem;
   }
 
   .fork-badge {
     padding: 0.25rem 0.5rem;
-    background: #e0e7ff;
-    color: #3730a3;
+    background: var(--accent-light);
+    color: var(--accent);
     border-radius: 4px;
     font-size: 0.85rem;
     margin-left: 0.5rem;
   }
 
   .fork-badge a {
-    color: #3730a3;
+    color: var(--accent);
     text-decoration: none;
   }
 
@@ -1862,34 +1862,38 @@
   }
 
   .back-link {
-    color: #3b82f6;
+    color: var(--link-color);
     text-decoration: none;
     font-size: 0.875rem;
+    transition: color 0.2s ease;
   }
 
   .back-link:hover {
+    color: var(--link-hover);
     text-decoration: underline;
   }
 
   header h1 {
     margin: 0;
     font-size: 1.5rem;
+    color: var(--text-primary);
   }
 
   .npub {
-    color: #6b7280;
+    color: var(--text-muted);
     font-size: 0.875rem;
   }
 
   .docs-link {
-    color: #3b82f6;
+    color: var(--link-color);
     text-decoration: none;
     font-size: 1.25rem;
     margin-left: 0.5rem;
+    transition: color 0.2s ease;
   }
 
   .docs-link:hover {
-    opacity: 0.7;
+    color: var(--link-hover);
   }
 
   .header-right {
@@ -1900,29 +1904,33 @@
 
   .branch-select {
     padding: 0.5rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--input-border);
     border-radius: 0.25rem;
-    background: white;
+    background: var(--input-bg);
+    color: var(--text-primary);
+    font-family: 'IBM Plex Serif', serif;
   }
 
   .auth-status {
     font-size: 0.875rem;
-    color: #6b7280;
+    color: var(--text-muted);
   }
 
   .login-button,
   .logout-button {
     padding: 0.5rem 1rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--input-border);
     border-radius: 0.25rem;
-    background: white;
-    color: #374151;
+    background: var(--button-primary);
+    color: white;
     cursor: pointer;
     font-size: 0.875rem;
+    font-family: 'IBM Plex Serif', serif;
+    transition: background 0.2s ease;
   }
 
   .login-button:hover:not(:disabled) {
-    background: #f9fafb;
+    background: var(--button-primary-hover);
   }
 
   .login-button:disabled {
@@ -1931,14 +1939,14 @@
   }
 
   .logout-button {
-    background: #ef4444;
+    background: var(--error-text);
     color: white;
-    border-color: #ef4444;
+    border-color: var(--error-text);
     margin-left: 0.5rem;
   }
 
   .logout-button:hover {
-    background: #dc2626;
+    opacity: 0.9;
   }
 
   .repo-view {
@@ -1956,8 +1964,8 @@
 
   .file-tree {
     width: 300px;
-    border-right: 1px solid #e5e7eb;
-    background: #f9fafb;
+    border-right: 1px solid var(--border-color);
+    background: var(--bg-secondary);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1965,7 +1973,7 @@
 
   .file-tree-header {
     padding: 1rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border-color);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -1974,19 +1982,22 @@
   .file-tree-header h2 {
     margin: 0;
     font-size: 1rem;
+    color: var(--text-primary);
   }
 
   .back-button {
     padding: 0.25rem 0.5rem;
     font-size: 0.875rem;
-    background: #f3f4f6;
-    border: 1px solid #d1d5db;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
     border-radius: 0.25rem;
     cursor: pointer;
+    color: var(--text-primary);
+    transition: background 0.2s ease;
   }
 
   .back-button:hover {
-    background: #e5e7eb;
+    background: var(--bg-secondary);
   }
 
   .file-list {
@@ -2012,19 +2023,21 @@
     align-items: center;
     gap: 0.5rem;
     font-size: 0.875rem;
+    color: var(--text-primary);
+    transition: background 0.2s ease;
   }
 
   .file-button:hover {
-    background: #f3f4f6;
+    background: var(--bg-tertiary);
   }
 
   .file-item.selected .file-button {
-    background: #dbeafe;
-    color: #1e40af;
+    background: var(--accent-light);
+    color: var(--accent);
   }
 
   .file-size {
-    color: #6b7280;
+    color: var(--text-muted);
     font-size: 0.75rem;
     margin-left: auto;
   }
@@ -2034,21 +2047,21 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    background: white;
+    background: var(--card-bg);
   }
 
   .editor-header {
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border-color);
     display: flex;
     justify-content: space-between;
     align-items: center;
   }
 
   .file-path {
-    font-family: monospace;
+    font-family: 'IBM Plex Mono', monospace;
     font-size: 0.875rem;
-    color: #374151;
+    color: var(--text-primary);
   }
 
   .editor-actions {
@@ -2058,27 +2071,30 @@
   }
 
   .unsaved-indicator {
-    color: #f59e0b;
+    color: var(--warning-text);
     font-size: 0.875rem;
   }
 
   .save-button {
     padding: 0.5rem 1rem;
-    background: #3b82f6;
+    background: var(--button-primary);
     color: white;
     border: none;
     border-radius: 0.25rem;
     cursor: pointer;
     font-size: 0.875rem;
+    font-family: 'IBM Plex Serif', serif;
+    transition: background 0.2s ease;
   }
 
   .save-button:hover:not(:disabled) {
-    background: #2563eb;
+    background: var(--button-primary-hover);
   }
 
   .save-button:disabled {
-    background: #9ca3af;
+    background: var(--text-muted);
     cursor: not-allowed;
+    opacity: 0.6;
   }
 
   .editor-container {
@@ -2091,21 +2107,22 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #6b7280;
+    color: var(--text-muted);
   }
 
   .loading {
     padding: 2rem;
     text-align: center;
-    color: #6b7280;
+    color: var(--text-muted);
   }
 
   .error {
-    background: #fee2e2;
-    color: #991b1b;
+    background: var(--error-bg);
+    color: var(--error-text);
     padding: 1rem;
     margin: 1rem;
     border-radius: 0.5rem;
+    border: 1px solid var(--error-text);
   }
 
   .modal-overlay {
@@ -2122,29 +2139,43 @@
   }
 
   .modal {
-    background: white;
+    background: var(--card-bg);
     padding: 2rem;
     border-radius: 0.5rem;
     min-width: 400px;
     max-width: 600px;
+    border: 1px solid var(--border-color);
   }
 
   .modal h3 {
     margin: 0 0 1rem 0;
+    color: var(--text-primary);
   }
 
   .modal label {
     display: block;
     margin-bottom: 1rem;
+    color: var(--text-primary);
   }
 
-  .modal textarea {
+  .modal input,
+  .modal textarea,
+  .modal select {
     width: 100%;
     padding: 0.5rem;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--input-border);
     border-radius: 0.25rem;
-    font-family: inherit;
+    font-family: 'IBM Plex Serif', serif;
+    background: var(--input-bg);
+    color: var(--text-primary);
     margin-top: 0.5rem;
+  }
+
+  .modal input:focus,
+  .modal textarea:focus,
+  .modal select:focus {
+    outline: none;
+    border-color: var(--input-focus);
   }
 
   .modal-actions {
@@ -2155,14 +2186,26 @@
 
   .cancel-button {
     padding: 0.5rem 1rem;
-    background: #f3f4f6;
-    border: 1px solid #d1d5db;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
     border-radius: 0.25rem;
     cursor: pointer;
+    color: var(--text-primary);
+    font-family: 'IBM Plex Serif', serif;
+    transition: background 0.2s ease;
   }
 
   .cancel-button:hover {
-    background: #e5e7eb;
+    background: var(--bg-secondary);
+  }
+
+  .save-button {
+    background: var(--button-primary);
+    color: white;
+  }
+
+  .save-button:hover:not(:disabled) {
+    background: var(--button-primary-hover);
   }
 
   /* Tabs */
@@ -2170,8 +2213,8 @@
     display: flex;
     gap: 0.5rem;
     padding: 0.5rem 2rem;
-    border-bottom: 1px solid #e5e7eb;
-    background: white;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--card-bg);
   }
 
   .tab-button {
@@ -2181,16 +2224,18 @@
     border-bottom: 2px solid transparent;
     cursor: pointer;
     font-size: 0.875rem;
-    color: #6b7280;
+    color: var(--text-muted);
+    font-family: 'IBM Plex Serif', serif;
+    transition: color 0.2s ease, border-color 0.2s ease;
   }
 
   .tab-button:hover {
-    color: #374151;
+    color: var(--text-primary);
   }
 
   .tab-button.active {
-    color: #3b82f6;
-    border-bottom-color: #3b82f6;
+    color: var(--accent);
+    border-bottom-color: var(--accent);
   }
 
   /* File tree actions */
@@ -2202,15 +2247,17 @@
   .create-file-button, .create-branch-button, .create-tag-button {
     padding: 0.25rem 0.5rem;
     font-size: 0.75rem;
-    background: #3b82f6;
+    background: var(--button-primary);
     color: white;
     border: none;
     border-radius: 0.25rem;
     cursor: pointer;
+    font-family: 'IBM Plex Serif', serif;
+    transition: background 0.2s ease;
   }
 
   .create-file-button:hover, .create-branch-button:hover, .create-tag-button:hover {
-    background: #2563eb;
+    background: var(--button-primary-hover);
   }
 
   .delete-file-button {
@@ -2238,8 +2285,8 @@
   /* History sidebar */
   .history-sidebar, .tags-sidebar {
     width: 300px;
-    border-right: 1px solid #e5e7eb;
-    background: #f9fafb;
+    border-right: 1px solid var(--border-color);
+    background: var(--bg-secondary);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -2247,7 +2294,7 @@
 
   .history-header, .tags-header {
     padding: 1rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border-color);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -2256,19 +2303,22 @@
   .history-header h2, .tags-header h2 {
     margin: 0;
     font-size: 1rem;
+    color: var(--text-primary);
   }
 
   .refresh-button {
     padding: 0.25rem 0.5rem;
     font-size: 0.75rem;
-    background: #f3f4f6;
-    border: 1px solid #d1d5db;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
     border-radius: 0.25rem;
     cursor: pointer;
+    color: var(--text-primary);
+    transition: background 0.2s ease;
   }
 
   .refresh-button:hover {
-    background: #e5e7eb;
+    background: var(--bg-secondary);
   }
 
   .commit-list, .tag-list {
@@ -2294,29 +2344,29 @@
   }
 
   .commit-button:hover {
-    background: #f3f4f6;
+    background: var(--bg-tertiary);
   }
 
   .commit-item.selected .commit-button {
-    background: #dbeafe;
+    background: var(--accent-light);
   }
 
   .commit-hash {
-    font-family: monospace;
+    font-family: 'IBM Plex Mono', monospace;
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--text-muted);
     margin-bottom: 0.25rem;
   }
 
   .commit-message {
     font-weight: 500;
     margin-bottom: 0.25rem;
-    color: #374151;
+    color: var(--text-primary);
   }
 
   .commit-meta {
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--text-muted);
     display: flex;
     gap: 1rem;
   }
@@ -2327,20 +2377,20 @@
 
   .tag-name {
     font-weight: 500;
-    color: #3b82f6;
+    color: var(--link-color);
     margin-bottom: 0.25rem;
   }
 
   .tag-hash {
-    font-family: monospace;
+    font-family: 'IBM Plex Mono', monospace;
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--text-muted);
     margin-bottom: 0.25rem;
   }
 
   .tag-message {
     font-size: 0.875rem;
-    color: #6b7280;
+    color: var(--text-muted);
   }
 
   /* Diff view */
@@ -2356,25 +2406,28 @@
     align-items: center;
     margin-bottom: 1rem;
     padding-bottom: 0.5rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border-color);
   }
 
   .diff-header h3 {
     margin: 0;
+    color: var(--text-primary);
   }
 
   .close-button {
     padding: 0.25rem 0.5rem;
-    background: #f3f4f6;
-    border: 1px solid #d1d5db;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
     border-radius: 0.25rem;
     cursor: pointer;
     font-size: 1.25rem;
     line-height: 1;
+    color: var(--text-primary);
+    transition: background 0.2s ease;
   }
 
   .close-button:hover {
-    background: #e5e7eb;
+    background: var(--bg-secondary);
   }
 
   .diff-file {
@@ -2386,14 +2439,15 @@
     justify-content: space-between;
     align-items: center;
     padding: 0.5rem;
-    background: #f3f4f6;
+    background: var(--bg-secondary);
     border-radius: 0.25rem;
     margin-bottom: 0.5rem;
   }
 
   .diff-file-name {
-    font-family: monospace;
+    font-family: 'IBM Plex Mono', monospace;
     font-weight: 500;
+    color: var(--text-primary);
   }
 
   .diff-stats {
@@ -2402,25 +2456,26 @@
   }
 
   .additions {
-    color: #10b981;
+    color: var(--success-text);
   }
 
   .deletions {
-    color: #ef4444;
+    color: var(--error-text);
   }
 
   .diff-content {
-    background: #1f2937;
-    color: #f9fafb;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
     padding: 1rem;
     border-radius: 0.25rem;
     overflow-x: auto;
     font-size: 0.875rem;
     line-height: 1.5;
+    border: 1px solid var(--border-color);
   }
 
   .diff-content code {
-    font-family: 'Courier New', monospace;
+    font-family: 'IBM Plex Mono', monospace;
     white-space: pre;
   }
 
@@ -2431,11 +2486,12 @@
 
   .read-only-editor :global(.hljs) {
     padding: 1rem;
-    background: #1e1e1e;
-    color: #d4d4d4;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
     border-radius: 4px;
     overflow-x: auto;
     margin: 0;
+    border: 1px solid var(--border-color);
   }
 
   .read-only-editor :global(pre) {
@@ -2444,16 +2500,17 @@
   }
 
   .read-only-editor :global(code) {
-    font-family: 'Courier New', Courier, monospace;
+    font-family: 'IBM Plex Mono', monospace;
     font-size: 14px;
     line-height: 1.5;
   }
 
   .readme-content :global(.hljs) {
-    background: #f5f5f5;
+    background: var(--bg-secondary);
     padding: 1rem;
     border-radius: 4px;
     overflow-x: auto;
+    border: 1px solid var(--border-light);
   }
 
   .readme-content :global(pre.hljs) {
@@ -2463,8 +2520,8 @@
   /* Issues and PRs */
   .issues-sidebar, .prs-sidebar {
     width: 300px;
-    border-right: 1px solid #e5e7eb;
-    background: #f9fafb;
+    border-right: 1px solid var(--border-color);
+    background: var(--bg-secondary);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -2472,7 +2529,7 @@
 
   .issues-header, .prs-header {
     padding: 1rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border-color);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -2481,20 +2538,23 @@
   .issues-header h2, .prs-header h2 {
     margin: 0;
     font-size: 1rem;
+    color: var(--text-primary);
   }
 
   .create-issue-button, .create-pr-button {
     padding: 0.25rem 0.5rem;
     font-size: 0.75rem;
-    background: #3b82f6;
+    background: var(--button-primary);
     color: white;
     border: none;
     border-radius: 0.25rem;
     cursor: pointer;
+    font-family: 'IBM Plex Serif', serif;
+    transition: background 0.2s ease;
   }
 
   .create-issue-button:hover, .create-pr-button:hover {
-    background: #2563eb;
+    background: var(--button-primary-hover);
   }
 
   .issue-list, .pr-list {
@@ -2507,12 +2567,13 @@
 
   .issue-item, .pr-item {
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border-color);
     cursor: pointer;
+    transition: background 0.2s ease;
   }
 
   .issue-item:hover, .pr-item:hover {
-    background: #f3f4f6;
+    background: var(--bg-tertiary);
   }
 
   .issue-header, .pr-header {
@@ -2531,51 +2592,54 @@
   }
 
   .issue-status.open, .pr-status.open {
-    background: #dbeafe;
-    color: #1e40af;
+    background: var(--accent-light);
+    color: var(--accent);
   }
 
   .issue-status.closed, .pr-status.closed {
-    background: #fee2e2;
-    color: #991b1b;
+    background: var(--error-bg);
+    color: var(--error-text);
   }
 
   .issue-status.resolved, .pr-status.merged {
-    background: #d1fae5;
-    color: #065f46;
+    background: var(--success-bg);
+    color: var(--success-text);
   }
 
   .issue-subject, .pr-subject {
     font-weight: 500;
     flex: 1;
+    color: var(--text-primary);
   }
 
   .issue-meta, .pr-meta {
     font-size: 0.75rem;
-    color: #6b7280;
+    color: var(--text-muted);
     display: flex;
     gap: 0.75rem;
   }
 
   .pr-commit {
-    font-family: monospace;
+    font-family: 'IBM Plex Mono', monospace;
   }
 
   .issues-content, .prs-content {
     flex: 1;
     overflow-y: auto;
     padding: 2rem;
+    background: var(--card-bg);
   }
 
   .issue-detail, .pr-detail {
     margin-bottom: 2rem;
     padding-bottom: 2rem;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border-color);
   }
 
   .issue-detail h3, .pr-detail h3 {
     margin: 0 0 0.5rem 0;
     font-size: 1.5rem;
+    color: var(--text-primary);
   }
 
   .issue-meta-detail, .pr-meta-detail {
@@ -2584,12 +2648,12 @@
     gap: 1rem;
     margin-bottom: 1rem;
     font-size: 0.875rem;
-    color: #6b7280;
+    color: var(--text-muted);
   }
 
   .issue-body, .pr-body {
     line-height: 1.6;
-    color: #374151;
+    color: var(--text-primary);
   }
 
   .verification-status {
@@ -2601,12 +2665,12 @@
   }
 
   .verification-status.verified {
-    background: #d1fae5;
-    color: #065f46;
+    background: var(--success-bg);
+    color: var(--success-text);
   }
 
   .verification-status.unverified {
-    background: #fee2e2;
-    color: #991b1b;
+    background: var(--error-bg);
+    color: var(--error-text);
   }
 </style>

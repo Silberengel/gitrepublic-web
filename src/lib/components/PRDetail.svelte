@@ -469,18 +469,19 @@
   .pr-header {
     margin-bottom: 1rem;
     padding-bottom: 1rem;
-    border-bottom: 1px solid #e0e0e0;
+    border-bottom: 1px solid var(--border-color);
   }
 
   .pr-header h2 {
     margin: 0 0 0.5rem 0;
+    color: var(--text-primary);
   }
 
   .pr-meta {
     display: flex;
     gap: 1rem;
     font-size: 0.9rem;
-    color: #666;
+    color: var(--text-muted);
   }
 
   .pr-status {
@@ -491,18 +492,18 @@
   }
 
   .pr-status.open {
-    background: #d4edda;
-    color: #155724;
+    background: var(--accent-light);
+    color: var(--accent);
   }
 
   .pr-status.closed {
-    background: #f8d7da;
-    color: #721c24;
+    background: var(--error-bg);
+    color: var(--error-text);
   }
 
   .pr-status.merged {
-    background: #d1ecf1;
-    color: #0c5460;
+    background: var(--success-bg);
+    color: var(--success-text);
   }
 
   .pr-body {
@@ -511,8 +512,9 @@
 
   .pr-description {
     padding: 1rem;
-    background: #f5f5f5;
+    background: var(--bg-secondary);
     border-radius: 4px;
+    color: var(--text-primary);
   }
 
   .pr-content {
@@ -522,20 +524,23 @@
   }
 
   .code-section, .highlights-section {
-    border: 1px solid #e0e0e0;
+    border: 1px solid var(--border-color);
     border-radius: 4px;
     padding: 1rem;
+    background: var(--card-bg);
   }
 
   .code-section h3, .highlights-section h3 {
     margin-top: 0;
+    color: var(--text-primary);
   }
 
   .diff-viewer {
     height: 500px;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border-color);
     border-radius: 4px;
     overflow: auto;
+    background: var(--bg-secondary);
   }
 
   .section-header {
@@ -547,30 +552,32 @@
 
   .add-comment-btn, .reply-btn {
     padding: 0.4rem 0.8rem;
-    background: #007bff;
+    background: var(--button-primary);
     color: white;
     border: none;
     border-radius: 4px;
     cursor: pointer;
     font-size: 0.9rem;
+    font-family: 'IBM Plex Serif', serif;
+    transition: background 0.2s ease;
   }
 
   .add-comment-btn:hover, .reply-btn:hover {
-    background: #0056b3;
+    background: var(--button-primary-hover);
   }
 
   .highlight-item, .comment-item {
     margin-bottom: 1.5rem;
     padding: 1rem;
-    background: #f9f9f9;
+    background: var(--bg-secondary);
     border-radius: 4px;
-    border-left: 3px solid #007bff;
+    border-left: 3px solid var(--accent);
   }
 
   .comment-item.nested {
     margin-left: 2rem;
     margin-top: 0.5rem;
-    border-left-color: #28a745;
+    border-left-color: var(--success-text);
   }
 
   .highlight-header, .comment-header {
@@ -578,31 +585,35 @@
     gap: 1rem;
     margin-bottom: 0.5rem;
     font-size: 0.9rem;
-    color: #666;
+    color: var(--text-muted);
   }
 
   .highlight-author, .comment-author {
     font-weight: bold;
-    color: #333;
+    color: var(--text-primary);
   }
 
   .highlighted-code {
-    background: #fff;
+    background: var(--card-bg);
     padding: 0.5rem;
     border-radius: 3px;
     margin: 0.5rem 0;
+    border: 1px solid var(--border-light);
   }
 
   .highlighted-code pre {
     margin: 0;
     font-size: 0.9rem;
+    color: var(--text-primary);
+    font-family: 'IBM Plex Mono', monospace;
   }
 
   .highlight-comment, .comment-content {
     margin: 0.5rem 0;
     padding: 0.5rem;
-    background: white;
+    background: var(--card-bg);
     border-radius: 3px;
+    color: var(--text-primary);
   }
 
   .highlight-comments {
@@ -623,26 +634,50 @@
   }
 
   .modal {
-    background: white;
+    background: var(--card-bg);
     padding: 2rem;
     border-radius: 8px;
     max-width: 600px;
     width: 90%;
     max-height: 80vh;
     overflow-y: auto;
+    border: 1px solid var(--border-color);
+  }
+
+  .modal h3 {
+    color: var(--text-primary);
+  }
+
+  .modal label {
+    color: var(--text-primary);
+  }
+
+  .modal textarea {
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    color: var(--text-primary);
+    font-family: 'IBM Plex Serif', serif;
+  }
+
+  .modal textarea:focus {
+    outline: none;
+    border-color: var(--input-focus);
   }
 
   .selected-code {
-    background: #f5f5f5;
+    background: var(--bg-secondary);
     padding: 1rem;
     border-radius: 4px;
     margin-bottom: 1rem;
     max-height: 200px;
     overflow: auto;
+    border: 1px solid var(--border-light);
   }
 
   .selected-code pre {
     margin: 0;
+    color: var(--text-primary);
+    font-family: 'IBM Plex Mono', monospace;
   }
 
   .modal-actions {
@@ -657,34 +692,44 @@
     border: none;
     border-radius: 4px;
     cursor: pointer;
+    font-family: 'IBM Plex Serif', serif;
+    transition: background 0.2s ease;
   }
 
   .cancel-btn {
-    background: #6c757d;
-    color: white;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+
+  .cancel-btn:hover {
+    background: var(--bg-secondary);
   }
 
   .save-btn {
-    background: #007bff;
+    background: var(--button-primary);
     color: white;
   }
 
-  .save-btn:disabled {
-    background: #ccc;
-    cursor: not-allowed;
+  .save-btn:hover:not(:disabled) {
+    background: var(--button-primary-hover);
   }
 
-  .loading, .empty {
-    padding: 2rem;
+  .save-btn:disabled {
+    background: var(--text-muted);
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .loading, .empty, .error {
+    color: var(--text-muted);
     text-align: center;
-    color: #666;
+    padding: 1rem;
   }
 
   .error {
-    padding: 1rem;
-    background: #f8d7da;
-    color: #721c24;
+    color: var(--error-text);
+    background: var(--error-bg);
+    border: 1px solid var(--error-text);
     border-radius: 4px;
-    margin-bottom: 1rem;
   }
 </style>

@@ -169,30 +169,13 @@
 </div>
 
 <style>
-  .container {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 2rem;
-  }
-
-  .back-link {
-    display: inline-block;
-    margin-bottom: 1rem;
-    color: #007bff;
-    text-decoration: none;
-  }
-
-  .back-link:hover {
-    text-decoration: underline;
-  }
-
   .profile-header {
     display: flex;
     gap: 1.5rem;
     align-items: flex-start;
     margin-bottom: 2rem;
     padding-bottom: 2rem;
-    border-bottom: 1px solid #e0e0e0;
+    border-bottom: 1px solid var(--border-color);
   }
 
   .profile-picture {
@@ -206,7 +189,7 @@
     width: 80px;
     height: 80px;
     border-radius: 50%;
-    background: #007bff;
+    background: var(--accent);
     color: white;
     display: flex;
     align-items: center;
@@ -215,77 +198,25 @@
     font-weight: bold;
   }
 
-  .profile-info h1 {
-    margin: 0 0 0.5rem 0;
-  }
-
   .profile-about {
-    color: #666;
+    color: var(--text-secondary);
     margin: 0.5rem 0;
   }
 
   .profile-npub {
-    color: #999;
+    color: var(--text-muted);
     font-size: 0.9rem;
     margin: 0.5rem 0 0 0;
-    font-family: monospace;
+    font-family: 'IBM Plex Mono', monospace;
   }
 
   .repos-section {
     margin-top: 2rem;
   }
 
-  .repos-section h2 {
-    margin-bottom: 1rem;
-  }
-
   .repo-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 1.5rem;
-  }
-
-  .repo-card {
-    border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    padding: 1.5rem;
-    cursor: pointer;
-    transition: box-shadow 0.2s;
-  }
-
-  .repo-card:hover {
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  }
-
-  .repo-card h3 {
-    margin: 0 0 0.5rem 0;
-    color: #007bff;
-  }
-
-  .repo-description {
-    color: #666;
-    margin: 0.5rem 0;
-    font-size: 0.9rem;
-  }
-
-  .repo-meta {
-    margin-top: 1rem;
-    padding-top: 1rem;
-    border-top: 1px solid #f0f0f0;
-    font-size: 0.85rem;
-    color: #999;
-  }
-
-  .loading, .empty, .error {
-    text-align: center;
-    padding: 2rem;
-    color: #666;
-  }
-
-  .error {
-    color: #d32f2f;
-    background: #ffebee;
-    border-radius: 4px;
-    padding: 1rem;
   }
 </style>
