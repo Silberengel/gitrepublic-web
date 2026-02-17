@@ -8,6 +8,7 @@ import { FileManager } from '$lib/services/git/file-manager.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
+import { requireNpubHex } from '$lib/utils/npub-utils.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { existsSync, readFileSync } from 'fs';
@@ -37,12 +38,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     // Check repository privacy
     let repoOwnerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub') {
-        repoOwnerPubkey = decoded.data as string;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      repoOwnerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }

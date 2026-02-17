@@ -11,6 +11,7 @@ import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { KIND, type NostrEvent } from '$lib/types/nostr.js';
 import { nip19 } from 'nostr-tools';
 import { signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
+import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
 import { OwnershipTransferService } from '$lib/services/nostr/ownership-transfer-service.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -92,28 +93,13 @@ export const POST: RequestHandler = async ({ params, request }) => {
     // Decode original repo owner npub
     let originalOwnerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub') {
-        originalOwnerPubkey = decoded.data as string;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      originalOwnerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }
 
     // Decode user pubkey if needed (must be done before using it)
-    let userPubkeyHex = userPubkey;
-    try {
-      const userDecoded = nip19.decode(userPubkey) as { type: string; data: unknown };
-      // Type guard: check if it's an npub
-      if (userDecoded.type === 'npub' && typeof userDecoded.data === 'string') {
-        userPubkeyHex = userDecoded.data;
-      }
-      // If not npub, assume it's already hex
-    } catch {
-      // Assume it's already hex
-    }
+    const userPubkeyHex = decodeNpubToHex(userPubkey) || userPubkey;
 
     // Convert to npub for resource check and path construction
     const userNpub = nip19.npubEncode(userPubkeyHex);
@@ -394,12 +380,7 @@ export const GET: RequestHandler = async ({ params }) => {
     // Decode repo owner npub
     let ownerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub') {
-        ownerPubkey = decoded.data as string;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      ownerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }

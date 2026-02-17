@@ -135,7 +135,10 @@
                     return '<pre class="hljs"><code>' +
                            hljs.highlight(str, { language: lang }).value +
                            '</code></pre>';
-                  } catch (__) {}
+                  } catch (err) {
+                    // Fallback to escaped HTML if highlighting fails
+                    // This is expected for unsupported languages
+                  }
                 }
                 return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
               }
@@ -881,7 +884,7 @@
       const response = await fetch(`/api/repos/${npub}/${repo}/issues`);
       if (response.ok) {
         const data = await response.json();
-        issues = data.map((issue: any) => ({
+        issues = data.map((issue: { id: string; tags: string[][]; content: string; status?: string; pubkey: string; created_at: number }) => ({
           id: issue.id,
           subject: issue.tags.find((t: string[]) => t[0] === 'subject')?.[1] || 'Untitled',
           content: issue.content,
@@ -955,7 +958,7 @@
       const response = await fetch(`/api/repos/${npub}/${repo}/prs`);
       if (response.ok) {
         const data = await response.json();
-        prs = data.map((pr: any) => ({
+        prs = data.map((pr: { id: string; tags: string[][]; content: string; status?: string; pubkey: string; created_at: number; commitId?: string }) => ({
           id: pr.id,
           subject: pr.tags.find((t: string[]) => t[0] === 'subject')?.[1] || 'Untitled',
           content: pr.content,

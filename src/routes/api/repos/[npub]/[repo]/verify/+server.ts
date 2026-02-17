@@ -32,12 +32,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
     // Decode npub to get pubkey
     let ownerPubkey: string;
     try {
-      const decoded = nip19.decode(npub) as { type: string; data: unknown };
-      if (decoded.type === 'npub' && typeof decoded.data === 'string') {
-        ownerPubkey = decoded.data;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      ownerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }
@@ -87,10 +82,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
       // Decode npub if needed
       if (toPubkey) {
         try {
-          const decoded = nip19.decode(toPubkey) as { type: string; data: unknown };
-          if (decoded.type === 'npub' && typeof decoded.data === 'string') {
-            toPubkey = decoded.data;
-          }
+          toPubkey = decodeNpubToHex(toPubkey) || toPubkey;
         } catch {
           // Assume it's already hex
         }

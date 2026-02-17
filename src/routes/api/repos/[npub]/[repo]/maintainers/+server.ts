@@ -8,6 +8,7 @@ import type { RequestHandler } from './$types';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
+import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
 import logger from '$lib/services/logger.js';
 
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
@@ -24,12 +25,7 @@ export const GET: RequestHandler = async ({ params, url }: { params: { npub?: st
     // Convert npub to pubkey
     let repoOwnerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub') {
-        repoOwnerPubkey = decoded.data as string;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      repoOwnerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }
@@ -38,17 +34,7 @@ export const GET: RequestHandler = async ({ params, url }: { params: { npub?: st
 
     // If userPubkey provided, check if they're a maintainer
     if (userPubkey) {
-      let userPubkeyHex = userPubkey;
-      try {
-        // Try to decode if it's an npub
-        const userDecoded = nip19.decode(userPubkey);
-        // @ts-ignore - nip19 types are incomplete, but we know npub returns string
-        if (userDecoded.type === 'npub') {
-          userPubkeyHex = userDecoded.data as unknown as string;
-        }
-      } catch {
-        // Assume it's already a hex pubkey
-      }
+      const userPubkeyHex = decodeNpubToHex(userPubkey) || userPubkey;
 
       const isMaintainer = maintainers.includes(userPubkeyHex);
       return json({ 

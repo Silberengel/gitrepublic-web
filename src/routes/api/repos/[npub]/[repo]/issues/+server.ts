@@ -19,11 +19,12 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
 
   try {
     // Convert npub to pubkey
-    const decoded = nip19.decode(npub);
-    if (decoded.type !== 'npub') {
+    let repoOwnerPubkey: string;
+    try {
+      repoOwnerPubkey = requireNpubHex(npub);
+    } catch {
       return error(400, 'Invalid npub format');
     }
-    const repoOwnerPubkey = decoded.data as string;
 
     // Check repository privacy
     const { checkRepoAccess } = await import('$lib/utils/repo-privacy.js');

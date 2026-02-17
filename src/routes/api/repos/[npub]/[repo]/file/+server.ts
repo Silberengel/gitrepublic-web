@@ -12,6 +12,8 @@ import { nip19 } from 'nostr-tools';
 import { verifyNIP98Auth } from '$lib/services/nostr/nip98-auth.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 import logger from '$lib/services/logger.js';
+import type { NostrEvent } from '$lib/types/nostr.js';
+import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
@@ -35,12 +37,7 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
     // Check repository privacy
     let repoOwnerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub') {
-        repoOwnerPubkey = decoded.data as string;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      repoOwnerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }
@@ -131,27 +128,13 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
     // Check if user is a maintainer
     let repoOwnerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub') {
-        repoOwnerPubkey = decoded.data as string;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      repoOwnerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }
 
     // Convert userPubkey to hex if needed
-    let userPubkeyHex = userPubkey;
-    try {
-      const userDecoded = nip19.decode(userPubkey);
-      // @ts-ignore - nip19 types are incomplete, but we know npub returns string
-      if (userDecoded.type === 'npub') {
-        userPubkeyHex = userDecoded.data as unknown as string;
-      }
-    } catch {
-      // Assume it's already a hex pubkey
-    }
+    const userPubkeyHex = decodeNpubToHex(userPubkey) || userPubkey;
 
     const isMaintainer = await maintainerService.isMaintainer(userPubkeyHex, repoOwnerPubkey, repo);
     if (!isMaintainer) {
@@ -164,7 +147,7 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
     // nsecKey is only for server-side use via environment variables.
     const signingOptions: {
       useNIP07?: boolean;
-      nip98Event?: any;
+      nip98Event?: NostrEvent;
       nsecKey?: string;
     } = {};
     

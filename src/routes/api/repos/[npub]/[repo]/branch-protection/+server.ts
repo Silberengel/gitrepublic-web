@@ -13,6 +13,7 @@ import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { nip19 } from 'nostr-tools';
 import type { BranchProtectionRule } from '$lib/services/nostr/branch-protection-service.js';
 import logger from '$lib/services/logger.js';
+import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
 
 const branchProtectionService = new BranchProtectionService(DEFAULT_NOSTR_RELAYS);
 const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
@@ -32,12 +33,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
     // Decode npub to get pubkey
     let ownerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub' && typeof decoded.data === 'string') {
-        ownerPubkey = decoded.data;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      ownerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }
@@ -82,27 +78,12 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
     // Decode npub to get pubkey
     let ownerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub' && typeof decoded.data === 'string') {
-        ownerPubkey = decoded.data;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      ownerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }
 
-    let userPubkeyHex: string = userPubkey;
-    try {
-      const userDecoded = nip19.decode(userPubkey) as { type: string; data: unknown };
-      // Type guard: check if it's an npub
-      if (userDecoded.type === 'npub' && typeof userDecoded.data === 'string') {
-        userPubkeyHex = userDecoded.data;
-      }
-      // If not npub, assume it's already hex
-    } catch {
-      // Assume it's already hex
-    }
+    const userPubkeyHex = decodeNpubToHex(userPubkey) || userPubkey;
 
     // Check if user is owner
     const currentOwner = await ownershipTransferService.getCurrentOwner(ownerPubkey, repo);
@@ -111,7 +92,7 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
     }
 
     // Validate rules
-    const validatedRules: BranchProtectionRule[] = rules.map((rule: any) => ({
+    const validatedRules: BranchProtectionRule[] = rules.map((rule: { branch: string; requirePullRequest?: boolean; requireReviewers?: string[]; allowForcePush?: boolean; requireStatusChecks?: string[] }) => ({
       branch: rule.branch,
       requirePullRequest: rule.requirePullRequest || false,
       requireReviewers: rule.requireReviewers || [],

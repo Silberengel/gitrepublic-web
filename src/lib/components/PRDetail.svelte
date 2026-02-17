@@ -27,8 +27,27 @@
 
   let { pr, npub, repo, repoOwnerPubkey }: Props = $props();
 
-  let highlights = $state<Array<any>>([]);
-  let comments = $state<Array<any>>([]);
+  let highlights = $state<Array<{
+    id: string;
+    content: string;
+    pubkey: string;
+    created_at: number;
+    comments?: Array<{
+      id: string;
+      content: string;
+      pubkey: string;
+      created_at: number;
+      [key: string]: unknown;
+    }>;
+    [key: string]: unknown;
+  }>>([]);
+  let comments = $state<Array<{
+    id: string;
+    content: string;
+    pubkey: string;
+    created_at: number;
+    [key: string]: unknown;
+  }>>([]);
   let loading = $state(false);
   let error = $state<string | null>(null);
   let userPubkey = $state<string | null>(null);
@@ -105,7 +124,7 @@
       if (response.ok) {
         const data = await response.json();
         // Combine all file diffs
-        prDiff = data.map((d: any) => 
+        prDiff = data.map((d: { file: string; diff: string }) => 
           `--- ${d.file}\n+++ ${d.file}\n${d.diff}`
         ).join('\n\n');
       }

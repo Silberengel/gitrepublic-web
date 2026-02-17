@@ -9,6 +9,7 @@ import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { DEFAULT_NOSTR_RELAYS, combineRelays } from '$lib/config.js';
 import { KIND } from '$lib/types/nostr.js';
 import { nip19 } from 'nostr-tools';
+import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
 import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
@@ -31,12 +32,7 @@ export const GET: RequestHandler = async ({ params }) => {
     // Decode npub to get pubkey
     let originalOwnerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub') {
-        originalOwnerPubkey = decoded.data as string;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      originalOwnerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }
@@ -109,12 +105,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
     // Decode npub to get original owner pubkey
     let originalOwnerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub') {
-        originalOwnerPubkey = decoded.data as string;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      originalOwnerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }

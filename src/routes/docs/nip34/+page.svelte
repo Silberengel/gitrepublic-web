@@ -21,7 +21,10 @@
                 return '<pre class="hljs"><code>' +
                        hljs.highlight(str, { language: lang }).value +
                        '</code></pre>';
-              } catch (__) {}
+              } catch (err) {
+                // Fallback to escaped HTML if highlighting fails
+                // This is expected for unsupported languages
+              }
             }
             return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
           }

@@ -23,6 +23,7 @@ export interface NostrFilter {
   since?: number;
   until?: number;
   limit?: number;
+  search?: string; // NIP-50: Search capability
 }
 
 export const KIND = {

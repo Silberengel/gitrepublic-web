@@ -9,6 +9,7 @@ import { DEFAULT_NOSTR_RELAYS, combineRelays, getGitUrl } from '$lib/config.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import { KIND } from '$lib/types/nostr.js';
 import { nip19 } from 'nostr-tools';
+import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
 import { signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import logger from '$lib/services/logger.js';
@@ -33,12 +34,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     // Decode npub to get pubkey
     let repoOwnerPubkey: string;
     try {
-      const decoded = nip19.decode(npub) as { type: string; data: unknown };
-      if (decoded.type === 'npub' && typeof decoded.data === 'string') {
-        repoOwnerPubkey = decoded.data;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      repoOwnerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }
@@ -48,15 +44,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       return error(401, 'Authentication required');
     }
 
-    let userPubkeyHex = userPubkey;
-    try {
-      const userDecoded = nip19.decode(userPubkey) as { type: string; data: unknown };
-      if (userDecoded.type === 'npub' && typeof userDecoded.data === 'string') {
-        userPubkeyHex = userDecoded.data;
-      }
-    } catch {
-      // Assume it's already hex
-    }
+    const userPubkeyHex = decodeNpubToHex(userPubkey) || userPubkey;
 
     const currentOwner = await ownershipTransferService.getCurrentOwner(repoOwnerPubkey, repo);
     if (userPubkeyHex !== currentOwner) {
@@ -127,25 +115,12 @@ export const POST: RequestHandler = async ({ params, request }) => {
     // Decode npub to get pubkey
     let repoOwnerPubkey: string;
     try {
-      const decoded = nip19.decode(npub) as { type: string; data: unknown };
-      if (decoded.type === 'npub' && typeof decoded.data === 'string') {
-        repoOwnerPubkey = decoded.data;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      repoOwnerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }
 
-    let userPubkeyHex = userPubkey;
-    try {
-      const userDecoded = nip19.decode(userPubkey) as { type: string; data: unknown };
-      if (userDecoded.type === 'npub' && typeof userDecoded.data === 'string') {
-        userPubkeyHex = userDecoded.data;
-      }
-    } catch {
-      // Assume it's already hex
-    }
+    const userPubkeyHex = decodeNpubToHex(userPubkey) || userPubkey;
 
     // Check if user is owner
     const currentOwner = await ownershipTransferService.getCurrentOwner(repoOwnerPubkey, repo);

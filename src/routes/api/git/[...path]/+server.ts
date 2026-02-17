@@ -7,6 +7,7 @@ import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { RepoManager } from '$lib/services/git/repo-manager.js';
 import { nip19 } from 'nostr-tools';
+import { requireNpubHex } from '$lib/utils/npub-utils.js';
 import { spawn, execSync } from 'child_process';
 import { existsSync } from 'fs';
 import { join, resolve } from 'path';
@@ -69,11 +70,7 @@ function findGitHttpBackend(): string | null {
  */
 async function getRepoAnnouncement(npub: string, repoName: string): Promise<NostrEvent | null> {
   try {
-    const decoded = nip19.decode(npub);
-    if (decoded.type !== 'npub') {
-      return null;
-    }
-    const pubkey = decoded.data as string;
+    const pubkey = requireNpubHex(npub);
 
     const events = await nostrClient.fetchEvents([
       {
@@ -127,10 +124,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
 
   // Validate npub format
   try {
-    const decoded = nip19.decode(npub);
-    if (decoded.type !== 'npub') {
-      return error(400, 'Invalid npub format');
-    }
+    pubkey = requireNpubHex(npub);
   } catch {
     return error(400, 'Invalid npub format');
   }
@@ -150,11 +144,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   // Check repository privacy for clone/fetch operations
   let originalOwnerPubkey: string;
   try {
-    const decoded = nip19.decode(npub);
-    if (decoded.type !== 'npub') {
-      return error(400, 'Invalid npub format');
-    }
-    originalOwnerPubkey = decoded.data as string;
+    originalOwnerPubkey = requireNpubHex(npub);
   } catch {
     return error(400, 'Invalid npub format');
   }
@@ -351,11 +341,7 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
   // Validate npub format and decode to get pubkey
   let originalOwnerPubkey: string;
   try {
-    const decoded = nip19.decode(npub);
-    if (decoded.type !== 'npub') {
-      return error(400, 'Invalid npub format');
-    }
-    originalOwnerPubkey = decoded.data as string;
+    originalOwnerPubkey = requireNpubHex(npub);
   } catch {
     return error(400, 'Invalid npub format');
   }

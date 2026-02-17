@@ -52,7 +52,7 @@
       <input
         type="text"
         bind:value={query}
-        placeholder="Search repositories or code..."
+        placeholder="Search repositories or code... (NIP-50 search)"
         class="search-input"
       />
       <div class="search-controls">
@@ -64,6 +64,9 @@
         <button type="submit" disabled={loading || !query.trim()} class="search-button">
           {loading ? 'Searching...' : 'Search'}
         </button>
+      </div>
+      <div class="search-info">
+        <small>Using NIP-50 search across multiple relays for better results</small>
       </div>
     </form>
 
@@ -146,3 +149,14 @@
   </main>
 </div>
 
+<style>
+  .search-info {
+    margin-top: 0.5rem;
+    color: var(--text-secondary, #666);
+    font-size: 0.875rem;
+  }
+
+  .search-info small {
+    color: inherit;
+  }
+</style>

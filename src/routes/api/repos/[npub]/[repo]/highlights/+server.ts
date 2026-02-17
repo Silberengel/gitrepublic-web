@@ -7,6 +7,7 @@ import type { RequestHandler } from './$types';
 import { HighlightsService } from '$lib/services/nostr/highlights-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
+import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
 import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import { combineRelays } from '$lib/config.js';
@@ -38,26 +39,13 @@ export const GET: RequestHandler = async ({ params, url }) => {
     // Decode npub to get pubkey
     let repoOwnerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub') {
-        repoOwnerPubkey = decoded.data as string;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      repoOwnerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }
 
     // Decode prAuthor if it's an npub
-    let prAuthorPubkey = prAuthor;
-    try {
-      const decoded = nip19.decode(prAuthor);
-      if (decoded.type === 'npub') {
-        prAuthorPubkey = decoded.data as string;
-      }
-    } catch {
-      // Assume it's already hex
-    }
+    const prAuthorPubkey = decodeNpubToHex(prAuthor) || prAuthor;
 
     // Get highlights for the PR
     const highlights = await highlightsService.getHighlightsForPR(

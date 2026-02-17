@@ -8,6 +8,7 @@ import type { RequestHandler } from './$types';
 import { PRsService } from '$lib/services/nostr/prs-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
+import { requireNpubHex } from '$lib/utils/npub-utils.js';
 import logger from '$lib/services/logger.js';
 
 export const GET: RequestHandler = async ({ params, url, request }: { params: { npub?: string; repo?: string }; url: URL; request: Request }) => {
@@ -22,12 +23,7 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
     // Convert npub to pubkey
     let repoOwnerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub') {
-        repoOwnerPubkey = decoded.data as string;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      repoOwnerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }

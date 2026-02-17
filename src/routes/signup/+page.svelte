@@ -45,7 +45,8 @@
   // Lookup state
   let lookupLoading = $state<{ [key: string]: boolean }>({});
   let lookupError = $state<{ [key: string]: string | null }>({});
-  let lookupResults = $state<{ [key: string]: any }>({});
+  type ProfileData = { pubkey: string; npub: string; name?: string; about?: string; picture?: string };
+  let lookupResults = $state<{ [key: string]: Array<ProfileData | NostrEvent> | null }>({});
 
   import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS, combineRelays } from '../../lib/config.js';
 
@@ -434,7 +435,13 @@
           }
         ]);
 
-        let profileData: any = {
+        let profileData: {
+          pubkey: string;
+          npub: string;
+          name?: string;
+          about?: string;
+          picture?: string;
+        } = {
           pubkey,
           npub: query.startsWith('npub') ? query : nip19.npubEncode(pubkey)
         };
@@ -1212,24 +1219,26 @@
                 <img src="/icons/x.svg" alt="Clear" class="icon-small" />
               </button>
             </div>
-            {#each lookupResults['repo-existingRepoRef'] as result}
-              {@const nameTag = result.tags.find((t: string[]) => t[0] === 'name')?.[1]}
-              {@const dTag = result.tags.find((t: string[]) => t[0] === 'd')?.[1]}
-              {@const descTag = result.tags.find((t: string[]) => t[0] === 'description')?.[1]}
-              {@const imageTag = result.tags.find((t: string[]) => t[0] === 'image')?.[1]}
-              {@const ownerNpub = nip19.npubEncode(result.pubkey)}
-              {@const tags = result.tags.filter((t: string[]) => t[0] === 't' && t[1] && t[1] !== 'private' && t[1] !== 'fork').map((t: string[]) => t[1])}
-              <div 
-                class="lookup-result-item repo-result" 
-                role="button"
-                tabindex="0"
-                onclick={() => selectRepoResult(result, 'existingRepoRef')}
-                onkeydown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    selectRepoResult(result, 'existingRepoRef');
-                  }
-                }}
+            {#each (lookupResults['repo-existingRepoRef'] || []) as result}
+              {#if 'tags' in result}
+                {@const event = result as NostrEvent}
+                {@const nameTag = event.tags.find((t: string[]) => t[0] === 'name')?.[1]}
+                {@const dTag = event.tags.find((t: string[]) => t[0] === 'd')?.[1]}
+                {@const descTag = event.tags.find((t: string[]) => t[0] === 'description')?.[1]}
+                {@const imageTag = event.tags.find((t: string[]) => t[0] === 'image')?.[1]}
+                {@const ownerNpub = nip19.npubEncode(event.pubkey)}
+                {@const tags = event.tags.filter((t: string[]) => t[0] === 't' && t[1] && t[1] !== 'private' && t[1] !== 'fork').map((t: string[]) => t[1])}
+                <div 
+                  class="lookup-result-item repo-result" 
+                  role="button"
+                  tabindex="0"
+                  onclick={() => selectRepoResult(event, 'existingRepoRef')}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      selectRepoResult(event, 'existingRepoRef');
+                    }
+                  }}
               >
                 <div class="result-header">
                   {#if imageTag}
@@ -1245,7 +1254,7 @@
                     {/if}
                     <div class="result-meta">
                       <small>Owner: {ownerNpub.slice(0, 16)}...</small>
-                      <small>Event: {result.id.slice(0, 16)}...</small>
+                      <small>Event: {event.id.slice(0, 16)}...</small>
                     </div>
                     {#if tags.length > 0}
                       <div class="result-tags">
@@ -1257,6 +1266,7 @@
                   </div>
                 </div>
               </div>
+              {/if}
             {/each}
           </div>
         {/if}
@@ -1435,7 +1445,7 @@
           {#if lookupResults[`npub-maintainers-${index}`]}
             <div class="lookup-results">
               <div class="lookup-results-header">
-                <span>Found {lookupResults[`npub-maintainers-${index}`].length} profile(s):</span>
+                <span>Found {(lookupResults[`npub-maintainers-${index}`] || []).length} profile(s):</span>
                 <button
                   type="button"
                   onclick={() => clearLookupResults(`npub-maintainers-${index}`)}
@@ -1445,36 +1455,39 @@
                   <img src="/icons/x.svg" alt="Clear" class="icon-small" />
                 </button>
               </div>
-              {#each lookupResults[`npub-maintainers-${index}`] as result}
-                <div 
-                  class="lookup-result-item profile-result" 
-                  role="button"
-                  tabindex="0"
-                  onclick={() => selectNpubResult(result, 'maintainers', index)}
-                  onkeydown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      selectNpubResult(result, 'maintainers', index);
-                    }
-                  }}
-                >
-                  <div class="result-header">
-                    {#if result.picture}
-                      <img src={result.picture} alt="" class="result-avatar" />
-                    {:else}
-                      <div class="result-avatar-placeholder">
-                        {(result.name || result.npub).slice(0, 2).toUpperCase()}
-                      </div>
-                    {/if}
-                    <div class="result-info">
-                      <strong>{result.name || 'Unknown'}</strong>
-                      {#if result.about}
-                        <p class="result-description">{result.about}</p>
+              {#each (lookupResults[`npub-maintainers-${index}`] || []) as result}
+                {#if 'npub' in result}
+                  {@const profile = result as ProfileData}
+                  <div 
+                    class="lookup-result-item profile-result" 
+                    role="button"
+                    tabindex="0"
+                    onclick={() => selectNpubResult(profile, 'maintainers', index)}
+                    onkeydown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        selectNpubResult(profile, 'maintainers', index);
+                      }
+                    }}
+                  >
+                    <div class="result-header">
+                      {#if profile.picture}
+                        <img src={profile.picture} alt="" class="result-avatar" />
+                      {:else}
+                        <div class="result-avatar-placeholder">
+                          {(profile.name || profile.npub).slice(0, 2).toUpperCase()}
+                        </div>
                       {/if}
-                      <small class="npub-display">{result.npub}</small>
+                      <div class="result-info">
+                        <strong>{profile.name || 'Unknown'}</strong>
+                        {#if profile.about}
+                          <p class="result-description">{profile.about}</p>
+                        {/if}
+                        <small class="npub-display">{profile.npub}</small>
+                      </div>
                     </div>
                   </div>
-                </div>
+                {/if}
               {/each}
             </div>
           {/if}
@@ -1750,24 +1763,26 @@
                   <img src="/icons/x.svg" alt="Clear" class="icon-small" />
                 </button>
               </div>
-              {#each lookupResults['repo-forkOriginalRepo'] as result}
-                {@const nameTag = result.tags.find((t: string[]) => t[0] === 'name')?.[1]}
-                {@const dTag = result.tags.find((t: string[]) => t[0] === 'd')?.[1]}
-                {@const descTag = result.tags.find((t: string[]) => t[0] === 'description')?.[1]}
-                {@const imageTag = result.tags.find((t: string[]) => t[0] === 'image')?.[1]}
-                {@const ownerNpub = nip19.npubEncode(result.pubkey)}
-                {@const tags = result.tags.filter((t: string[]) => t[0] === 't' && t[1] && t[1] !== 'private' && t[1] !== 'fork').map((t: string[]) => t[1])}
-                <div 
-                  class="lookup-result-item repo-result" 
-                  role="button"
-                  tabindex="0"
-                  onclick={() => selectRepoResult(result, 'forkOriginalRepo')}
-                  onkeydown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      selectRepoResult(result, 'forkOriginalRepo');
-                    }
-                  }}
+              {#each (lookupResults['repo-forkOriginalRepo'] || []) as result}
+                {#if 'tags' in result}
+                  {@const event = result as NostrEvent}
+                  {@const nameTag = event.tags.find((t: string[]) => t[0] === 'name')?.[1]}
+                  {@const dTag = event.tags.find((t: string[]) => t[0] === 'd')?.[1]}
+                  {@const descTag = event.tags.find((t: string[]) => t[0] === 'description')?.[1]}
+                  {@const imageTag = event.tags.find((t: string[]) => t[0] === 'image')?.[1]}
+                  {@const ownerNpub = nip19.npubEncode(event.pubkey)}
+                  {@const tags = event.tags.filter((t: string[]) => t[0] === 't' && t[1] && t[1] !== 'private' && t[1] !== 'fork').map((t: string[]) => t[1])}
+                  <div 
+                    class="lookup-result-item repo-result" 
+                    role="button"
+                    tabindex="0"
+                    onclick={() => selectRepoResult(event, 'forkOriginalRepo')}
+                    onkeydown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        selectRepoResult(event, 'forkOriginalRepo');
+                      }
+                    }}
                 >
                   <div class="result-header">
                     {#if imageTag}
@@ -1783,7 +1798,7 @@
                       {/if}
                       <div class="result-meta">
                         <small>Owner: {ownerNpub.slice(0, 16)}...</small>
-                        <small>Event: {result.id.slice(0, 16)}...</small>
+                        <small>Event: {event.id.slice(0, 16)}...</small>
                       </div>
                       {#if tags.length > 0}
                         <div class="result-tags">
@@ -1795,6 +1810,7 @@
                     </div>
                   </div>
                 </div>
+              {/if}
               {/each}
             </div>
           {/if}

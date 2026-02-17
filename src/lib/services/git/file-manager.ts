@@ -671,7 +671,11 @@ export class FileManager {
     const git: SimpleGit = simpleGit(repoPath);
 
     try {
-      const logOptions: any = {
+      const logOptions: {
+        maxCount: number;
+        from: string;
+        file?: string;
+      } = {
         maxCount: limit,
         from: branch
       };
@@ -687,7 +691,7 @@ export class FileManager {
         message: commit.message,
         author: `${commit.author_name} <${commit.author_email}>`,
         date: commit.date,
-        files: commit.diff?.files?.map((f: any) => f.file) || []
+        files: commit.diff?.files?.map((f: { file: string }) => f.file) || []
       }));
     } catch (error) {
       logger.error({ error, repoPath, branch, limit }, 'Error getting commit history');

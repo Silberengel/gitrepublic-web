@@ -9,6 +9,7 @@ import { FileManager } from '$lib/services/git/file-manager.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { nip19 } from 'nostr-tools';
+import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
 import logger from '$lib/services/logger.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
@@ -64,27 +65,13 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
     // Check if user is a maintainer
     let repoOwnerPubkey: string;
     try {
-      const decoded = nip19.decode(npub);
-      if (decoded.type === 'npub') {
-        repoOwnerPubkey = decoded.data as string;
-      } else {
-        return error(400, 'Invalid npub format');
-      }
+      repoOwnerPubkey = requireNpubHex(npub);
     } catch {
       return error(400, 'Invalid npub format');
     }
 
     // Convert userPubkey to hex if needed
-    let userPubkeyHex = userPubkey;
-    try {
-      const userDecoded = nip19.decode(userPubkey);
-      // @ts-ignore - nip19 types are incomplete, but we know npub returns string
-      if (userDecoded.type === 'npub') {
-        userPubkeyHex = userDecoded.data as unknown as string;
-      }
-    } catch {
-      // Assume it's already a hex pubkey
-    }
+    const userPubkeyHex = decodeNpubToHex(userPubkey) || userPubkey;
 
     const isMaintainer = await maintainerService.isMaintainer(userPubkeyHex, repoOwnerPubkey, repo);
     if (!isMaintainer) {
