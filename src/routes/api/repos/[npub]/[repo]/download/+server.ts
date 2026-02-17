@@ -2,85 +2,61 @@
  * API endpoint for downloading repository as ZIP
  */
 
-import { error } from '@sveltejs/kit';
+import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { FileManager } from '$lib/services/git/file-manager.js';
-import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
-import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
-import { requireNpubHex } from '$lib/utils/npub-utils.js';
+import { fileManager } from '$lib/services/service-registry.js';
+import { createRepoGetHandler } from '$lib/utils/api-handlers.js';
+import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
 import { spawn } from 'child_process';
 import { mkdir, rm, readFile } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join, resolve } from 'path';
 import logger from '$lib/services/logger.js';
 import { isValidBranchName, sanitizeError } from '$lib/utils/security.js';
 import simpleGit from 'simple-git';
-import { handleApiError, handleValidationError, handleNotFoundError, handleAuthorizationError } from '$lib/utils/error-handler.js';
-const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
-const fileManager = new FileManager(repoRoot);
-const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
+import { handleApiError } from '$lib/utils/error-handler.js';
 
-export const GET: RequestHandler = async ({ params, url, request }) => {
-  const { npub, repo } = params;
-  const ref = url.searchParams.get('ref') || 'HEAD';
-  const format = url.searchParams.get('format') || 'zip'; // zip or tar.gz
-  const userPubkey = url.searchParams.get('userPubkey') || request.headers.get('x-user-pubkey');
+const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
+  ? process.env.GIT_REPO_ROOT
+  : '/repos';
 
-  if (!npub || !repo) {
-    return error(400, 'Missing npub or repo parameter');
-  }
-
-  try {
-    if (!fileManager.repoExists(npub, repo)) {
-      return error(404, 'Repository not found');
-    }
-
-    // Check repository privacy
-    let repoOwnerPubkey: string;
-    try {
-      repoOwnerPubkey = requireNpubHex(npub);
-    } catch {
-      return error(400, 'Invalid npub format');
-    }
-
-    const canView = await maintainerService.canView(userPubkey || null, repoOwnerPubkey, repo);
-    if (!canView) {
-      return error(403, 'This repository is private. Only owners and maintainers can view it.');
-    }
+export const GET: RequestHandler = createRepoGetHandler(
+  async (context: RepoRequestContext, event: RequestEvent) => {
+    const ref = event.url.searchParams.get('ref') || 'HEAD';
+    const format = event.url.searchParams.get('format') || 'zip'; // zip or tar.gz
 
     // Security: Validate ref to prevent command injection
     if (ref !== 'HEAD' && !isValidBranchName(ref)) {
-      return error(400, 'Invalid ref format');
+      throw error(400, 'Invalid ref format');
     }
 
     // Security: Validate format
     if (format !== 'zip' && format !== 'tar.gz') {
-      return error(400, 'Invalid format. Must be "zip" or "tar.gz"');
+      throw error(400, 'Invalid format. Must be "zip" or "tar.gz"');
     }
 
-    const repoPath = join(repoRoot, npub, `${repo}.git`);
+    const repoPath = join(repoRoot, context.npub, `${context.repo}.git`);
     // Security: Ensure resolved path is within repoRoot
     const resolvedRepoPath = resolve(repoPath).replace(/\\/g, '/');
     const resolvedRoot = resolve(repoRoot).replace(/\\/g, '/');
     if (!resolvedRepoPath.startsWith(resolvedRoot + '/')) {
-      return error(403, 'Invalid repository path');
+      throw error(403, 'Invalid repository path');
     }
 
     const tempDir = join(repoRoot, '..', 'temp-downloads');
-    const workDir = join(tempDir, `${npub}-${repo}-${Date.now()}`);
+    const workDir = join(tempDir, `${context.npub}-${context.repo}-${Date.now()}`);
     // Security: Ensure workDir is within tempDir
     const resolvedWorkDir = resolve(workDir).replace(/\\/g, '/');
     const resolvedTempDir = resolve(tempDir).replace(/\\/g, '/');
     if (!resolvedWorkDir.startsWith(resolvedTempDir + '/')) {
-      return error(500, 'Invalid work directory path');
+      throw error(500, 'Invalid work directory path');
     }
 
-    const archiveName = `${repo}-${ref}.${format === 'tar.gz' ? 'tar.gz' : 'zip'}`;
+    const archiveName = `${context.repo}-${ref}.${format === 'tar.gz' ? 'tar.gz' : 'zip'}`;
     const archivePath = join(tempDir, archiveName);
     // Security: Ensure archive path is within tempDir
     const resolvedArchivePath = resolve(archivePath).replace(/\\/g, '/');
     if (!resolvedArchivePath.startsWith(resolvedTempDir + '/')) {
-      return error(500, 'Invalid archive path');
+      throw error(500, 'Invalid archive path');
     }
 
     try {
@@ -158,10 +134,9 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       await rm(workDir, { recursive: true, force: true }).catch(() => {});
       await rm(archivePath, { force: true }).catch(() => {});
       const sanitizedError = sanitizeError(archiveError);
-      logger.error({ error: sanitizedError, npub, repo, ref, format }, 'Error creating archive');
+      logger.error({ error: sanitizedError, npub: context.npub, repo: context.repo, ref, format }, 'Error creating archive');
       throw archiveError;
     }
-  } catch (err) {
-    return handleApiError(err, { operation: 'download', npub, repo, ref, format }, 'Failed to create repository archive');
-  }
-};
+  },
+  { operation: 'download' }
+);

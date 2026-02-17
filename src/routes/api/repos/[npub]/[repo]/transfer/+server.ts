@@ -4,44 +4,27 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { OwnershipTransferService } from '$lib/services/nostr/ownership-transfer-service.js';
-import { NostrClient } from '$lib/services/nostr/nostr-client.js';
-import { DEFAULT_NOSTR_RELAYS, combineRelays } from '$lib/config.js';
+import { ownershipTransferService, nostrClient } from '$lib/services/service-registry.js';
+import { combineRelays } from '$lib/config.js';
 import { KIND } from '$lib/types/nostr.js';
-import { nip19 } from 'nostr-tools';
-import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
 import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
-import { handleApiError, handleValidationError, handleAuthError, handleAuthorizationError } from '$lib/utils/error-handler.js';
-
-const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
-const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+import { createRepoGetHandler, withRepoValidation } from '$lib/utils/api-handlers.js';
+import type { RepoRequestContext } from '$lib/utils/api-context.js';
+import type { RequestEvent } from '@sveltejs/kit';
+import { handleApiError, handleValidationError, handleAuthorizationError } from '$lib/utils/error-handler.js';
 
 /**
  * GET - Get current owner and transfer history
  */
-export const GET: RequestHandler = async ({ params }) => {
-  const { npub, repo } = params;
-
-  if (!npub || !repo) {
-    return handleValidationError('Missing npub or repo parameter', { operation: 'getOwnership' });
-  }
-
-  try {
-    // Decode npub to get pubkey
-    let originalOwnerPubkey: string;
-    try {
-      originalOwnerPubkey = requireNpubHex(npub);
-    } catch {
-      return handleValidationError('Invalid npub format', { operation: 'getOwnership', npub });
-    }
-
+export const GET: RequestHandler = createRepoGetHandler(
+  async (context: RepoRequestContext) => {
     // Get current owner (may be different if transferred)
-    const currentOwner = await ownershipTransferService.getCurrentOwner(originalOwnerPubkey, repo);
+    const currentOwner = await ownershipTransferService.getCurrentOwner(context.repoOwnerPubkey, context.repo);
 
     // Fetch transfer events for history
-    const repoTag = `${KIND.REPO_ANNOUNCEMENT}:${originalOwnerPubkey}:${repo}`;
+    const repoTag = `${KIND.REPO_ANNOUNCEMENT}:${context.repoOwnerPubkey}:${context.repo}`;
     const transferEvents = await nostrClient.fetchEvents([
       {
         kinds: [KIND.OWNERSHIP_TRANSFER],
@@ -54,9 +37,9 @@ export const GET: RequestHandler = async ({ params }) => {
     transferEvents.sort((a, b) => b.created_at - a.created_at);
 
     return json({
-      originalOwner: originalOwnerPubkey,
+      originalOwner: context.repoOwnerPubkey,
       currentOwner,
-      transferred: currentOwner !== originalOwnerPubkey,
+      transferred: currentOwner !== context.repoOwnerPubkey,
       transfers: transferEvents.map(event => {
         const pTag = event.tags.find(t => t[0] === 'p');
         return {
@@ -68,87 +51,76 @@ export const GET: RequestHandler = async ({ params }) => {
         };
       })
     });
-  } catch (err) {
-    return handleApiError(err, { operation: 'getOwnership', npub, repo }, 'Failed to fetch ownership info');
-  }
-};
+  },
+  { operation: 'getOwnership', requireRepoAccess: false } // Ownership info is public
+);
 
 /**
  * POST - Initiate ownership transfer
  * Requires a pre-signed NIP-98 authenticated event from the current owner
  */
-export const POST: RequestHandler = async ({ params, request }) => {
-  const { npub, repo } = params;
+export const POST: RequestHandler = withRepoValidation(
+  async ({ repoContext, requestContext, event }) => {
+    if (!requestContext.userPubkeyHex) {
+      throw handleApiError(new Error('Authentication required'), { operation: 'transferOwnership', npub: repoContext.npub, repo: repoContext.repo }, 'Authentication required');
+    }
 
-  if (!npub || !repo) {
-    return handleValidationError('Missing npub or repo parameter', { operation: 'transferOwnership' });
-  }
+    const body = await event.request.json();
+    const { transferEvent } = body;
 
-  try {
-    const body = await request.json();
-    const { transferEvent, userPubkey } = body;
-
-    if (!transferEvent || !userPubkey) {
-      return handleValidationError('Missing transferEvent or userPubkey in request body', { operation: 'transferOwnership', npub, repo });
+    if (!transferEvent) {
+      return handleValidationError('Missing transferEvent in request body', { operation: 'transferOwnership', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Verify the event is properly signed
     if (!transferEvent.sig || !transferEvent.id) {
-      return handleValidationError('Invalid event: missing signature or ID', { operation: 'transferOwnership', npub, repo });
+      throw handleValidationError('Invalid event: missing signature or ID', { operation: 'transferOwnership', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     if (!verifyEvent(transferEvent)) {
-      return handleValidationError('Invalid event signature', { operation: 'transferOwnership', npub, repo });
-    }
-
-    // Decode npub to get original owner pubkey
-    let originalOwnerPubkey: string;
-    try {
-      originalOwnerPubkey = requireNpubHex(npub);
-    } catch {
-      return handleValidationError('Invalid npub format', { operation: 'transferOwnership', npub });
+      throw handleValidationError('Invalid event signature', { operation: 'transferOwnership', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Verify user is the current owner
     const canTransfer = await ownershipTransferService.canTransfer(
-      userPubkey,
-      originalOwnerPubkey,
-      repo
+      requestContext.userPubkeyHex,
+      repoContext.repoOwnerPubkey,
+      repoContext.repo
     );
 
     if (!canTransfer) {
-      return handleAuthorizationError('Only the current repository owner can transfer ownership', { operation: 'transferOwnership', npub, repo });
+      throw handleAuthorizationError('Only the current repository owner can transfer ownership', { operation: 'transferOwnership', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Verify the transfer event is from the current owner
-    if (transferEvent.pubkey !== userPubkey) {
-      return handleAuthorizationError('Transfer event must be signed by the current owner', { operation: 'transferOwnership', npub, repo });
+    if (transferEvent.pubkey !== requestContext.userPubkeyHex) {
+      throw handleAuthorizationError('Transfer event must be signed by the current owner', { operation: 'transferOwnership', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Verify it's an ownership transfer event
     if (transferEvent.kind !== KIND.OWNERSHIP_TRANSFER) {
-      return handleValidationError(`Event must be kind ${KIND.OWNERSHIP_TRANSFER} (ownership transfer)`, { operation: 'transferOwnership', npub, repo });
+      throw handleValidationError(`Event must be kind ${KIND.OWNERSHIP_TRANSFER} (ownership transfer)`, { operation: 'transferOwnership', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Verify the 'a' tag references this repo
     const aTag = transferEvent.tags.find(t => t[0] === 'a');
-    const expectedRepoTag = `${KIND.REPO_ANNOUNCEMENT}:${originalOwnerPubkey}:${repo}`;
+    const expectedRepoTag = `${KIND.REPO_ANNOUNCEMENT}:${repoContext.repoOwnerPubkey}:${repoContext.repo}`;
     if (!aTag || aTag[1] !== expectedRepoTag) {
-      return handleValidationError("Transfer event 'a' tag does not match this repository", { operation: 'transferOwnership', npub, repo });
+      throw handleValidationError("Transfer event 'a' tag does not match this repository", { operation: 'transferOwnership', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Get user's relays and publish
-    const { outbox } = await getUserRelays(userPubkey, nostrClient);
+    const { outbox } = await getUserRelays(requestContext.userPubkeyHex, nostrClient);
     const combinedRelays = combineRelays(outbox);
 
     const result = await nostrClient.publishEvent(transferEvent as NostrEvent, combinedRelays);
 
     if (result.success.length === 0) {
-      return error(500, 'Failed to publish transfer event to any relays');
+      throw handleApiError(new Error('Failed to publish transfer event to any relays'), { operation: 'transferOwnership', npub: repoContext.npub, repo: repoContext.repo }, 'Failed to publish transfer event to any relays');
     }
 
     // Clear cache so new owner is recognized immediately
-    ownershipTransferService.clearCache(originalOwnerPubkey, repo);
+    ownershipTransferService.clearCache(repoContext.repoOwnerPubkey, repoContext.repo);
 
     return json({
       success: true,
@@ -156,7 +128,6 @@ export const POST: RequestHandler = async ({ params, request }) => {
       published: result,
       message: 'Ownership transfer initiated successfully'
     });
-  } catch (err) {
-    return handleApiError(err, { operation: 'transferOwnership', npub, repo }, 'Failed to transfer ownership');
-  }
-};
+  },
+  { operation: 'transferOwnership', requireRepoAccess: false } // Override to check owner instead
+);

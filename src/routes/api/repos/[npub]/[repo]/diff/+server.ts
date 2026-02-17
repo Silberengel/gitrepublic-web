@@ -2,40 +2,25 @@
  * API endpoint for getting diffs
  */
 
-import { json, error } from '@sveltejs/kit';
+import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { FileManager } from '$lib/services/git/file-manager.js';
-import { handleApiError, handleValidationError, handleNotFoundError, handleAuthorizationError } from '$lib/utils/error-handler.js';
+import { fileManager } from '$lib/services/service-registry.js';
+import { createRepoGetHandler } from '$lib/utils/api-handlers.js';
+import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
+import { handleValidationError } from '$lib/utils/error-handler.js';
 
-const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
-const fileManager = new FileManager(repoRoot);
+export const GET: RequestHandler = createRepoGetHandler(
+  async (context: RepoRequestContext, event: RequestEvent) => {
+    const fromRef = event.url.searchParams.get('from');
+    const toRef = event.url.searchParams.get('to') || 'HEAD';
+    const filePath = event.url.searchParams.get('path') || undefined;
 
-export const GET: RequestHandler = async ({ params, url, request }) => {
-  const { npub, repo } = params;
-  const fromRef = url.searchParams.get('from');
-  const toRef = url.searchParams.get('to') || 'HEAD';
-  const filePath = url.searchParams.get('path') || undefined;
-  const userPubkey = url.searchParams.get('userPubkey') || request.headers.get('x-user-pubkey');
-
-  if (!npub || !repo || !fromRef) {
-    return handleValidationError('Missing npub, repo, or from parameter', { operation: 'getDiff' });
-  }
-
-  try {
-    if (!fileManager.repoExists(npub, repo)) {
-      return handleNotFoundError('Repository not found', { operation: 'getDiff', npub, repo });
+    if (!fromRef) {
+      throw handleValidationError('Missing from parameter', { operation: 'getDiff', npub: context.npub, repo: context.repo });
     }
 
-    // Check repository privacy
-    const { checkRepoAccess } = await import('$lib/utils/repo-privacy.js');
-    const access = await checkRepoAccess(npub, repo, userPubkey || null);
-    if (!access.allowed) {
-      return handleAuthorizationError(access.error || 'Access denied', { operation: 'getDiff', npub, repo });
-    }
-
-    const diffs = await fileManager.getDiff(npub, repo, fromRef, toRef, filePath);
+    const diffs = await fileManager.getDiff(context.npub, context.repo, fromRef, toRef, filePath);
     return json(diffs);
-  } catch (err) {
-    return handleApiError(err, { operation: 'getDiff', npub, repo, fromRef, toRef }, 'Failed to get diff');
-  }
-};
+  },
+  { operation: 'getDiff' }
+);

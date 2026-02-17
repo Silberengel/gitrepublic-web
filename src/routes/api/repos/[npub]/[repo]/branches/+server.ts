@@ -2,84 +2,33 @@
  * API endpoint for getting and creating repository branches
  */
 
-import { json, error } from '@sveltejs/kit';
+import { json } from '@sveltejs/kit';
 // @ts-ignore - SvelteKit generates this type
 import type { RequestHandler } from './$types';
-import { FileManager } from '$lib/services/git/file-manager.js';
-import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
-import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
-import { nip19 } from 'nostr-tools';
-import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
-import { handleApiError, handleValidationError, handleNotFoundError, handleAuthError, handleAuthorizationError } from '$lib/utils/error-handler.js';
+import { fileManager } from '$lib/services/service-registry.js';
+import { createRepoGetHandler, createRepoPostHandler } from '$lib/utils/api-handlers.js';
+import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
+import { handleValidationError } from '$lib/utils/error-handler.js';
 
-const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
-const fileManager = new FileManager(repoRoot);
-const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
-
-export const GET: RequestHandler = async ({ params }: { params: { npub?: string; repo?: string } }) => {
-  const { npub, repo } = params;
-
-  if (!npub || !repo) {
-    return handleValidationError('Missing npub or repo parameter', { operation: 'getBranches' });
-  }
-
-  try {
-    if (!fileManager.repoExists(npub, repo)) {
-      return handleNotFoundError('Repository not found', { operation: 'getBranches', npub, repo });
-    }
-
-    const branches = await fileManager.getBranches(npub, repo);
+export const GET: RequestHandler = createRepoGetHandler(
+  async (context: RepoRequestContext) => {
+    const branches = await fileManager.getBranches(context.npub, context.repo);
     return json(branches);
-  } catch (err) {
-    return handleApiError(err, { operation: 'getBranches', npub, repo }, 'Failed to get branches');
-  }
-};
+  },
+  { operation: 'getBranches', requireRepoAccess: false } // Branches are public info
+);
 
-export const POST: RequestHandler = async ({ params, request }: { params: { npub?: string; repo?: string }; request: Request }) => {
-  const { npub, repo } = params;
-
-  if (!npub || !repo) {
-    return handleValidationError('Missing npub or repo parameter', { operation: 'createBranch' });
-  }
-
-  let branchName: string | undefined;
-  let fromBranch: string | undefined;
-  let userPubkey: string | undefined;
-  try {
-    const body = await request.json();
-    ({ branchName, fromBranch, userPubkey } = body);
+export const POST: RequestHandler = createRepoPostHandler(
+  async (context: RepoRequestContext, event: RequestEvent) => {
+    const body = await event.request.json();
+    const { branchName, fromBranch } = body;
 
     if (!branchName) {
-      return handleValidationError('Missing branchName parameter', { operation: 'createBranch', npub, repo });
+      throw handleValidationError('Missing branchName parameter', { operation: 'createBranch', npub: context.npub, repo: context.repo });
     }
 
-    if (!userPubkey) {
-      return handleAuthError('Authentication required. Please provide userPubkey.', { operation: 'createBranch', npub, repo });
-    }
-
-    if (!fileManager.repoExists(npub, repo)) {
-      return handleNotFoundError('Repository not found', { operation: 'createBranch', npub, repo });
-    }
-
-    // Check if user is a maintainer
-    let repoOwnerPubkey: string;
-    try {
-      repoOwnerPubkey = requireNpubHex(npub);
-    } catch {
-      return handleValidationError('Invalid npub format', { operation: 'createBranch', npub });
-    }
-
-    // Convert userPubkey to hex if needed
-    const userPubkeyHex = decodeNpubToHex(userPubkey) || userPubkey;
-
-    const isMaintainer = await maintainerService.isMaintainer(userPubkeyHex, repoOwnerPubkey, repo);
-    if (!isMaintainer) {
-      return handleAuthorizationError('Only repository maintainers can create branches. Please submit a pull request instead.', { operation: 'createBranch', npub, repo });
-    }
-
-    await fileManager.createBranch(npub, repo, branchName, fromBranch || 'main');
+    await fileManager.createBranch(context.npub, context.repo, branchName, fromBranch || 'main');
     return json({ success: true, message: 'Branch created successfully' });
-  } catch (err) {
-    return handleApiError(err, { operation: 'createBranch', npub, repo, branchName }, 'Failed to create branch');
-  }
-};
+  },
+  { operation: 'createBranch' }
+);

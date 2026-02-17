@@ -4,44 +4,27 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { HighlightsService } from '$lib/services/nostr/highlights-service.js';
-import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
-import { nip19 } from 'nostr-tools';
-import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
+import { highlightsService, nostrClient } from '$lib/services/service-registry.js';
+import { DEFAULT_NOSTR_RELAYS, combineRelays } from '$lib/config.js';
+import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '$lib/types/nostr.js';
-import { combineRelays } from '$lib/config.js';
-import { getUserRelays } from '$lib/services/nostr/user-relays.js';
-import { NostrClient } from '$lib/services/nostr/nostr-client.js';
+import { createRepoGetHandler, withRepoValidation } from '$lib/utils/api-handlers.js';
+import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
 import { handleApiError, handleValidationError } from '$lib/utils/error-handler.js';
-
-const highlightsService = new HighlightsService(DEFAULT_NOSTR_RELAYS);
-const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+import { decodeNpubToHex } from '$lib/utils/npub-utils.js';
 
 /**
  * GET - Get highlights for a pull request
  * Query params: prId, prAuthor
  */
-export const GET: RequestHandler = async ({ params, url }) => {
-  const { npub, repo } = params;
-  const prId = url.searchParams.get('prId');
-  const prAuthor = url.searchParams.get('prAuthor');
+export const GET: RequestHandler = createRepoGetHandler(
+  async (context: RepoRequestContext, event: RequestEvent) => {
+    const prId = event.url.searchParams.get('prId');
+    const prAuthor = event.url.searchParams.get('prAuthor');
 
-  if (!npub || !repo) {
-    return handleValidationError('Missing npub or repo parameter', { operation: 'getHighlights' });
-  }
-
-  if (!prId || !prAuthor) {
-    return handleValidationError('Missing prId or prAuthor parameter', { operation: 'getHighlights', npub, repo });
-  }
-
-  try {
-    // Decode npub to get pubkey
-    let repoOwnerPubkey: string;
-    try {
-      repoOwnerPubkey = requireNpubHex(npub);
-    } catch {
-      return handleValidationError('Invalid npub format', { operation: 'getHighlights', npub });
+    if (!prId || !prAuthor) {
+      return handleValidationError('Missing prId or prAuthor parameter', { operation: 'getHighlights', npub: context.npub, repo: context.repo });
     }
 
     // Decode prAuthor if it's an npub
@@ -51,8 +34,8 @@ export const GET: RequestHandler = async ({ params, url }) => {
     const highlights = await highlightsService.getHighlightsForPR(
       prId,
       prAuthorPubkey,
-      repoOwnerPubkey,
-      repo
+      context.repoOwnerPubkey,
+      context.repo
     );
 
     // Also get top-level comments on the PR
@@ -62,55 +45,47 @@ export const GET: RequestHandler = async ({ params, url }) => {
       highlights,
       comments: prComments
     });
-  } catch (err) {
-    return handleApiError(err, { operation: 'getHighlights', npub, repo, prId }, 'Failed to fetch highlights');
-  }
-};
+  },
+  { operation: 'getHighlights', requireRepoAccess: false } // Highlights are public
+);
 
 /**
  * POST - Create a highlight or comment
  * Body: { type: 'highlight' | 'comment', event, userPubkey }
  */
-export const POST: RequestHandler = async ({ params, request }) => {
-  const { npub, repo } = params;
+export const POST: RequestHandler = withRepoValidation(
+  async ({ repoContext, requestContext, event }) => {
+    const body = await event.request.json();
+    const { type, event: highlightEvent, userPubkey } = body;
 
-  if (!npub || !repo) {
-    return handleValidationError('Missing npub or repo parameter', { operation: 'createHighlight' });
-  }
-
-  try {
-    const body = await request.json();
-    const { type, event, userPubkey } = body;
-
-    if (!type || !event || !userPubkey) {
-      return handleValidationError('Missing type, event, or userPubkey in request body', { operation: 'createHighlight', npub, repo });
+    if (!type || !highlightEvent || !userPubkey) {
+      throw handleValidationError('Missing type, event, or userPubkey in request body', { operation: 'createHighlight', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     if (type !== 'highlight' && type !== 'comment') {
-      return handleValidationError('Type must be "highlight" or "comment"', { operation: 'createHighlight', npub, repo });
+      throw handleValidationError('Type must be "highlight" or "comment"', { operation: 'createHighlight', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Verify the event is properly signed
-    if (!event.sig || !event.id) {
-      return handleValidationError('Invalid event: missing signature or ID', { operation: 'createHighlight', npub, repo });
+    if (!highlightEvent.sig || !highlightEvent.id) {
+      throw handleValidationError('Invalid event: missing signature or ID', { operation: 'createHighlight', npub: repoContext.npub, repo: repoContext.repo });
     }
 
-    if (!verifyEvent(event)) {
-      return handleValidationError('Invalid event signature', { operation: 'createHighlight', npub, repo });
+    if (!verifyEvent(highlightEvent)) {
+      throw handleValidationError('Invalid event signature', { operation: 'createHighlight', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Get user's relays and publish
     const { outbox } = await getUserRelays(userPubkey, nostrClient);
     const combinedRelays = combineRelays(outbox);
 
-    const result = await highlightsService['nostrClient'].publishEvent(event as NostrEvent, combinedRelays);
+    const result = await nostrClient.publishEvent(highlightEvent as NostrEvent, combinedRelays);
     
     if (result.failed.length > 0 && result.success.length === 0) {
-      return error(500, 'Failed to publish to all relays');
+      throw handleApiError(new Error('Failed to publish to all relays'), { operation: 'createHighlight', npub: repoContext.npub, repo: repoContext.repo }, 'Failed to publish to all relays');
     }
 
-    return json({ success: true, event, published: result });
-  } catch (err) {
-    return handleApiError(err, { operation: 'createHighlight', npub, repo }, 'Failed to create highlight/comment');
-  }
-};
+    return json({ success: true, event: highlightEvent, published: result });
+  },
+  { operation: 'createHighlight', requireRepoAccess: false } // Highlights can be created by anyone
+);

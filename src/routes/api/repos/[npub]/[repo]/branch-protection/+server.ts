@@ -4,88 +4,47 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from '@sveltejs/kit';
-import { BranchProtectionService } from '$lib/services/nostr/branch-protection-service.js';
-import { DEFAULT_NOSTR_RELAYS, combineRelays } from '$lib/config.js';
+import { branchProtectionService, ownershipTransferService, nostrClient } from '$lib/services/service-registry.js';
+import { combineRelays } from '$lib/config.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
-import { OwnershipTransferService } from '$lib/services/nostr/ownership-transfer-service.js';
 import { signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
-import { NostrClient } from '$lib/services/nostr/nostr-client.js';
-import { nip19 } from 'nostr-tools';
 import type { BranchProtectionRule } from '$lib/services/nostr/branch-protection-service.js';
-import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
-import { handleApiError, handleValidationError, handleAuthError, handleAuthorizationError } from '$lib/utils/error-handler.js';
-
-const branchProtectionService = new BranchProtectionService(DEFAULT_NOSTR_RELAYS);
-const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
-const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+import { createRepoGetHandler, createRepoPostHandler } from '$lib/utils/api-handlers.js';
+import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
+import { handleApiError, handleValidationError, handleAuthorizationError } from '$lib/utils/error-handler.js';
 
 /**
  * GET - Get branch protection rules
  */
-export const GET: RequestHandler = async ({ params }: { params: { npub?: string; repo?: string } }) => {
-  const { npub, repo } = params;
-
-  if (!npub || !repo) {
-    return handleValidationError('Missing npub or repo parameter', { operation: 'getBranchProtection' });
-  }
-
-  try {
-    // Decode npub to get pubkey
-    let ownerPubkey: string;
-    try {
-      ownerPubkey = requireNpubHex(npub);
-    } catch {
-      return handleValidationError('Invalid npub format', { operation: 'getBranchProtection', npub });
-    }
-
-    const config = await branchProtectionService.getBranchProtection(ownerPubkey, repo);
+export const GET: RequestHandler = createRepoGetHandler(
+  async (context: RepoRequestContext) => {
+    const config = await branchProtectionService.getBranchProtection(context.repoOwnerPubkey, context.repo);
     
     if (!config) {
       return json({ rules: [] });
     }
 
     return json(config);
-  } catch (err) {
-    return handleApiError(err, { operation: 'getBranchProtection', npub, repo }, 'Failed to get branch protection');
-  }
-};
+  },
+  { operation: 'getBranchProtection', requireRepoAccess: false } // Branch protection rules are public
+);
 
 /**
  * POST - Update branch protection rules
  */
-export const POST: RequestHandler = async ({ params, request }: { params: { npub?: string; repo?: string }; request: Request }) => {
-  const { npub, repo } = params;
-
-  if (!npub || !repo) {
-    return handleValidationError('Missing npub or repo parameter', { operation: 'updateBranchProtection' });
-  }
-
-  try {
-    const body = await request.json();
-    const { userPubkey, rules } = body;
-
-    if (!userPubkey) {
-      return handleAuthError('Authentication required', { operation: 'updateBranchProtection', npub, repo });
-    }
+export const POST: RequestHandler = createRepoPostHandler(
+  async (context: RepoRequestContext, event: RequestEvent) => {
+    const body = await event.request.json();
+    const { rules } = body;
 
     if (!Array.isArray(rules)) {
-      return handleValidationError('Rules must be an array', { operation: 'updateBranchProtection', npub, repo });
+      return handleValidationError('Rules must be an array', { operation: 'updateBranchProtection', npub: context.npub, repo: context.repo });
     }
-
-    // Decode npub to get pubkey
-    let ownerPubkey: string;
-    try {
-      ownerPubkey = requireNpubHex(npub);
-    } catch {
-      return handleValidationError('Invalid npub format', { operation: 'updateBranchProtection', npub });
-    }
-
-    const userPubkeyHex = decodeNpubToHex(userPubkey) || userPubkey;
 
     // Check if user is owner
-    const currentOwner = await ownershipTransferService.getCurrentOwner(ownerPubkey, repo);
-    if (userPubkeyHex !== currentOwner) {
-      return handleAuthorizationError('Only the repository owner can update branch protection', { operation: 'updateBranchProtection', npub, repo });
+    const currentOwner = await ownershipTransferService.getCurrentOwner(context.repoOwnerPubkey, context.repo);
+    if (context.userPubkeyHex !== currentOwner) {
+      return handleAuthorizationError('Only the repository owner can update branch protection', { operation: 'updateBranchProtection', npub: context.npub, repo: context.repo });
     }
 
     // Validate rules
@@ -101,7 +60,7 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
     // Create protection event
     const protectionEvent = branchProtectionService.createProtectionEvent(
       currentOwner,
-      repo,
+      context.repo,
       validatedRules
     );
 
@@ -114,11 +73,10 @@ export const POST: RequestHandler = async ({ params, request }: { params: { npub
     const result = await nostrClient.publishEvent(signedEvent, combinedRelays);
 
     if (result.success.length === 0) {
-      return error(500, 'Failed to publish branch protection rules to relays');
+      throw handleApiError(new Error('Failed to publish branch protection rules to relays'), { operation: 'updateBranchProtection', npub: context.npub, repo: context.repo }, 'Failed to publish branch protection rules to relays');
     }
 
     return json({ success: true, event: signedEvent, rules: validatedRules });
-  } catch (err) {
-    return handleApiError(err, { operation: 'updateBranchProtection', npub, repo }, 'Failed to update branch protection');
-  }
-};
+  },
+  { operation: 'updateBranchProtection', requireMaintainer: false } // Override to check owner instead
+);

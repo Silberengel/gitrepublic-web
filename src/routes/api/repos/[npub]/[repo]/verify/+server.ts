@@ -5,52 +5,35 @@
 import { json, error } from '@sveltejs/kit';
 // @ts-ignore - SvelteKit generates this type
 import type { RequestHandler } from './$types';
-import { FileManager } from '$lib/services/git/file-manager.js';
+import { fileManager } from '$lib/services/service-registry.js';
 import { verifyRepositoryOwnership, VERIFICATION_FILE_PATH } from '$lib/services/nostr/repo-verification.js';
-import { NostrClient } from '$lib/services/nostr/nostr-client.js';
-import { OwnershipTransferService } from '$lib/services/nostr/ownership-transfer-service.js';
-import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
+import { nostrClient } from '$lib/services/service-registry.js';
 import { KIND } from '$lib/types/nostr.js';
-import { nip19 } from 'nostr-tools';
 import { existsSync } from 'fs';
-import logger from '$lib/services/logger.js';
 import { join } from 'path';
-import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
-import { handleApiError, handleValidationError, handleNotFoundError } from '$lib/utils/error-handler.js';
+import { decodeNpubToHex } from '$lib/utils/npub-utils.js';
+import { createRepoGetHandler } from '$lib/utils/api-handlers.js';
+import type { RepoRequestContext } from '$lib/utils/api-context.js';
+import { handleApiError } from '$lib/utils/error-handler.js';
 
-const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
-const fileManager = new FileManager(repoRoot);
-const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
-const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
+const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
+  ? process.env.GIT_REPO_ROOT
+  : '/repos';
 
-export const GET: RequestHandler = async ({ params }: { params: { npub?: string; repo?: string } }) => {
-  const { npub, repo } = params;
-
-  if (!npub || !repo) {
-    return handleValidationError('Missing npub or repo parameter', { operation: 'verifyRepo' });
-  }
-
-  try {
-    // Decode npub to get pubkey
-    let ownerPubkey: string;
-    try {
-      ownerPubkey = requireNpubHex(npub);
-    } catch {
-      return handleValidationError('Invalid npub format', { operation: 'verifyRepo', npub });
-    }
-
-    // Check if repository exists (using FileManager's internal method)
-    const repoPath = join(repoRoot, npub, `${repo}.git`);
+export const GET: RequestHandler = createRepoGetHandler(
+  async (context: RepoRequestContext) => {
+    // Check if repository exists
+    const repoPath = join(repoRoot, context.npub, `${context.repo}.git`);
     if (!existsSync(repoPath)) {
-      return handleNotFoundError('Repository not found', { operation: 'verifyRepo', npub, repo });
+      throw handleApiError(new Error('Repository not found'), { operation: 'verifyRepo', npub: context.npub, repo: context.repo }, 'Repository not found');
     }
 
     // Fetch the repository announcement
     const events = await nostrClient.fetchEvents([
       {
         kinds: [KIND.REPO_ANNOUNCEMENT],
-        authors: [ownerPubkey],
-        '#d': [repo],
+        authors: [context.repoOwnerPubkey],
+        '#d': [context.repo],
         limit: 1
       }
     ]);
@@ -66,7 +49,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
     const announcement = events[0];
 
     // Check for ownership transfer events (including self-transfer for initial ownership)
-    const repoTag = `${KIND.REPO_ANNOUNCEMENT}:${ownerPubkey}:${repo}`;
+    const repoTag = `${KIND.REPO_ANNOUNCEMENT}:${context.repoOwnerPubkey}:${context.repo}`;
     const transferEvents = await nostrClient.fetchEvents([
       {
         kinds: [KIND.OWNERSHIP_TRANSFER],
@@ -90,8 +73,8 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
         }
       }
       
-      return event.pubkey === ownerPubkey && 
-             toPubkey === ownerPubkey;
+      return event.pubkey === context.repoOwnerPubkey && 
+             toPubkey === context.repoOwnerPubkey;
     });
 
     // Verify ownership - prefer self-transfer event, fall back to verification file
@@ -113,7 +96,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
     } else {
       // Fall back to verification file method (for backward compatibility)
       try {
-        const verificationFile = await fileManager.getFileContent(npub, repo, VERIFICATION_FILE_PATH, 'HEAD');
+        const verificationFile = await fileManager.getFileContent(context.npub, context.repo, VERIFICATION_FILE_PATH, 'HEAD');
         const verification = verifyRepositoryOwnership(announcement, verificationFile.content);
         verified = verification.valid;
         verificationError = verification.error;
@@ -129,7 +112,7 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
       return json({
         verified: true,
         announcementId: announcement.id,
-        ownerPubkey: ownerPubkey,
+        ownerPubkey: context.repoOwnerPubkey,
         verificationMethod,
         selfTransferEventId: selfTransfer?.id,
         message: 'Repository ownership verified successfully'
@@ -143,7 +126,6 @@ export const GET: RequestHandler = async ({ params }: { params: { npub?: string;
         message: 'Repository ownership verification failed'
       });
     }
-  } catch (err) {
-    return handleApiError(err, { operation: 'verifyRepo', npub, repo }, 'Failed to verify repository');
-  }
-};
+  },
+  { operation: 'verifyRepo', requireRepoAccess: false } // Verification is public
+);

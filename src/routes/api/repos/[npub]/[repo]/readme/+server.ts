@@ -2,18 +2,11 @@
  * API endpoint for getting README content
  */
 
-import { json, error } from '@sveltejs/kit';
+import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { FileManager } from '$lib/services/git/file-manager.js';
-import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
-import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
-import { nip19 } from 'nostr-tools';
-import { requireNpubHex } from '$lib/utils/npub-utils.js';
-import { handleApiError, handleValidationError, handleNotFoundError, handleAuthorizationError } from '$lib/utils/error-handler.js';
-
-const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
-const fileManager = new FileManager(repoRoot);
-const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
+import { fileManager } from '$lib/services/service-registry.js';
+import { createRepoGetHandler } from '$lib/utils/api-handlers.js';
+import type { RepoRequestContext } from '$lib/utils/api-context.js';
 
 const README_PATTERNS = [
   'README.md',
@@ -26,33 +19,10 @@ const README_PATTERNS = [
   'readme'
 ];
 
-export const GET: RequestHandler = async ({ params, url, request }) => {
-  const { npub, repo } = params;
-  const ref = url.searchParams.get('ref') || 'HEAD';
-  const userPubkey = url.searchParams.get('userPubkey') || request.headers.get('x-user-pubkey');
-
-  if (!npub || !repo) {
-    return handleValidationError('Missing npub or repo parameter', { operation: 'getReadme' });
-  }
-
-  try {
-    if (!fileManager.repoExists(npub, repo)) {
-      return handleNotFoundError('Repository not found', { operation: 'getReadme', npub, repo });
-    }
-
-    // Check repository privacy
-    let repoOwnerPubkey: string;
-    try {
-      repoOwnerPubkey = requireNpubHex(npub);
-    } catch {
-      return handleValidationError('Invalid npub format', { operation: 'getReadme', npub });
-    }
-
-    const canView = await maintainerService.canView(userPubkey || null, repoOwnerPubkey, repo);
-    if (!canView) {
-      return handleAuthorizationError('This repository is private. Only owners and maintainers can view it.', { operation: 'getReadme', npub, repo });
-    }
-
+export const GET: RequestHandler = createRepoGetHandler(
+  async (context: RepoRequestContext) => {
+    const ref = context.ref || 'HEAD';
+    
     // Try to find README file
     let readmeContent: string | null = null;
     let readmePath: string | null = null;
@@ -60,14 +30,14 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     for (const pattern of README_PATTERNS) {
       try {
         // Try root directory first
-        const content = await fileManager.getFileContent(npub, repo, pattern, ref);
+        const content = await fileManager.getFileContent(context.npub, context.repo, pattern, ref);
         readmeContent = content.content;
         readmePath = pattern;
         break;
       } catch {
         // Try in root directory with different paths
         try {
-          const content = await fileManager.getFileContent(npub, repo, `/${pattern}`, ref);
+          const content = await fileManager.getFileContent(context.npub, context.repo, `/${pattern}`, ref);
           readmeContent = content.content;
           readmePath = `/${pattern}`;
           break;
@@ -87,7 +57,6 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       path: readmePath,
       isMarkdown: readmePath?.toLowerCase().endsWith('.md') || readmePath?.toLowerCase().endsWith('.markdown')
     });
-  } catch (err) {
-    return handleApiError(err, { operation: 'getReadme', npub, repo }, 'Failed to get README');
-  }
-};
+  },
+  { operation: 'getReadme' }
+);

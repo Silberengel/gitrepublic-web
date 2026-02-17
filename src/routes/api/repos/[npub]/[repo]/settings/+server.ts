@@ -4,52 +4,28 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { NostrClient } from '$lib/services/nostr/nostr-client.js';
-import { DEFAULT_NOSTR_RELAYS, combineRelays, getGitUrl } from '$lib/config.js';
+import { nostrClient, maintainerService, ownershipTransferService } from '$lib/services/service-registry.js';
+import { DEFAULT_NOSTR_RELAYS, combineRelays } from '$lib/config.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import { KIND } from '$lib/types/nostr.js';
-import { nip19 } from 'nostr-tools';
-import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
 import { signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
-import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
-import logger from '$lib/services/logger.js';
-import { OwnershipTransferService } from '$lib/services/nostr/ownership-transfer-service.js';
-import { handleApiError, handleValidationError, handleNotFoundError, handleAuthError, handleAuthorizationError } from '$lib/utils/error-handler.js';
-
-const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
-const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
-const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
+import { createRepoGetHandler, withRepoValidation } from '$lib/utils/api-handlers.js';
+import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
+import { handleApiError, handleValidationError, handleNotFoundError, handleAuthorizationError } from '$lib/utils/error-handler.js';
 
 /**
  * GET - Get repository settings
  */
-export const GET: RequestHandler = async ({ params, url, request }) => {
-  const { npub, repo } = params;
-  const userPubkey = url.searchParams.get('userPubkey') || request.headers.get('x-user-pubkey');
-
-  if (!npub || !repo) {
-    return handleValidationError('Missing npub or repo parameter', { operation: 'getSettings' });
-  }
-
-  try {
-    // Decode npub to get pubkey
-    let repoOwnerPubkey: string;
-    try {
-      repoOwnerPubkey = requireNpubHex(npub);
-    } catch {
-      return handleValidationError('Invalid npub format', { operation: 'getSettings', npub });
-    }
-
+export const GET: RequestHandler = createRepoGetHandler(
+  async (context: RepoRequestContext) => {
     // Check if user is owner
-    if (!userPubkey) {
-      return handleAuthError('Authentication required', { operation: 'getSettings', npub, repo });
+    if (!context.userPubkeyHex) {
+      throw handleApiError(new Error('Authentication required'), { operation: 'getSettings', npub: context.npub, repo: context.repo }, 'Authentication required');
     }
 
-    const userPubkeyHex = decodeNpubToHex(userPubkey) || userPubkey;
-
-    const currentOwner = await ownershipTransferService.getCurrentOwner(repoOwnerPubkey, repo);
-    if (userPubkeyHex !== currentOwner) {
-      return handleAuthorizationError('Only the repository owner can access settings', { operation: 'getSettings', npub, repo });
+    const currentOwner = await ownershipTransferService.getCurrentOwner(context.repoOwnerPubkey, context.repo);
+    if (context.userPubkeyHex !== currentOwner) {
+      throw handleAuthorizationError('Only the repository owner can access settings', { operation: 'getSettings', npub: context.npub, repo: context.repo });
     }
 
     // Get repository announcement
@@ -57,17 +33,17 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       {
         kinds: [KIND.REPO_ANNOUNCEMENT],
         authors: [currentOwner],
-        '#d': [repo],
+        '#d': [context.repo],
         limit: 1
       }
     ]);
 
     if (events.length === 0) {
-      return handleNotFoundError('Repository announcement not found', { operation: 'getSettings', npub, repo });
+      throw handleNotFoundError('Repository announcement not found', { operation: 'getSettings', npub: context.npub, repo: context.repo });
     }
 
     const announcement = events[0];
-    const name = announcement.tags.find(t => t[0] === 'name')?.[1] || repo;
+    const name = announcement.tags.find(t => t[0] === 'name')?.[1] || context.repo;
     const description = announcement.tags.find(t => t[0] === 'description')?.[1] || '';
     const cloneUrls = announcement.tags
       .filter(t => t[0] === 'clone')
@@ -77,7 +53,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       .filter(t => t[0] === 'maintainers')
       .flatMap(t => t.slice(1))
       .filter(m => m && typeof m === 'string') as string[];
-    const privacyInfo = await maintainerService.getPrivacyInfo(currentOwner, repo);
+    const privacyInfo = await maintainerService.getPrivacyInfo(currentOwner, context.repo);
     const isPrivate = privacyInfo.isPrivate;
 
     return json({
@@ -87,45 +63,28 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       maintainers,
       isPrivate,
       owner: currentOwner,
-      npub
+      npub: context.npub
     });
-  } catch (err) {
-    return handleApiError(err, { operation: 'getSettings', npub, repo }, 'Failed to get repository settings');
-  }
-};
+  },
+  { operation: 'getSettings', requireRepoAccess: false } // Override to check owner instead
+);
 
 /**
  * POST - Update repository settings
  */
-export const POST: RequestHandler = async ({ params, request }) => {
-  const { npub, repo } = params;
-
-  if (!npub || !repo) {
-    return handleValidationError('Missing npub or repo parameter', { operation: 'updateSettings' });
-  }
-
-  try {
-    const body = await request.json();
-    const { userPubkey, name, description, cloneUrls, maintainers, isPrivate } = body;
-
-    if (!userPubkey) {
-      return handleAuthError('Authentication required', { operation: 'updateSettings', npub, repo });
+export const POST: RequestHandler = withRepoValidation(
+  async ({ repoContext, requestContext, event }) => {
+    if (!requestContext.userPubkeyHex) {
+      throw handleApiError(new Error('Authentication required'), { operation: 'updateSettings', npub: repoContext.npub, repo: repoContext.repo }, 'Authentication required');
     }
 
-    // Decode npub to get pubkey
-    let repoOwnerPubkey: string;
-    try {
-      repoOwnerPubkey = requireNpubHex(npub);
-    } catch {
-      return handleValidationError('Invalid npub format', { operation: 'updateSettings', npub });
-    }
-
-    const userPubkeyHex = decodeNpubToHex(userPubkey) || userPubkey;
+    const body = await event.request.json();
+    const { name, description, cloneUrls, maintainers, isPrivate } = body;
 
     // Check if user is owner
-    const currentOwner = await ownershipTransferService.getCurrentOwner(repoOwnerPubkey, repo);
-    if (userPubkeyHex !== currentOwner) {
-      return handleAuthorizationError('Only the repository owner can update settings', { operation: 'updateSettings', npub, repo });
+    const currentOwner = await ownershipTransferService.getCurrentOwner(repoContext.repoOwnerPubkey, repoContext.repo);
+    if (requestContext.userPubkeyHex !== currentOwner) {
+      throw handleAuthorizationError('Only the repository owner can update settings', { operation: 'updateSettings', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Get existing announcement
@@ -133,13 +92,13 @@ export const POST: RequestHandler = async ({ params, request }) => {
       {
         kinds: [KIND.REPO_ANNOUNCEMENT],
         authors: [currentOwner],
-        '#d': [repo],
+        '#d': [repoContext.repo],
         limit: 1
       }
     ]);
 
     if (events.length === 0) {
-      return handleNotFoundError('Repository announcement not found', { operation: 'updateSettings', npub, repo });
+      throw handleNotFoundError('Repository announcement not found', { operation: 'updateSettings', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     const existingAnnouncement = events[0];
@@ -148,11 +107,11 @@ export const POST: RequestHandler = async ({ params, request }) => {
     const gitDomain = process.env.GIT_DOMAIN || 'localhost:6543';
     const isLocalhost = gitDomain.startsWith('localhost') || gitDomain.startsWith('127.0.0.1');
     const protocol = isLocalhost ? 'http' : 'https';
-    const gitUrl = `${protocol}://${gitDomain}/${npub}/${repo}.git`;
+    const gitUrl = `${protocol}://${gitDomain}/${repoContext.npub}/${repoContext.repo}.git`;
 
     // Get Tor .onion URL if available
     const { getTorGitUrl } = await import('$lib/services/tor/hidden-service.js');
-    const torOnionUrl = await getTorGitUrl(npub, repo);
+    const torOnionUrl = await getTorGitUrl(repoContext.npub, repoContext.repo);
 
     // Filter user-provided clone URLs (exclude localhost and .onion duplicates)
     const userCloneUrls = (cloneUrls || []).filter((url: string) => {
@@ -181,12 +140,12 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     // Validate: If using localhost, require either Tor .onion URL or at least one other clone URL
     if (isLocalhost && !torOnionUrl && userCloneUrls.length === 0) {
-      return error(400, 'Cannot update with only localhost. You need either a Tor .onion address or at least one other clone URL.');
+      throw error(400, 'Cannot update with only localhost. You need either a Tor .onion address or at least one other clone URL.');
     }
 
     const tags: string[][] = [
-      ['d', repo],
-      ['name', name || repo],
+      ['d', repoContext.repo],
+      ['name', name || repoContext.repo],
       ...(description ? [['description', description]] : []),
       ['clone', ...cloneUrlList],
       ['relays', ...DEFAULT_NOSTR_RELAYS],
@@ -220,11 +179,10 @@ export const POST: RequestHandler = async ({ params, request }) => {
     const result = await nostrClient.publishEvent(signedEvent, combinedRelays);
 
     if (result.success.length === 0) {
-      return error(500, 'Failed to publish updated announcement to relays');
+      throw error(500, 'Failed to publish updated announcement to relays');
     }
 
     return json({ success: true, event: signedEvent });
-  } catch (err) {
-    return handleApiError(err, { operation: 'updateSettings', npub, repo }, 'Failed to update repository settings');
-  }
-};
+  },
+  { operation: 'updateSettings', requireRepoAccess: false } // Override to check owner instead
+);
