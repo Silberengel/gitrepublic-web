@@ -1,0 +1,74 @@
+# Dockerfile for gitrepublic-web
+# Builds a Node.js application with SvelteKit
+
+FROM node:20-alpine AS builder
+
+# Install git and required utilities
+# - git: for git operations and git-http-backend
+# - zip: for creating ZIP archives (download endpoint)
+# - util-linux: for whereis command (used to find git-http-backend)
+RUN apk add --no-cache git zip util-linux
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json* ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN npm run build
+
+# Production stage
+FROM node:20-alpine
+
+# Install git and required utilities
+# - git: for git operations and git-http-backend
+# - zip: for creating ZIP archives (download endpoint)
+# - util-linux: for whereis command (used to find git-http-backend)
+RUN apk add --no-cache git zip util-linux
+
+# Create app directory
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json* ./
+
+# Install production dependencies only
+RUN npm ci --only=production
+
+# Copy built application from builder
+COPY --from=builder /app/build ./build
+COPY --from=builder /app/package.json ./
+
+# Create directory for git repositories
+RUN mkdir -p /repos && chmod 755 /repos
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001 && \
+    chown -R nodejs:nodejs /app /repos
+
+# Switch to non-root user
+USER nodejs
+
+# Expose port
+EXPOSE 6543
+
+# Set environment variables with defaults
+ENV NODE_ENV=production
+ENV GIT_REPO_ROOT=/repos
+ENV GIT_DOMAIN=localhost:6543
+ENV PORT=6543
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:6543', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
+
+# Start the application
+CMD ["node", "build"]
