@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
+  import UserBadge from '$lib/components/UserBadge.svelte';
 
   let query = $state('');
   let searchType = $state<'repos' | 'code' | 'all'>('repos');
@@ -114,7 +115,7 @@
                   {/if}
                   <div class="repo-meta">
                     <a href={`/users/${repo.npub}`} onclick={(e) => e.stopPropagation()}>
-                      {repo.npub.slice(0, 16)}...
+                      <UserBadge pubkey={repo.owner} />
                     </a>
                   </div>
                 </div>
