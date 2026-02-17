@@ -14,7 +14,7 @@
         const hljsModule = await import('highlight.js');
         const hljs = hljsModule.default || hljsModule;
         
-        const md: any = new MarkdownIt({
+        const md = new MarkdownIt({
           highlight: function (str: string, lang: string): string {
             if (lang && hljs.getLanguage(lang)) {
               try {

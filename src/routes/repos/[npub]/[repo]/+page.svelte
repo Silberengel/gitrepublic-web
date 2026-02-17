@@ -128,7 +128,7 @@
             const hljsModule = await import('highlight.js');
             const hljs = hljsModule.default || hljsModule;
             
-            const md: any = new MarkdownIt({
+            const md = new MarkdownIt({
               highlight: function (str: string, lang: string): string {
                 if (lang && hljs.getLanguage(lang)) {
                   try {
@@ -212,7 +212,7 @@
       
       // Register AsciiDoc language if needed (not in highlight.js by default)
       if (lang === 'asciidoc' && !hljs.getLanguage('asciidoc')) {
-        hljs.registerLanguage('asciidoc', function(hljs: any) {
+        hljs.registerLanguage('asciidoc', function(hljs) {
           return {
             name: 'AsciiDoc',
             aliases: ['adoc', 'asciidoc', 'ad'],

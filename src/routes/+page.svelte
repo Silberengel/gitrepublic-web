@@ -311,8 +311,13 @@
       let queryHex = '';
       try {
         const decoded = nip19.decode(query);
-        if (decoded.type === 'naddr' || decoded.type === 'nevent') {
-          queryHex = (decoded.data as any).id || '';
+        if (decoded.type === 'nevent') {
+          const data = decoded.data as { id: string };
+          queryHex = data.id || '';
+        } else if (decoded.type === 'naddr') {
+          // For naddr, we can't extract an event ID directly, skip
+        } else if (decoded.type === 'note') {
+          queryHex = decoded.data as string;
         }
       } catch {
         // Not a bech32 encoded value

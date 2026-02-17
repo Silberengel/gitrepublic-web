@@ -3,6 +3,7 @@
  */
 
 import { nip19 } from 'nostr-tools';
+import type { DecodedNevent, DecodedNaddr, DecodedNote } from '../../types/nip19.js';
 
 export interface DecodedEvent {
   type: 'nevent' | 'naddr' | 'note';
@@ -27,7 +28,7 @@ export function decodeNostrAddress(input: string): DecodedEvent | null {
     const decoded = nip19.decode(trimmed);
     
     if (decoded.type === 'nevent') {
-      const data = decoded.data as { id: string; pubkey?: string; relays?: string[] };
+      const data = decoded.data as DecodedNevent['data'];
       return {
         type: 'nevent',
         id: data.id,
@@ -35,7 +36,7 @@ export function decodeNostrAddress(input: string): DecodedEvent | null {
         relays: data.relays
       };
     } else if (decoded.type === 'naddr') {
-      const data = decoded.data as { pubkey: string; kind: number; identifier: string; relays?: string[] };
+      const data = decoded.data as DecodedNaddr['data'];
       return {
         type: 'naddr',
         pubkey: data.pubkey,
@@ -44,9 +45,10 @@ export function decodeNostrAddress(input: string): DecodedEvent | null {
         relays: data.relays
       };
     } else if (decoded.type === 'note') {
+      const data = decoded.data as DecodedNote['data'];
       return {
         type: 'note',
-        id: decoded.data as string
+        id: data
       };
     }
   } catch (e) {

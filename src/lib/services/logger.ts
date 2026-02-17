@@ -4,21 +4,23 @@
  * Browser-safe: falls back to console in browser environments
  */
 
-function createConsoleLogger() {
+import type { Logger } from '../types/logger.js';
+
+function createConsoleLogger(): Logger {
   return {
-    info: (...args: any[]) => console.log('[INFO]', ...args),
-    error: (...args: any[]) => console.error('[ERROR]', ...args),
-    warn: (...args: any[]) => console.warn('[WARN]', ...args),
-    debug: (...args: any[]) => console.debug('[DEBUG]', ...args),
-    trace: (...args: any[]) => console.trace('[TRACE]', ...args),
-    fatal: (...args: any[]) => console.error('[FATAL]', ...args)
+    info: (...args: unknown[]) => console.log('[INFO]', ...args),
+    error: (...args: unknown[]) => console.error('[ERROR]', ...args),
+    warn: (...args: unknown[]) => console.warn('[WARN]', ...args),
+    debug: (...args: unknown[]) => console.debug('[DEBUG]', ...args),
+    trace: (...args: unknown[]) => console.trace('[TRACE]', ...args),
+    fatal: (...args: unknown[]) => console.error('[FATAL]', ...args)
   };
 }
 
 // Check if we're in a Node.js environment
 const isNode = typeof process !== 'undefined' && process.versions?.node;
 
-let logger: any;
+let logger: Logger;
 
 if (isNode) {
   // Server-side: use pino
