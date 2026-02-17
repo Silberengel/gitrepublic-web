@@ -478,6 +478,48 @@ input:disabled, textarea:disabled, select:disabled {
   cursor: pointer;
   transition: background 0.2s;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lookup-button .loading-text {
+  font-size: 0.85rem;
+}
+
+.icon-small {
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.icon-small svg {
+  width: 100%;
+  height: 100%;
+  color: inherit;
+}
+
+.icon-inline {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 0.25rem;
+}
+
+.icon-inline svg {
+  width: 100%;
+  height: 100%;
+  color: inherit;
+}
+
+.clear-lookup-button img,
+.clear-lookup-button svg {
+  width: 14px;
+  height: 14px;
+  display: block;
 }
 
 .lookup-button:hover:not(:disabled) {
@@ -622,6 +664,7 @@ input:disabled, textarea:disabled, select:disabled {
   line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }

@@ -992,7 +992,14 @@
             class="lookup-button"
             title="Search for repository announcements (supports hex ID, nevent, naddr, or search by name)"
           >
-            {lookupLoading['repo-existingRepoRef'] ? '🔍...' : '🔍'}
+            {#if lookupLoading['repo-existingRepoRef']}
+              <span class="loading-text">Loading...</span>
+            {:else}
+              <svg class="icon-small" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8"/>
+                <path d="m21 21-4.35-4.35"/>
+              </svg>
+            {/if}
           </button>
           <button
             type="button"
@@ -1015,7 +1022,7 @@
                 class="clear-lookup-button"
                 title="Clear results"
               >
-                ✕
+                <img src="/icons/x.svg" alt="Clear" class="icon-small" />
               </button>
             </div>
             {#each lookupResults['repo-existingRepoRef'] as result}
@@ -1162,7 +1169,10 @@
                   <div class="preview-loading">Loading preview...</div>
                 {:else if previewError}
                   <div class="preview-error">
-                    <strong>⚠️ Warning:</strong> {previewError}
+                    <strong>
+                      <img src="/icons/alert-triangle.svg" alt="Warning" class="icon-inline" />
+                      Warning:
+                    </strong> {previewError}
                   </div>
                 {/if}
                 <iframe
@@ -1207,7 +1217,14 @@
               class="lookup-button"
               title="Lookup npub or search by name"
             >
-              {lookupLoading[`npub-maintainers-${index}`] ? '🔍...' : '🔍'}
+              {#if lookupLoading[`npub-maintainers-${index}`]}
+                <span class="loading-text">Loading...</span>
+              {:else}
+                <svg class="icon-small" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"/>
+                  <path d="m21 21-4.35-4.35"/>
+                </svg>
+              {/if}
             </button>
             {#if maintainers.length > 1}
               <button
@@ -1232,7 +1249,7 @@
                   class="clear-lookup-button"
                   title="Clear results"
                 >
-                  ✕
+                  <img src="/icons/x.svg" alt="Clear" class="icon-small" />
                 </button>
               </div>
               {#each lookupResults[`npub-maintainers-${index}`] as result}
@@ -1444,7 +1461,14 @@
               class="lookup-button"
               title="Search for repository announcements"
             >
-              {lookupLoading['repo-forkOriginalRepo'] ? '🔍...' : '🔍'}
+              {#if lookupLoading['repo-forkOriginalRepo']}
+                <span class="loading-text">Loading...</span>
+              {:else}
+                <svg class="icon-small" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"/>
+                  <path d="m21 21-4.35-4.35"/>
+                </svg>
+              {/if}
             </button>
           </div>
           {#if lookupError['repo-forkOriginalRepo']}
@@ -1460,7 +1484,7 @@
                   class="clear-lookup-button"
                   title="Clear results"
                 >
-                  ✕
+                  <img src="/icons/x.svg" alt="Clear" class="icon-small" />
                 </button>
               </div>
               {#each lookupResults['repo-forkOriginalRepo'] as result}
