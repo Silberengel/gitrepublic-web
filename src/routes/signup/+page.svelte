@@ -28,11 +28,17 @@
   let earliestCommit = $state('');
   let isPrivate = $state(false);
   let isFork = $state(false);
-  let forkRepoAddress = $state(''); // a tag: 30617:owner:repo
-  let forkOwnerPubkey = $state(''); // p tag: original owner pubkey
+  let forkOriginalRepo = $state(''); // Original repo identifier: npub/repo, naddr, or 30617:owner:repo format
   let addClientTag = $state(true); // Add ["client", "gitrepublic-web"] tag
   let existingRepoRef = $state(''); // hex, nevent, or naddr
   let loadingExisting = $state(false);
+
+  // URL preview state
+  let previewingUrlIndex = $state<number | null>(null);
+  let previewUrl = $state<string | null>(null);
+  let previewError = $state<string | null>(null);
+  let previewLoading = $state(false);
+  let previewTimeout: ReturnType<typeof setTimeout> | null = null;
 
   import { DEFAULT_NOSTR_RELAYS, combineRelays } from '../../lib/config.js';
 
@@ -110,6 +116,73 @@
     const newDocs = [...documentation];
     newDocs[index] = value;
     documentation = newDocs;
+  }
+
+  async function handleWebUrlHover(index: number, url: string) {
+    // Clear any existing timeout
+    if (previewTimeout) {
+      clearTimeout(previewTimeout);
+    }
+
+    // Only preview if URL looks valid
+    if (!url.trim() || !isValidUrl(url.trim())) {
+      return;
+    }
+
+    // Delay preview to avoid showing on quick mouse movements
+    previewTimeout = setTimeout(async () => {
+      previewingUrlIndex = index;
+      previewUrl = url.trim();
+      previewError = null;
+      previewLoading = true;
+
+      // Try to verify the URL exists by attempting to fetch it
+      // Note: CORS may prevent this, but we'll still show the iframe preview
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
+        
+        const response = await fetch(url.trim(), {
+          method: 'HEAD',
+          mode: 'no-cors',
+          cache: 'no-cache',
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        // With no-cors mode, we can't read the status, but if it doesn't throw, proceed
+        previewError = null;
+      } catch (err) {
+        // If fetch fails, it might be CORS, network error, or 404
+        // The iframe will show the actual error to the user
+        if (err instanceof Error && err.name === 'AbortError') {
+          previewError = 'Request timed out - URL may be slow or unreachable';
+        } else {
+          previewError = 'Unable to verify URL - preview may show an error if URL is invalid';
+        }
+      } finally {
+        previewLoading = false;
+      }
+    }, 500); // 500ms delay before showing preview
+  }
+
+  function handleWebUrlLeave() {
+    if (previewTimeout) {
+      clearTimeout(previewTimeout);
+    }
+    previewingUrlIndex = null;
+    previewUrl = null;
+    previewError = null;
+    previewLoading = false;
+  }
+
+  function isValidUrl(url: string): boolean {
+    try {
+      const urlObj = new URL(url);
+      return urlObj.protocol === 'http:' || urlObj.protocol === 'https:';
+    } catch {
+      return false;
+    }
   }
 
   async function loadExistingRepo() {
@@ -246,10 +319,21 @@
 
       // Extract fork information
       const aTag = event.tags.find(t => t[0] === 'a' && t[1]?.startsWith('30617:'));
-      forkRepoAddress = aTag?.[1] || '';
-      const pTag = event.tags.find(t => t[0] === 'p' && t[1] && t[1] !== event.pubkey);
-      forkOwnerPubkey = pTag?.[1] || '';
-      isFork = !!(forkRepoAddress || forkOwnerPubkey || event.tags.some(t => t[0] === 't' && t[1] === 'fork'));
+      if (aTag?.[1]) {
+        forkOriginalRepo = aTag[1];
+        isFork = true;
+      } else {
+        // Check if marked as fork via tag
+        isFork = event.tags.some(t => t[0] === 't' && t[1] === 'fork');
+        if (isFork) {
+          // Try to construct from p tag if available
+          const pTag = event.tags.find(t => t[0] === 'p' && t[1] && t[1] !== event.pubkey);
+          if (pTag?.[1] && dTag) {
+            // Construct a tag format: 30617:owner:repo
+            forkOriginalRepo = `${KIND.REPO_ANNOUNCEMENT}:${pTag[1]}:${dTag}`;
+          }
+        }
+      }
 
       // Extract earliest unique commit
       const rTag = event.tags.find(t => t[0] === 'r' && t[2] === 'euc');
@@ -333,13 +417,98 @@
       ];
 
       // Add fork tags if this is a fork
-      if (isFork) {
-        if (forkRepoAddress.trim()) {
-          eventTags.push(['a', forkRepoAddress.trim()]);
+      if (isFork && forkOriginalRepo.trim()) {
+        let forkAddress = forkOriginalRepo.trim();
+        let forkOwnerPubkey: string | null = null;
+        let isValidFormat = false;
+
+        // Parse the fork identifier - could be:
+        // 1. naddr format (decode to get pubkey and repo)
+        // 2. npub/repo format (need to construct a tag)
+        // 3. Already in 30617:owner:repo format
+        if (forkAddress.startsWith('naddr')) {
+          try {
+            const decoded = nip19.decode(forkAddress);
+            if (decoded.type === 'naddr') {
+              const data = decoded.data as { pubkey: string; kind: number; identifier: string };
+              if (data.pubkey && data.identifier) {
+                forkAddress = `${KIND.REPO_ANNOUNCEMENT}:${data.pubkey}:${data.identifier}`;
+                forkOwnerPubkey = data.pubkey;
+                isValidFormat = true;
+              }
+            }
+          } catch {
+            // Invalid naddr, will be caught by validation below
+          }
+        } else if (forkAddress.includes('/') && !forkAddress.startsWith('30617:')) {
+          // Assume npub/repo format
+          const parts = forkAddress.split('/');
+          if (parts.length === 2 && parts[1].trim()) {
+            try {
+              const decoded = nip19.decode(parts[0]);
+              if (decoded.type === 'npub') {
+                forkOwnerPubkey = decoded.data as string;
+                forkAddress = `${KIND.REPO_ANNOUNCEMENT}:${forkOwnerPubkey}:${parts[1].trim()}`;
+                isValidFormat = true;
+              }
+            } catch {
+              // Invalid npub, try as hex pubkey
+              if (parts[0].length === 64 && /^[0-9a-f]+$/i.test(parts[0])) {
+                forkOwnerPubkey = parts[0];
+                forkAddress = `${KIND.REPO_ANNOUNCEMENT}:${forkOwnerPubkey}:${parts[1].trim()}`;
+                isValidFormat = true;
+              }
+            }
+          }
+        } else if (forkAddress.startsWith('30617:')) {
+          // Already in correct format, validate and extract owner pubkey
+          const parts = forkAddress.split(':');
+          if (parts.length >= 3 && parts[1] && parts[2]) {
+            forkOwnerPubkey = parts[1];
+            isValidFormat = true;
+          }
         }
-        if (forkOwnerPubkey.trim()) {
-          eventTags.push(['p', forkOwnerPubkey.trim()]);
+
+        // Validate the final format: must be 30617:pubkey:repo
+        // Always validate regardless of parsing success to catch any edge cases
+        const parts = forkAddress.split(':');
+        if (parts.length >= 3) {
+          const kind = parts[0];
+          const pubkey = parts[1];
+          const repo = parts[2];
+
+          // Validate format
+          if (kind !== String(KIND.REPO_ANNOUNCEMENT)) {
+            isValidFormat = false;
+          } else if (!pubkey || pubkey.length !== 64 || !/^[0-9a-f]+$/i.test(pubkey)) {
+            isValidFormat = false;
+          } else if (!repo || !repo.trim()) {
+            isValidFormat = false;
+          } else {
+            // Format is valid, ensure isValidFormat is true
+            isValidFormat = true;
+          }
+        } else {
+          isValidFormat = false;
         }
+
+        if (!isValidFormat) {
+          error = 'Invalid fork repository format. Please use one of:\n' +
+            '• naddr format: naddr1...\n' +
+            '• npub/repo format: npub1abc.../repo-name\n' +
+            '• Repository address: 30617:owner-pubkey:repo-name';
+          loading = false;
+          return;
+        }
+
+        // Add a tag (required for fork identification)
+        eventTags.push(['a', forkAddress]);
+
+        // Add p tag if we have the owner pubkey
+        if (forkOwnerPubkey) {
+          eventTags.push(['p', forkOwnerPubkey]);
+        }
+
         // Add 'fork' tag if not already in tags
         if (!allTags.includes('fork')) {
           eventTags.push(['t', 'fork']);
@@ -521,14 +690,16 @@
       <div class="form-group">
         <div class="label">
           Web URLs (optional)
-          <small>Webpage URLs for browsing the repository (e.g., GitHub/GitLab web interface)</small>
+          <small>Webpage URLs for browsing the repository (e.g., GitHub/GitLab web interface). Hover over a URL to preview it.</small>
         </div>
         {#each webUrls as url, index}
-          <div class="input-group">
+          <div class="input-group url-preview-container">
             <input
               type="text"
               value={url}
               oninput={(e) => updateWebUrl(index, e.currentTarget.value)}
+              onmouseenter={() => handleWebUrlHover(index, url)}
+              onmouseleave={handleWebUrlLeave}
               placeholder="https://github.com/user/repo"
               disabled={loading}
             />
@@ -540,6 +711,24 @@
               >
                 Remove
               </button>
+            {/if}
+            {#if previewingUrlIndex === index && previewUrl}
+              <div class="url-preview" role="tooltip">
+                {#if previewLoading}
+                  <div class="preview-loading">Loading preview...</div>
+                {:else if previewError}
+                  <div class="preview-error">
+                    <strong>⚠️ Warning:</strong> {previewError}
+                  </div>
+                {/if}
+                <iframe
+                  src={previewUrl}
+                  title="URL Preview"
+                  class="preview-iframe"
+                  sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                ></iframe>
+                <div class="preview-url-display">{previewUrl}</div>
+              </div>
             {/if}
           </div>
         {/each}
@@ -730,29 +919,19 @@
 
       {#if isFork}
         <div class="form-group">
-          <label for="fork-repo-address">
-            Original Repository Address (optional)
-            <small>Repository address of the original repo. Format: 30617:owner-pubkey:repo-name. Example: 30617:abc123...:original-repo</small>
+          <label for="fork-original-repo">
+            Original Repository *
+            <small>Identify the repository this is forked from. You can enter:<br/>
+            • naddr format: naddr1...<br/>
+            • npub/repo format: npub1abc.../repo-name<br/>
+            • Repository address: 30617:owner-pubkey:repo-name</small>
           </label>
           <input
-            id="fork-repo-address"
+            id="fork-original-repo"
             type="text"
-            bind:value={forkRepoAddress}
-            placeholder="30617:abc123...:original-repo"
-            disabled={loading}
-          />
-        </div>
-
-        <div class="form-group">
-          <label for="fork-owner-pubkey">
-            Original Owner Pubkey (optional)
-            <small>Pubkey (hex or npub) of the original repository owner. Example: npub1abc... or hex pubkey</small>
-          </label>
-          <input
-            id="fork-owner-pubkey"
-            type="text"
-            bind:value={forkOwnerPubkey}
-            placeholder="npub1abc... or hex pubkey"
+            bind:value={forkOriginalRepo}
+            placeholder="npub1abc.../original-repo or naddr1..."
+            required={isFork}
             disabled={loading}
           />
         </div>
@@ -767,7 +946,7 @@
           />
           <div>
             <span>Private Repository</span>
-            <small>Mark this repository as private (will be hidden from public listings)</small>
+            <small>Private repositories are hidden from public listings and can only be accessed by the owner and maintainers. Git clone/fetch operations require authentication.</small>
           </div>
         </label>
       </div>
