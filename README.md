@@ -348,6 +348,49 @@ See `docs/SECURITY.md` and `docs/SECURITY_IMPLEMENTATION.md` for detailed inform
 - `GIT_REPO_ROOT`: Path to store git repositories (default: `/repos`)
 - `GIT_DOMAIN`: Domain for git repositories (default: `localhost:6543`)
 - `NOSTR_RELAYS`: Comma-separated list of Nostr relays (default: `wss://theforest.nostr1.com,wss://nostr.land,wss://relay.damus.io`)
+- `TOR_SOCKS_PROXY`: Tor SOCKS proxy address (format: `host:port`, default: `127.0.0.1:9050`). Set to empty string to disable Tor support. When configured, the server will automatically route `.onion` addresses through Tor for both Nostr relay connections and git operations.
+- `TOR_ONION_ADDRESS`: Tor hidden service .onion address (optional). If not set, the server will attempt to read it from Tor's hostname file. When configured, every repository will automatically get a `.onion` clone URL in addition to the regular domain URL, making repositories accessible via Tor even if the server is only running on localhost.
+
+### Tor Hidden Service Setup
+
+To provide `.onion` addresses for all repositories, you need to set up a Tor hidden service:
+
+1. **Install and configure Tor**:
+   ```bash
+   # On Debian/Ubuntu
+   sudo apt-get install tor
+   
+   # Edit Tor configuration
+   sudo nano /etc/tor/torrc
+   ```
+
+2. **Add hidden service configuration**:
+   ```
+   HiddenServiceDir /var/lib/tor/gitrepublic
+   HiddenServicePort 80 127.0.0.1:6543
+   ```
+
+3. **Restart Tor**:
+   ```bash
+   sudo systemctl restart tor
+   ```
+
+4. **Get your .onion address**:
+   ```bash
+   sudo cat /var/lib/tor/gitrepublic/hostname
+   ```
+
+5. **Set environment variable** (optional, if hostname file is in a different location):
+   ```bash
+   export TOR_ONION_ADDRESS=your-onion-address.onion
+   ```
+
+The server will automatically:
+- Detect the `.onion` address from the hostname file or environment variable
+- Add a `.onion` clone URL to every repository announcement
+- Make repositories accessible via Tor even if the server is only on localhost
+
+**Note**: The `.onion` address works even if your server is only accessible on `localhost` - Tor will handle the routing!
 
 ### Security Configuration
 

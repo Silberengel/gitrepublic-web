@@ -882,10 +882,25 @@
       const protocol = gitDomain.startsWith('localhost') ? 'http' : 'https';
       const gitUrl = `${protocol}://${gitDomain}/${npub}/${dTag}.git`;
 
-      // Build clone URLs - always include our domain
+      // Try to get Tor .onion address and add it to clone URLs
+      let torOnionUrl: string | null = null;
+      try {
+        const torResponse = await fetch('/api/tor/onion');
+        if (torResponse.ok) {
+          const torData = await torResponse.json();
+          if (torData.available && torData.onion) {
+            torOnionUrl = `http://${torData.onion}/${npub}/${dTag}.git`;
+          }
+        }
+      } catch {
+        // Tor not available, continue without it
+      }
+
+      // Build clone URLs - always include our domain, and Tor .onion if available
       const allCloneUrls = [
         gitUrl,
-        ...cloneUrls.filter(url => url.trim() && !url.includes(gitDomain))
+        ...(torOnionUrl ? [torOnionUrl] : []), // Add Tor .onion URL if available
+        ...cloneUrls.filter(url => url.trim() && !url.includes(gitDomain) && !url.includes('.onion'))
       ];
 
       // Build web URLs

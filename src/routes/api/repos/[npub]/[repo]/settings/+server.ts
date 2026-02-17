@@ -174,11 +174,22 @@ export const POST: RequestHandler = async ({ params, request }) => {
     const protocol = gitDomain.startsWith('localhost') ? 'http' : 'https';
     const gitUrl = `${protocol}://${gitDomain}/${npub}/${repo}.git`;
 
+    // Get Tor .onion URL if available
+    const { getTorGitUrl } = await import('$lib/services/tor/hidden-service.js');
+    const torOnionUrl = await getTorGitUrl(npub, repo);
+
+    // Build clone URLs - include regular domain and Tor .onion if available
+    const cloneUrlList = [
+      gitUrl,
+      ...(torOnionUrl ? [torOnionUrl] : []),
+      ...(cloneUrls || []).filter((url: string) => url && !url.includes(gitDomain) && !url.includes('.onion'))
+    ];
+
     const tags: string[][] = [
       ['d', repo],
       ['name', name || repo],
       ...(description ? [['description', description]] : []),
-      ['clone', gitUrl, ...(cloneUrls || []).filter((url: string) => url && !url.includes(gitDomain))],
+      ['clone', ...cloneUrlList],
       ['relays', ...DEFAULT_NOSTR_RELAYS],
       ...(isPrivate ? [['private', 'true']] : []),
       ...(maintainers || []).map((m: string) => ['maintainers', m])

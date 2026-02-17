@@ -13,6 +13,7 @@ import { GIT_DOMAIN } from '../../config.js';
 import { generateVerificationFile, VERIFICATION_FILE_PATH } from '../nostr/repo-verification.js';
 import simpleGit, { type SimpleGit } from 'simple-git';
 import logger from '../logger.js';
+import { shouldUseTor, getTorProxy } from '../../utils/tor.js';
 
 const execAsync = promisify(exec);
 
@@ -105,6 +106,41 @@ export class RepoManager {
   }
 
   /**
+   * Get git environment variables with Tor proxy if needed for .onion addresses
+   */
+  private getGitEnvForUrl(url: string): Record<string, string> {
+    const env = { ...process.env };
+    
+    if (shouldUseTor(url)) {
+      const proxy = getTorProxy();
+      if (proxy) {
+        // Git uses GIT_PROXY_COMMAND for proxy support
+        // The command receives host and port as arguments
+        // We'll create a simple proxy command using socat or nc
+        // Note: This requires socat or netcat-openbsd to be installed
+        const proxyCommand = `sh -c 'exec socat - SOCKS5:${proxy.host}:${proxy.port}:\\$1:\\$2' || sh -c 'exec nc -X 5 -x ${proxy.host}:${proxy.port} \\$1 \\$2'`;
+        env.GIT_PROXY_COMMAND = proxyCommand;
+        
+        // Also set ALL_PROXY for git-remote-http
+        env.ALL_PROXY = `socks5://${proxy.host}:${proxy.port}`;
+        
+        // For HTTP/HTTPS URLs, also set http_proxy and https_proxy
+        try {
+          const urlObj = new URL(url);
+          if (urlObj.protocol === 'http:' || urlObj.protocol === 'https:') {
+            env.http_proxy = `socks5://${proxy.host}:${proxy.port}`;
+            env.https_proxy = `socks5://${proxy.host}:${proxy.port}`;
+          }
+        } catch {
+          // URL parsing failed, skip proxy env vars
+        }
+      }
+    }
+    
+    return env;
+  }
+
+  /**
    * Sync repository from multiple remote URLs
    */
   async syncFromRemotes(repoPath: string, remoteUrls: string[]): Promise<void> {
@@ -114,11 +150,27 @@ export class RepoManager {
         const remoteName = `remote-${remoteUrls.indexOf(url)}`;
         await execAsync(`cd "${repoPath}" && git remote add ${remoteName} "${url}" || true`);
         
-        // Fetch from remote
-        await execAsync(`cd "${repoPath}" && git fetch ${remoteName} --all`);
+        // Get environment with Tor proxy if needed
+        const gitEnv = this.getGitEnvForUrl(url);
+        
+        // Configure git proxy for this remote if it's a .onion address
+        if (shouldUseTor(url)) {
+          const proxy = getTorProxy();
+          if (proxy) {
+            // Set git config for this specific URL pattern
+            try {
+              await execAsync(`cd "${repoPath}" && git config --local http.${url}.proxy socks5://${proxy.host}:${proxy.port}`, { env: gitEnv });
+            } catch {
+              // Config might fail, continue anyway
+            }
+          }
+        }
+        
+        // Fetch from remote with appropriate environment
+        await execAsync(`cd "${repoPath}" && git fetch ${remoteName} --all`, { env: gitEnv });
         
         // Update all branches
-        await execAsync(`cd "${repoPath}" && git remote set-head ${remoteName} -a`);
+        await execAsync(`cd "${repoPath}" && git remote set-head ${remoteName} -a`, { env: gitEnv });
       } catch (error) {
         logger.error({ error, url, repoPath }, 'Failed to sync from remote');
         // Continue with other remotes
@@ -134,8 +186,26 @@ export class RepoManager {
       try {
         const remoteName = `remote-${remoteUrls.indexOf(url)}`;
         await execAsync(`cd "${repoPath}" && git remote add ${remoteName} "${url}" || true`);
-        await execAsync(`cd "${repoPath}" && git push ${remoteName} --all --force`);
-        await execAsync(`cd "${repoPath}" && git push ${remoteName} --tags --force`);
+        
+        // Get environment with Tor proxy if needed
+        const gitEnv = this.getGitEnvForUrl(url);
+        
+        // Configure git proxy for this remote if it's a .onion address
+        if (shouldUseTor(url)) {
+          const proxy = getTorProxy();
+          if (proxy) {
+            // Set git config for this specific URL pattern
+            try {
+              await execAsync(`cd "${repoPath}" && git config --local http.${url}.proxy socks5://${proxy.host}:${proxy.port}`, { env: gitEnv });
+            } catch {
+              // Config might fail, continue anyway
+            }
+          }
+        }
+        
+        // Push to remote with appropriate environment
+        await execAsync(`cd "${repoPath}" && git push ${remoteName} --all --force`, { env: gitEnv });
+        await execAsync(`cd "${repoPath}" && git push ${remoteName} --tags --force`, { env: gitEnv });
       } catch (error) {
         logger.error({ error, url, repoPath }, 'Failed to sync to remote');
         // Continue with other remotes

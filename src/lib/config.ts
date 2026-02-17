@@ -49,6 +49,48 @@ export function getGitUrl(npub: string, repoName: string): string {
 }
 
 /**
+ * Tor SOCKS proxy configuration
+ * Defaults to localhost:9050 (standard Tor SOCKS port)
+ * Can be overridden by TOR_SOCKS_PROXY env var (format: host:port)
+ * Set to empty string to disable Tor support
+ */
+export const TOR_SOCKS_PROXY = 
+  typeof process !== 'undefined' && process.env?.TOR_SOCKS_PROXY !== undefined
+    ? process.env.TOR_SOCKS_PROXY.trim()
+    : '127.0.0.1:9050';
+
+export const TOR_ENABLED = TOR_SOCKS_PROXY !== '';
+
+/**
+ * Parse Tor SOCKS proxy into host and port
+ */
+export function parseTorProxy(): { host: string; port: number } | null {
+  if (!TOR_ENABLED) return null;
+  
+  const [host, portStr] = TOR_SOCKS_PROXY.split(':');
+  const port = parseInt(portStr || '9050', 10);
+  
+  if (!host || isNaN(port)) {
+    return null;
+  }
+  
+  return { host, port };
+}
+
+/**
+ * Check if a URL is a .onion address
+ */
+export function isOnionAddress(url: string): boolean {
+  try {
+    const urlObj = new URL(url);
+    return urlObj.hostname.endsWith('.onion');
+  } catch {
+    // If URL parsing fails, check if it contains .onion
+    return url.includes('.onion');
+  }
+}
+
+/**
  * Combine default relays with user's relays (from kind 10002)
  * Returns a deduplicated list with user relays first, then defaults
  */

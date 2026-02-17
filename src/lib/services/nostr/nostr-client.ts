@@ -5,6 +5,7 @@
 import type { NostrEvent, NostrFilter } from '../../types/nostr.js';
 import logger from '../logger.js';
 import { isNIP07Available, getPublicKeyWithNIP07, signEventWithNIP07 } from './nip07-signer.js';
+import { shouldUseTor, getTorProxy } from '../../utils/tor.js';
 
 // Polyfill WebSocket for Node.js environments (lazy initialization)
 // Note: The 'module' import warning in browser builds is expected and harmless.
@@ -53,6 +54,72 @@ if (typeof process !== 'undefined' && process.versions?.node && typeof window ==
   initializeWebSocketPolyfill().catch(() => {
     // Ignore errors during initialization
   });
+}
+
+/**
+ * Create a WebSocket connection, optionally through Tor SOCKS proxy
+ */
+async function createWebSocketWithTor(url: string): Promise<WebSocket> {
+  await initializeWebSocketPolyfill();
+  
+  // Check if we need Tor
+  if (!shouldUseTor(url)) {
+    return new WebSocket(url);
+  }
+  
+  // Only use Tor in Node.js environment
+  if (typeof process === 'undefined' || !process.versions?.node || typeof window !== 'undefined') {
+    // Browser environment - can't use SOCKS proxy directly
+    // Fall back to regular WebSocket (will fail for .onion in browser)
+    logger.warn({ url }, 'Tor support not available in browser. .onion addresses may not work.');
+    return new WebSocket(url);
+  }
+  
+  const proxy = getTorProxy();
+  if (!proxy) {
+    logger.warn({ url }, 'Tor proxy not configured. Cannot connect to .onion address.');
+    return new WebSocket(url);
+  }
+  
+  try {
+    // Dynamic import for SOCKS support
+    const { SocksClient } = await import('socks');
+    const { WebSocket: WS } = await import('ws');
+    
+    // Parse the WebSocket URL
+    const wsUrl = new URL(url);
+    const host = wsUrl.hostname;
+    const port = wsUrl.port ? parseInt(wsUrl.port, 10) : (wsUrl.protocol === 'wss:' ? 443 : 80);
+    
+    // Create SOCKS connection
+    const socksOptions = {
+      proxy: {
+        host: proxy.host,
+        port: proxy.port,
+        type: 5 // SOCKS5
+      },
+      command: 'connect',
+      destination: {
+        host,
+        port
+      }
+    };
+    
+    const info = await SocksClient.createConnection(socksOptions);
+    
+    // Create WebSocket over the SOCKS connection
+    const ws = new WS(url, {
+      socket: info.socket,
+      // For wss://, we need to handle TLS
+      rejectUnauthorized: false // .onion addresses use self-signed certs
+    });
+    
+    return ws as any as WebSocket;
+  } catch (error) {
+    logger.error({ error, url, proxy }, 'Failed to create WebSocket through Tor');
+    // Fall back to regular connection (will likely fail for .onion)
+    return new WebSocket(url);
+  }
 }
 
 export class NostrClient {
@@ -187,22 +254,26 @@ export class NostrClient {
       
       let authPromise: Promise<boolean> | null = null;
       
-      try {
-        ws = new WebSocket(relay);
-      } catch (error) {
+      // Create WebSocket connection (with Tor support if needed)
+      createWebSocketWithTor(relay).then(websocket => {
+        ws = websocket;
+        setupWebSocketHandlers();
+      }).catch(error => {
         // Connection failed immediately
         resolveOnce([]);
-        return;
-      }
+      });
       
-      // Connection timeout - if we can't connect within 3 seconds, give up
-      connectionTimeoutId = setTimeout(() => {
-        if (!resolved && ws && ws.readyState !== WebSocket.OPEN) {
-          resolveOnce([]);
-        }
-      }, 3000);
-      
-      ws.onopen = () => {
+      function setupWebSocketHandlers() {
+        if (!ws) return;
+        
+        // Connection timeout - if we can't connect within 3 seconds, give up
+        connectionTimeoutId = setTimeout(() => {
+          if (!resolved && ws && ws.readyState !== WebSocket.OPEN) {
+            resolveOnce([]);
+          }
+        }, 3000);
+        
+        ws.onopen = () => {
         if (connectionTimeoutId) {
           clearTimeout(connectionTimeoutId);
           connectionTimeoutId = null;
@@ -271,10 +342,11 @@ export class NostrClient {
         }
       };
       
-      // Overall timeout - resolve with what we have after 8 seconds
-      timeoutId = setTimeout(() => {
-        resolveOnce(events);
-      }, 8000);
+        // Overall timeout - resolve with what we have after 8 seconds
+        timeoutId = setTimeout(() => {
+          resolveOnce(events);
+        }, 8000);
+      }
     });
   }
 
@@ -342,23 +414,27 @@ export class NostrClient {
         }
       };
       
-      try {
-        ws = new WebSocket(relay);
-      } catch (error) {
-        rejectOnce(new Error(`Failed to create WebSocket connection to ${relay}`));
-        return;
-      }
-      
-      // Connection timeout - if we can't connect within 3 seconds, reject
-      connectionTimeoutId = setTimeout(() => {
-        if (!resolved && ws && ws.readyState !== WebSocket.OPEN) {
-          rejectOnce(new Error(`Connection timeout for ${relay}`));
-        }
-      }, 3000);
-      
       let authPromise: Promise<boolean> | null = null;
       
-      ws.onopen = () => {
+      // Create WebSocket connection (with Tor support if needed)
+      createWebSocketWithTor(relay).then(websocket => {
+        ws = websocket;
+        setupWebSocketHandlers();
+      }).catch(error => {
+        rejectOnce(new Error(`Failed to create WebSocket connection to ${relay}: ${error}`));
+      });
+      
+      function setupWebSocketHandlers() {
+        if (!ws) return;
+        
+        // Connection timeout - if we can't connect within 3 seconds, reject
+        connectionTimeoutId = setTimeout(() => {
+          if (!resolved && ws && ws.readyState !== WebSocket.OPEN) {
+            rejectOnce(new Error(`Connection timeout for ${relay}`));
+          }
+        }, 3000);
+        
+        ws.onopen = () => {
         if (connectionTimeoutId) {
           clearTimeout(connectionTimeoutId);
           connectionTimeoutId = null;
@@ -432,9 +508,10 @@ export class NostrClient {
         }
       };
       
-      timeoutId = setTimeout(() => {
-        rejectOnce(new Error('Publish timeout'));
-      }, 10000);
+        timeoutId = setTimeout(() => {
+          rejectOnce(new Error('Publish timeout'));
+        }, 10000);
+      }
     });
   }
 }
