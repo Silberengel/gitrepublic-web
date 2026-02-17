@@ -222,12 +222,19 @@ export class NostrClient {
     
     const finalEvents = Array.from(uniqueEvents.values());
     
+    // For kind 0 (profile) events, also cache individually by pubkey for faster lookups
+    const profileEvents = finalEvents.filter(e => e.kind === 0);
+    for (const profileEvent of profileEvents) {
+      eventCache.setProfile(profileEvent.pubkey, profileEvent);
+    }
+    
     // Cache the results (use longer TTL for successful fetches)
     if (finalEvents.length > 0 || results.some(r => r.status === 'fulfilled')) {
       // Cache successful fetches for 5 minutes, empty results for 1 minute
+      // Profile events get longer TTL (handled in eventCache.set)
       const ttl = finalEvents.length > 0 ? 5 * 60 * 1000 : 60 * 1000;
       eventCache.set(filters, finalEvents, ttl);
-      logger.debug({ filters, eventCount: finalEvents.length, ttl }, 'Cached events');
+      logger.debug({ filters, eventCount: finalEvents.length, ttl, profileEvents: profileEvents.length }, 'Cached events');
     }
     
     return finalEvents;

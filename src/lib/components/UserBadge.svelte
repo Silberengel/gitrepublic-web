@@ -3,6 +3,7 @@
   import { NostrClient } from '../services/nostr/nostr-client.js';
   import { DEFAULT_NOSTR_RELAYS } from '../config.js';
   import { KIND } from '../types/nostr.js';
+  import { eventCache } from '../services/nostr/event-cache.js';
   import { nip19 } from 'nostr-tools';
 
   interface Props {
@@ -22,7 +23,23 @@
 
   async function loadUserProfile() {
     try {
-      // Fetch user profile (kind 0 - metadata)
+      // Check cache first for faster lookups
+      const cachedProfile = eventCache.getProfile(pubkey);
+      if (cachedProfile) {
+        try {
+          const profile = JSON.parse(cachedProfile.content);
+          userProfile = {
+            name: profile.name,
+            picture: profile.picture
+          };
+          loading = false;
+          return;
+        } catch {
+          // Invalid JSON in cache, continue to fetch fresh
+        }
+      }
+
+      // Fetch user profile (kind 0 - metadata) if not in cache
       const profileEvents = await nostrClient.fetchEvents([
         {
           kinds: [0],

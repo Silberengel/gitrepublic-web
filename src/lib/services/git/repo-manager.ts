@@ -401,6 +401,112 @@ export class RepoManager {
   }
 
   /**
+   * Fetch repository on-demand from remote clone URLs
+   * This allows displaying repositories that haven't been provisioned yet
+   * 
+   * @param npub - Repository owner npub
+   * @param repoName - Repository name
+   * @param announcementEvent - The Nostr repo announcement event (optional, will fetch if not provided)
+   * @returns true if repository was successfully fetched, false otherwise
+   */
+  async fetchRepoOnDemand(
+    npub: string,
+    repoName: string,
+    announcementEvent?: NostrEvent
+  ): Promise<boolean> {
+    const repoPath = join(this.repoRoot, npub, `${repoName}.git`);
+    
+    // If repo already exists, no need to fetch
+    if (existsSync(repoPath)) {
+      return true;
+    }
+
+    // If no announcement provided, we can't fetch (caller should provide it)
+    if (!announcementEvent) {
+      return false;
+    }
+
+    try {
+      // Extract clone URLs from announcement
+      const cloneUrls = this.extractCloneUrls(announcementEvent);
+      
+      // Filter out localhost URLs and our own domain (we want external sources)
+      const externalUrls = cloneUrls.filter(url => {
+        const lowerUrl = url.toLowerCase();
+        return !lowerUrl.includes('localhost') && 
+               !lowerUrl.includes('127.0.0.1') && 
+               !url.includes(this.domain);
+      });
+
+      // If no external URLs, try any URL that's not our domain
+      const remoteUrls = externalUrls.length > 0 ? externalUrls : 
+                        cloneUrls.filter(url => !url.includes(this.domain));
+
+      if (remoteUrls.length === 0) {
+        logger.warn({ npub, repoName }, 'No remote clone URLs found for on-demand fetch');
+        return false;
+      }
+
+      // Create directory structure
+      const repoDir = join(this.repoRoot, npub);
+      if (!existsSync(repoDir)) {
+        mkdirSync(repoDir, { recursive: true });
+      }
+
+      // Try to clone from the first available remote URL
+      // Use simple-git for safer cloning
+      const git = simpleGit();
+      const gitEnv = this.getGitEnvForUrl(remoteUrls[0]);
+      
+      logger.info({ npub, repoName, sourceUrl: remoteUrls[0] }, 'Fetching repository on-demand from remote');
+      
+      // Clone as bare repository
+      // Use gitEnv which already contains necessary whitelisted environment variables
+      await new Promise<void>((resolve, reject) => {
+        const cloneProcess = spawn('git', ['clone', '--bare', remoteUrls[0], repoPath], {
+          env: gitEnv,
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+
+        let stderr = '';
+        cloneProcess.stderr.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString();
+        });
+
+        cloneProcess.on('close', (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`Git clone failed with code ${code}: ${stderr}`));
+          }
+        });
+
+        cloneProcess.on('error', reject);
+      });
+
+      // Verify the repository was actually created
+      if (!existsSync(repoPath)) {
+        throw new Error('Repository clone completed but repository path does not exist');
+      }
+
+      // Create verification file with the announcement (non-blocking - repo is usable without it)
+      try {
+        await this.createVerificationFile(repoPath, announcementEvent);
+      } catch (verifyError) {
+        // Verification file creation is optional - log but don't fail
+        logger.warn({ error: verifyError, npub, repoName }, 'Failed to create verification file, but repository is usable');
+      }
+
+      logger.info({ npub, repoName }, 'Successfully fetched repository on-demand');
+      return true;
+    } catch (error) {
+      const sanitizedError = sanitizeError(error);
+      logger.error({ error: sanitizedError, npub, repoName }, 'Failed to fetch repository on-demand');
+      return false;
+    }
+  }
+
+  /**
    * Get repository size in bytes
    * Returns the total size of the repository directory
    */

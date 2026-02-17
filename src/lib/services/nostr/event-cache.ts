@@ -66,6 +66,8 @@ export class EventCache {
   private cache: Map<string, CacheEntry> = new Map();
   private defaultTTL: number = 5 * 60 * 1000; // 5 minutes default
   private maxCacheSize: number = 10000; // Maximum number of cache entries
+  // Special TTL for kind 0 (profile) events - longer since profiles don't change often
+  private profileEventTTL: number = 30 * 60 * 1000; // 30 minutes for profile events
 
   constructor(defaultTTL?: number, maxCacheSize?: number) {
     if (defaultTTL) {
@@ -115,9 +117,33 @@ export class EventCache {
       this.evictOldest();
     }
 
+    // Check if this is a kind 0 (profile) event query
+    const isProfileQuery = filters.some(f => 
+      f.kinds && f.kinds.includes(0) && f.authors && f.authors.length > 0
+    );
+
+    // For kind 0 events, use longer TTL and ensure we only cache the latest per pubkey
+    let processedEvents = events;
+    if (isProfileQuery) {
+      // For replaceable events (kind 0), only keep the latest event per pubkey
+      const latestByPubkey = new Map<string, NostrEvent>();
+      for (const event of events) {
+        const existing = latestByPubkey.get(event.pubkey);
+        if (!existing || event.created_at > existing.created_at) {
+          latestByPubkey.set(event.pubkey, event);
+        }
+      }
+      processedEvents = Array.from(latestByPubkey.values());
+      
+      // Use longer TTL for profile events
+      if (!ttl) {
+        ttl = this.profileEventTTL;
+      }
+    }
+
     const key = generateMultiFilterCacheKey(filters);
     this.cache.set(key, {
-      events,
+      events: processedEvents,
       timestamp: Date.now(),
       ttl: ttl || this.defaultTTL
     });
@@ -156,6 +182,51 @@ export class EventCache {
         this.cache.delete(key);
       }
     }
+  }
+
+  /**
+   * Get the latest kind 0 (profile) event for a specific pubkey
+   * This is optimized for profile lookups
+   */
+  getProfile(pubkey: string): NostrEvent | null {
+    const filters: NostrFilter[] = [
+      {
+        kinds: [0],
+        authors: [pubkey],
+        limit: 1
+      }
+    ];
+    
+    const cached = this.get(filters);
+    if (cached && cached.length > 0) {
+      // Return the most recent profile event
+      return cached.sort((a, b) => b.created_at - a.created_at)[0];
+    }
+    
+    return null;
+  }
+
+  /**
+   * Cache a profile event (kind 0) for a specific pubkey
+   */
+  setProfile(pubkey: string, event: NostrEvent): void {
+    const filters: NostrFilter[] = [
+      {
+        kinds: [0],
+        authors: [pubkey],
+        limit: 1
+      }
+    ];
+    
+    // Check if we already have a cached profile for this pubkey
+    const existing = this.getProfile(pubkey);
+    if (existing && existing.created_at >= event.created_at) {
+      // Existing profile is newer or same, don't overwrite
+      return;
+    }
+    
+    // Cache the new profile event
+    this.set(filters, [event], this.profileEventTTL);
   }
 
   /**

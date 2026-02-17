@@ -4,14 +4,16 @@
   import { goto } from '$app/navigation';
   import CodeEditor from '$lib/components/CodeEditor.svelte';
   import PRDetail from '$lib/components/PRDetail.svelte';
+  import UserBadge from '$lib/components/UserBadge.svelte';
   import { getPublicKeyWithNIP07, isNIP07Available } from '$lib/services/nostr/nip07-signer.js';
   import { NostrClient } from '$lib/services/nostr/nostr-client.js';
   import { DEFAULT_NOSTR_RELAYS, combineRelays } from '$lib/config.js';
   import { getUserRelays } from '$lib/services/nostr/user-relays.js';
+  import { KIND } from '$lib/types/nostr.js';
   import { nip19 } from 'nostr-tools';
 
-  // Get page data for OpenGraph metadata
-  const pageData = $page.data as {
+  // Get page data for OpenGraph metadata - use $derived to make it reactive
+  const pageData = $derived($page.data as {
     title?: string;
     description?: string;
     image?: string;
@@ -19,7 +21,14 @@
     repoName?: string;
     repoDescription?: string;
     repoUrl?: string;
-  };
+    repoCloneUrls?: string[];
+    repoMaintainers?: string[];
+    repoOwnerPubkey?: string;
+    repoLanguage?: string;
+    repoTopics?: string[];
+    repoWebsite?: string;
+    repoIsPrivate?: boolean;
+  });
 
   const npub = ($page.params as { npub?: string; repo?: string }).npub || '';
   const repo = ($page.params as { npub?: string; repo?: string }).repo || '';
@@ -40,7 +49,7 @@
   let commitMessage = $state('');
   let userPubkey = $state<string | null>(null);
   let showCommitDialog = $state(false);
-  let activeTab = $state<'files' | 'history' | 'tags' | 'issues' | 'prs'>('files');
+  let activeTab = $state<'files' | 'history' | 'tags' | 'issues' | 'prs' | 'docs'>('files');
 
   // Navigation stack for directories
   let pathStack = $state<string[]>([]);
@@ -95,6 +104,11 @@
   let newPRBranchName = $state('');
   let newPRLabels = $state<string[]>(['']);
   let selectedPR = $state<string | null>(null);
+
+  // Documentation
+  let documentationContent = $state<string | null>(null);
+  let documentationHtml = $state<string | null>(null);
+  let loadingDocs = $state(false);
 
   // README
   let readmeContent = $state<string | null>(null);
@@ -365,14 +379,65 @@
     }
   }
 
+  async function loadDocumentation() {
+    if (loadingDocs || documentationContent !== null) return;
+    
+    loadingDocs = true;
+    try {
+      const decoded = nip19.decode(npub);
+      if (decoded.type === 'npub') {
+        const repoOwnerPubkey = decoded.data as string;
+        const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
+        const events = await client.fetchEvents([
+          {
+            kinds: [KIND.REPO_ANNOUNCEMENT],
+            authors: [repoOwnerPubkey],
+            '#d': [repo],
+            limit: 1
+          }
+        ]);
+
+        if (events.length > 0) {
+          documentationContent = events[0].content || null;
+          
+          // Render as markdown if content exists
+          if (documentationContent) {
+            const MarkdownIt = (await import('markdown-it')).default;
+            const hljsModule = await import('highlight.js');
+            const hljs = hljsModule.default || hljsModule;
+            
+            const md = new MarkdownIt({
+              highlight: function (str: string, lang: string): string {
+                if (lang && hljs.getLanguage(lang)) {
+                  try {
+                    return hljs.highlight(str, { language: lang }).value;
+                  } catch (__) {}
+                }
+                return '';
+              }
+            });
+            
+            documentationHtml = md.render(documentationContent);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error loading documentation:', err);
+    } finally {
+      loadingDocs = false;
+    }
+  }
+
   async function loadRepoImages() {
     try {
       // Get images from page data (loaded from announcement)
       if (pageData.image) {
         repoImage = pageData.image;
+        console.log('[Repo Images] Loaded image from pageData:', repoImage);
       }
       if (pageData.banner) {
         repoBanner = pageData.banner;
+        console.log('[Repo Images] Loaded banner from pageData:', repoBanner);
       }
 
       // Also fetch from announcement directly as fallback
@@ -397,12 +462,20 @@
             
             if (imageTag?.[1]) {
               repoImage = imageTag[1];
+              console.log('[Repo Images] Loaded image from announcement:', repoImage);
             }
             if (bannerTag?.[1]) {
               repoBanner = bannerTag[1];
+              console.log('[Repo Images] Loaded banner from announcement:', repoBanner);
             }
+          } else {
+            console.log('[Repo Images] No announcement found');
           }
         }
+      }
+      
+      if (!repoImage && !repoBanner) {
+        console.log('[Repo Images] No images found in announcement');
       }
     } catch (err) {
       console.error('Error loading repo images:', err);
@@ -1062,6 +1135,8 @@
       loadIssues();
     } else if (activeTab === 'prs') {
       loadPRs();
+    } else if (activeTab === 'docs') {
+      loadDocumentation();
     }
   });
 
@@ -1104,69 +1179,137 @@
   <header>
     {#if repoBanner}
       <div class="repo-banner">
-        <img src={repoBanner} alt="" />
+        <img src={repoBanner} alt="" onerror={(e) => { 
+          console.error('[Repo Images] Failed to load banner:', repoBanner); 
+          const target = e.target as HTMLImageElement;
+          if (target) target.style.display = 'none';
+        }} />
       </div>
     {/if}
-    <div class="header-left">
-      <div class="repo-title-section">
-        {#if repoImage}
-          <img src={repoImage} alt="" class="repo-image" />
+    <div class="header-content">
+      <div class="header-main">
+        <div class="repo-title-section">
+          {#if repoImage}
+            <img src={repoImage} alt="" class="repo-image" onerror={(e) => { 
+              console.error('[Repo Images] Failed to load image:', repoImage); 
+              const target = e.target as HTMLImageElement;
+              if (target) target.style.display = 'none';
+            }} />
+          {/if}
+          <div class="repo-title-text">
+            <h1>{pageData.repoName || repo}</h1>
+            {#if pageData.repoDescription}
+              <p class="repo-description-header">{pageData.repoDescription}</p>
+            {:else}
+              <p class="repo-description-header repo-description-placeholder">No description</p>
+            {/if}
+          </div>
+        </div>
+      <div class="repo-meta-info">
+        {#if pageData.repoLanguage}
+          <span class="repo-language">
+            <img src="/icons/file-text.svg" alt="" class="icon-inline" />
+            {pageData.repoLanguage}
+          </span>
         {/if}
-        <div>
-          <h1>{pageData.repoName || repo}</h1>
-          {#if pageData.repoDescription}
-            <p class="repo-description-header">{pageData.repoDescription}</p>
+        {#if pageData.repoIsPrivate}
+          <span class="repo-privacy-badge private">Private</span>
+        {:else}
+          <span class="repo-privacy-badge public">Public</span>
+        {/if}
+        {#if forkInfo?.isFork && forkInfo.originalRepo}
+          <span class="fork-badge">Forked from <a href={`/repos/${forkInfo.originalRepo.npub}/${forkInfo.originalRepo.repo}`}>{forkInfo.originalRepo.repo}</a></span>
+        {/if}
+      </div>
+      {#if pageData.repoOwnerPubkey || (pageData.repoMaintainers && pageData.repoMaintainers.length > 0)}
+        <div class="repo-contributors">
+          <span class="contributors-label">Contributors:</span>
+          <div class="contributors-list">
+            {#if pageData.repoOwnerPubkey}
+              <a href={`/users/${npub}`} class="contributor-item">
+                <UserBadge pubkey={pageData.repoOwnerPubkey} />
+                <span class="contributor-badge owner">Owner</span>
+              </a>
+            {/if}
+            {#if pageData.repoMaintainers}
+              {#each pageData.repoMaintainers.filter(m => m !== pageData.repoOwnerPubkey) as maintainerPubkey}
+                <a href={`/users/${nip19.npubEncode(maintainerPubkey)}`} class="contributor-item">
+                  <UserBadge pubkey={maintainerPubkey} />
+                  <span class="contributor-badge maintainer">Maintainer</span>
+                </a>
+              {/each}
+            {/if}
+          </div>
+        </div>
+      {/if}
+      {#if pageData.repoTopics && pageData.repoTopics.length > 0}
+        <div class="repo-topics">
+          {#each pageData.repoTopics as topic}
+            <span class="topic-tag">{topic}</span>
+          {/each}
+        </div>
+      {/if}
+      {#if pageData.repoWebsite}
+        <div class="repo-website">
+          <a href={pageData.repoWebsite} target="_blank" rel="noopener noreferrer">
+            <img src="/icons/external-link.svg" alt="" class="icon-inline" />
+            {pageData.repoWebsite}
+          </a>
+        </div>
+      {/if}
+      {#if pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0}
+        <div class="repo-clone-urls">
+          <span class="clone-label">Clone:</span>
+          {#each pageData.repoCloneUrls.slice(0, 3) as cloneUrl}
+            <code class="clone-url">{cloneUrl}</code>
+          {/each}
+          {#if pageData.repoCloneUrls.length > 3}
+            <span class="clone-more">+{pageData.repoCloneUrls.length - 3} more</span>
           {/if}
         </div>
-      </div>
-      <span class="npub">
-        by <a href={`/users/${npub}`}>{npub.slice(0, 16)}...</a>
-      </span>
-      <a href="/docs" class="docs-link" target="_blank" title="Documentation">📖</a>
-      {#if forkInfo?.isFork && forkInfo.originalRepo}
-        <span class="fork-badge">Forked from <a href={`/repos/${forkInfo.originalRepo.npub}/${forkInfo.originalRepo.repo}`}>{forkInfo.originalRepo.repo}</a></span>
       {/if}
-    </div>
-      <div class="header-right">
-      <select bind:value={currentBranch} onchange={handleBranchChange} class="branch-select">
-        {#each branches as branch}
-          <option value={branch}>{branch}</option>
-        {/each}
-      </select>
-      {#if userPubkey}
-        <button onclick={forkRepository} disabled={forking} class="fork-button">
-          {forking ? 'Forking...' : 'Fork'}
-        </button>
-        {#if isMaintainer}
-          <a href={`/repos/${npub}/${repo}/settings`} class="settings-button">Settings</a>
-        {/if}
-        {#if isMaintainer}
-          <button onclick={() => showCreateBranchDialog = true} class="create-branch-button">+ New Branch</button>
-        {/if}
-        <span class="auth-status">
+      <div class="header-actions-bottom">
+        {#if userPubkey}
+          <button onclick={forkRepository} disabled={forking} class="fork-button">
+            {forking ? 'Forking...' : 'Fork'}
+          </button>
           {#if isMaintainer}
-            ✓ Maintainer
-          {:else}
-            ✓ Authenticated (Contributor)
+            <a href={`/repos/${npub}/${repo}/settings`} class="settings-button">Settings</a>
           {/if}
-        </span>
-        <button onclick={logout} class="logout-button">Logout</button>
-      {:else}
-        <span class="auth-status">Not authenticated</span>
-        <button onclick={login} class="login-button" disabled={!isNIP07Available()}>
-          {isNIP07Available() ? 'Login' : 'NIP-07 Not Available'}
-        </button>
+          {#if isMaintainer}
+            <button onclick={() => showCreateBranchDialog = true} class="create-branch-button">+ New Branch</button>
+          {/if}
+          <span class="auth-status">
+            <img src="/icons/check-circle.svg" alt="Verified" class="icon-inline" />
+            {#if isMaintainer}
+              Maintainer
+            {:else}
+              Authenticated (Contributor)
+            {/if}
+          </span>
+        {/if}
+      </div>
+      </div>
+      <div class="header-actions">
+      {#if branches.length > 0}
+        <select bind:value={currentBranch} onchange={handleBranchChange} class="branch-select">
+          {#each branches as branch}
+            <option value={branch}>{branch}</option>
+          {/each}
+        </select>
       {/if}
-      
       {#if verificationStatus}
         <span class="verification-status" class:verified={verificationStatus.verified} class:unverified={!verificationStatus.verified}>
           {#if verificationStatus.verified}
-            ✓ Verified
+            <img src="/icons/check-circle.svg" alt="Verified" class="icon-inline" />
+            Verified
           {:else}
-            ⚠ Unverified
+            <img src="/icons/alert-triangle.svg" alt="Unverified" class="icon-inline" />
+            Unverified
           {/if}
         </span>
       {/if}
+      </div>
     </div>
   </header>
 
@@ -1214,6 +1357,13 @@
       >
         Pull Requests
       </button>
+      <button 
+        class="tab-button" 
+        class:active={activeTab === 'docs'}
+        onclick={() => activeTab = 'docs'}
+      >
+        Documentation
+      </button>
     </div>
 
     <div class="repo-layout">
@@ -1239,9 +1389,9 @@
               <li class="file-item" class:directory={file.type === 'directory'} class:selected={currentFile === file.path}>
                 <button onclick={() => handleFileClick(file)} class="file-button">
                   {#if file.type === 'directory'}
-                    📁
+                    <img src="/icons/package.svg" alt="Directory" class="icon-inline" />
                   {:else}
-                    📄
+                    <img src="/icons/file-text.svg" alt="File" class="icon-inline" />
                   {/if}
                   {file.name}
                   {#if file.size !== undefined}
@@ -1249,7 +1399,9 @@
                   {/if}
                 </button>
                 {#if userPubkey && isMaintainer && file.type === 'file'}
-                  <button onclick={() => deleteFile(file.path)} class="delete-file-button" title="Delete file">🗑️</button>
+                  <button onclick={() => deleteFile(file.path)} class="delete-file-button" title="Delete file">
+                    <img src="/icons/x.svg" alt="Delete" class="icon-small" />
+                  </button>
                 {/if}
               </li>
             {/each}
@@ -1816,53 +1968,187 @@
 
   header {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1rem 2rem;
+    flex-direction: column;
     border-bottom: 1px solid var(--border-color);
     background: var(--card-bg);
+  }
+  
+  .header-content {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 2rem 2rem 1.5rem 2rem;
+    gap: 2rem;
+    margin-top: 1rem;
+  }
+  
+  .header-main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    gap: 1rem;
+    min-width: 0;
+    position: relative;
+  }
+  
+  .header-actions-bottom {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-top: auto;
+    align-self: flex-end;
   }
 
   .repo-banner {
     width: 100%;
-    height: 300px;
+    height: 200px;
     overflow: hidden;
     background: var(--bg-secondary);
-    margin-bottom: 1rem;
+    margin-bottom: 0;
+    position: relative;
+  }
+  
+  .repo-banner::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(
+      to bottom,
+      transparent 0%,
+      transparent 60%,
+      var(--card-bg) 100%
+    );
+    z-index: 1;
+    pointer-events: none;
+  }
+  
+  .repo-banner::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(
+      to right,
+      transparent 0%,
+      transparent 85%,
+      var(--card-bg) 100%
+    );
+    z-index: 1;
+    pointer-events: none;
   }
 
   .repo-banner img {
     width: 100%;
     height: 100%;
     object-fit: cover;
-  }
-
-  .header-left {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.5rem;
+    display: block;
   }
 
   .repo-title-section {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 1rem;
     margin-bottom: 0.5rem;
+    width: 100%;
+  }
+
+  .repo-title-text {
+    flex: 1;
+    min-width: 0; /* Allow text to shrink */
+  }
+
+  .repo-title-text h1 {
+    margin: 0;
+    word-wrap: break-word;
   }
 
   .repo-image {
-    width: 64px;
-    height: 64px;
-    border-radius: 8px;
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
     object-fit: cover;
     flex-shrink: 0;
+    display: block;
+    background: var(--bg-secondary);
+    border: 3px solid var(--card-bg);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  }
+  
+  /* Position repo image over banner if banner exists */
+  header:has(.repo-banner) .header-content {
+    margin-top: -30px; /* Overlap banner slightly */
+    position: relative;
+    z-index: 2;
+    padding-left: 2.5rem; /* Extra padding on left to create space from banner edge */
+  }
+  
+  header:has(.repo-banner) .repo-image {
+    border-color: var(--card-bg);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  }
+  
+  /* Responsive design for smaller screens */
+  @media (max-width: 768px) {
+    .header-content {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 1rem;
+    }
+    
+    .header-actions {
+      width: 100%;
+      justify-content: flex-start;
+      flex-wrap: wrap;
+    }
+    
+    .repo-banner {
+      height: 150px;
+    }
+    
+    header:has(.repo-banner) .header-content {
+      margin-top: -30px;
+    }
+    
+    .repo-image {
+      width: 64px;
+      height: 64px;
+    }
+    
+    .repo-title-text h1 {
+      font-size: 1.5rem;
+    }
+  }
+
+  .repo-image[src=""],
+  .repo-image:not([src]) {
+    display: none;
+  }
+
+  .repo-banner img[src=""],
+  .repo-banner img:not([src]) {
+    display: none;
   }
 
   .repo-description-header {
     margin: 0.25rem 0 0 0;
-    color: var(--text-secondary);
+    color: var(--text-primary);
     font-size: 0.9rem;
+    line-height: 1.4;
+    max-width: 100%;
+    word-wrap: break-word;
+  }
+
+  .repo-description-placeholder {
+    color: var(--text-muted);
+    font-style: italic;
   }
 
   .fork-badge {
@@ -1883,34 +2169,199 @@
     text-decoration: underline;
   }
 
+  .repo-meta-info {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+  }
+
+  .repo-language {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+  }
+
+  .repo-privacy-badge {
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-transform: uppercase;
+  }
+
+  .repo-privacy-badge.private {
+    background: var(--error-bg);
+    color: var(--error-text);
+  }
+
+  .repo-privacy-badge.public {
+    background: var(--success-bg);
+    color: var(--success-text);
+  }
+
+  .repo-topics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  .topic-tag {
+    padding: 0.25rem 0.5rem;
+    background: var(--accent-light);
+    color: var(--accent);
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+  }
+
+  .repo-website {
+    margin-top: 0.5rem;
+    font-size: 0.875rem;
+  }
+
+  .repo-website a {
+    color: var(--link-color);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .repo-website a:hover {
+    text-decoration: underline;
+  }
+
+  .repo-clone-urls {
+    margin-top: 0.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+  }
+
+  .clone-label {
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .clone-url {
+    padding: 0.125rem 0.375rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.25rem;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--text-primary);
+  }
+
+  .clone-more {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+  }
+
+  .repo-contributors {
+    margin-top: 0.75rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .contributors-label {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .contributors-list {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .contributor-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    text-decoration: none;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.5rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    transition: all 0.2s ease;
+  }
+
+  .contributor-item:hover {
+    border-color: var(--accent);
+    background: var(--card-bg);
+  }
+
+  .contributor-badge {
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    white-space: nowrap;
+    letter-spacing: 0.05em;
+    border: 1px solid transparent;
+    /* Ensure minimum size for touch targets */
+    min-height: 1.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .contributor-badge.owner {
+    /* High contrast colors that work in both light and dark modes */
+    background: #4a5568;
+    color: #ffffff;
+    border-color: #2d3748;
+  }
+
+  /* Dark mode adjustments for owner badge */
+  @media (prefers-color-scheme: dark) {
+    .contributor-badge.owner {
+      background: #718096;
+      color: #ffffff;
+      border-color: #a0aec0;
+    }
+  }
+
+  .contributor-badge.maintainer {
+    /* High contrast colors that work in both light and dark modes */
+    background: #22543d;
+    color: #ffffff;
+    border-color: #1a202c;
+  }
+
+  /* Dark mode adjustments for maintainer badge */
+  @media (prefers-color-scheme: dark) {
+    .contributor-badge.maintainer {
+      background: #48bb78;
+      color: #1a202c;
+      border-color: #68d391;
+    }
+  }
 
   header h1 {
     margin: 0;
     font-size: 1.5rem;
     color: var(--text-primary);
   }
-
-  .npub {
-    color: var(--text-muted);
-    font-size: 0.875rem;
-  }
-
-  .docs-link {
-    color: var(--link-color);
-    text-decoration: none;
-    font-size: 1.25rem;
-    margin-left: 0.5rem;
-    transition: color 0.2s ease;
-  }
-
-  .docs-link:hover {
-    color: var(--link-hover);
-  }
-
-  .header-right {
+  .header-actions {
     display: flex;
+    flex-direction: row;
     align-items: center;
-    gap: 1rem;
+    gap: 0.75rem;
+    flex-shrink: 0;
+    flex-wrap: wrap;
   }
 
   .branch-select {
@@ -1924,40 +2375,10 @@
 
   .auth-status {
     font-size: 0.875rem;
-    color: var(--text-muted);
-  }
-
-  .login-button,
-  .logout-button {
-    padding: 0.5rem 1rem;
-    border: 1px solid var(--input-border);
-    border-radius: 0.25rem;
-    background: var(--button-primary);
-    color: white;
-    cursor: pointer;
-    font-size: 0.875rem;
-    font-family: 'IBM Plex Serif', serif;
-    transition: background 0.2s ease;
-  }
-
-  .login-button:hover:not(:disabled) {
-    background: var(--button-primary-hover);
-  }
-
-  .login-button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .logout-button {
-    background: var(--error-text);
-    color: white;
-    border-color: var(--error-text);
-    margin-left: 0.5rem;
-  }
-
-  .logout-button:hover {
-    opacity: 0.9;
+    color: var(--text-primary);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
   }
 
   .repo-view {
@@ -2684,4 +3105,49 @@
     background: var(--error-bg);
     color: var(--error-text);
   }
+
+  .icon-inline {
+    width: 1em;
+    height: 1em;
+    vertical-align: middle;
+    display: inline-block;
+    margin-right: 0.25rem;
+    /* Make icons visible on dark backgrounds by inverting to light */
+    filter: brightness(0) saturate(100%) invert(1);
+  }
+
+  .icon-small {
+    width: 16px;
+    height: 16px;
+    vertical-align: middle;
+    /* Make icons visible on dark backgrounds by inverting to light */
+    filter: brightness(0) saturate(100%) invert(1);
+  }
+
+  /* Theme-aware icon colors */
+  .auth-status .icon-inline {
+    filter: brightness(0) saturate(100%) invert(1);
+    opacity: 0.8;
+  }
+
+  .verification-status.verified .icon-inline {
+    /* Green checkmark for verified */
+    filter: brightness(0) saturate(100%) invert(48%) sepia(79%) saturate(2476%) hue-rotate(86deg) brightness(118%) contrast(119%);
+  }
+
+  .verification-status.unverified .icon-inline {
+    /* Orange/yellow warning for unverified */
+    filter: brightness(0) saturate(100%) invert(67%) sepia(93%) saturate(1352%) hue-rotate(358deg) brightness(102%) contrast(106%);
+  }
+
+  .file-button .icon-inline {
+    filter: brightness(0) saturate(100%) invert(1);
+    opacity: 0.7;
+  }
+
+  .delete-file-button .icon-small {
+    /* Red for delete button */
+    filter: brightness(0) saturate(100%) invert(27%) sepia(51%) saturate(2878%) hue-rotate(346deg) brightness(104%) contrast(97%);
+  }
+
 </style>
