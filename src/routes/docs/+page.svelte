@@ -29,11 +29,11 @@
         
         content = md.render(docContent);
       } else {
-        error = $page.data.error || 'Failed to load NIP-34 documentation';
+        error = $page.data.error || 'Failed to load documentation';
       }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load documentation';
-      console.error('Error parsing NIP-34.md:', err);
+      console.error('Error parsing documentation:', err);
     } finally {
       loading = false;
     }

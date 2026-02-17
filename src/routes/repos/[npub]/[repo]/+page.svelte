@@ -1100,7 +1100,7 @@
       <span class="npub">
         by <a href={`/users/${npub}`}>{npub.slice(0, 16)}...</a>
       </span>
-      <a href="/docs/nip34" class="docs-link" target="_blank" title="NIP-34 Documentation">📖</a>
+      <a href="/docs" class="docs-link" target="_blank" title="GitRepublic Documentation">📖</a>
       {#if forkInfo?.isFork && forkInfo.originalRepo}
         <span class="fork-badge">Forked from <a href={`/repos/${forkInfo.originalRepo.npub}/${forkInfo.originalRepo.repo}`}>{forkInfo.originalRepo.repo}</a></span>
       {/if}
