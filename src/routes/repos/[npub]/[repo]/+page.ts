@@ -93,10 +93,6 @@ export const load: PageLoad = async ({ params, url, parent }) => {
       .map(t => t[1])
       .filter(t => t && typeof t === 'string') as string[];
     const website = announcement.tags.find(t => t[0] === 'website')?.[1];
-    const isPrivate = announcement.tags.some(t => 
-      (t[0] === 'private' && t[1] === 'true') || 
-      (t[0] === 't' && t[1] === 'private')
-    );
 
     // Get git domain for constructing URLs
     const layoutData = await parent();

@@ -434,11 +434,76 @@
         ]);
 
         const searchLower = query.toLowerCase();
-        events = repoEvents.filter(event => {
+        let filteredEvents = repoEvents.filter(event => {
           const name = event.tags.find(t => t[0] === 'name')?.[1] || '';
           const dTag = event.tags.find(t => t[0] === 'd')?.[1] || '';
           return name.toLowerCase().includes(searchLower) || dTag.toLowerCase().includes(searchLower);
         });
+        
+        // Filter out private repos unless user is authenticated and has access
+        // For signup page, we'll only show public repos or repos the user owns
+        let userPubkeyHex: string | null = null;
+        if (nip07Available) {
+          try {
+            const userPubkey = await getPublicKeyWithNIP07();
+            try {
+              const decoded = nip19.decode(userPubkey);
+              if (decoded.type === 'npub') {
+                userPubkeyHex = decoded.data as string;
+              } else {
+                userPubkeyHex = userPubkey;
+              }
+            } catch {
+              userPubkeyHex = userPubkey;
+            }
+          } catch {
+            // User not authenticated, continue with filtering
+          }
+        }
+        
+        // Filter private repos
+        events = await Promise.all(
+          filteredEvents.map(async (event) => {
+            const isPrivate = event.tags.some(t => 
+              (t[0] === 'private' && t[1] === 'true') || 
+              (t[0] === 't' && t[1] === 'private')
+            );
+            
+            // Public repos are always visible
+            if (!isPrivate) return event;
+            
+            // Private repos: only show if user is owner
+            if (userPubkeyHex && event.pubkey === userPubkeyHex) {
+              return event;
+            }
+            
+            // For other private repos, check access via API
+            if (userPubkeyHex) {
+              try {
+                const dTag = event.tags.find(t => t[0] === 'd')?.[1];
+                if (!dTag) return null;
+                
+                // Get npub from pubkey
+                const ownerNpub = nip19.npubEncode(event.pubkey);
+                const accessResponse = await fetch(`/api/repos/${ownerNpub}/${dTag}/access`, {
+                  headers: { 'X-User-Pubkey': userPubkeyHex }
+                });
+                
+                if (accessResponse.ok) {
+                  const accessData = await accessResponse.json();
+                  if (accessData.canView) {
+                    return event;
+                  }
+                }
+              } catch {
+                // Access check failed, don't show
+              }
+            }
+            
+            return null;
+          })
+        );
+        events = events.filter(e => e !== null) as NostrEvent[];
       }
 
       if (events.length === 0) {

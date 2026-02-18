@@ -483,6 +483,39 @@
     
     loadingDocs = true;
     try {
+      // Check if repo is private and user has access
+      const data = $page.data as typeof pageData;
+      if (data.repoIsPrivate) {
+        // Check access via API
+        const headers: Record<string, string> = {};
+        if (userPubkey) {
+          try {
+            const decoded = nip19.decode(userPubkey);
+            if (decoded.type === 'npub') {
+              headers['X-User-Pubkey'] = decoded.data as string;
+            } else {
+              headers['X-User-Pubkey'] = userPubkey;
+            }
+          } catch {
+            headers['X-User-Pubkey'] = userPubkey;
+          }
+        }
+        
+        const accessResponse = await fetch(`/api/repos/${npub}/${repo}/access`, { headers });
+        if (accessResponse.ok) {
+          const accessData = await accessResponse.json();
+          if (!accessData.canView) {
+            // User doesn't have access, don't load documentation
+            loadingDocs = false;
+            return;
+          }
+        } else {
+          // Access check failed, don't load documentation
+          loadingDocs = false;
+          return;
+        }
+      }
+      
       const decoded = nip19.decode(npub);
       if (decoded.type === 'npub') {
         const repoOwnerPubkey = decoded.data as string;
@@ -541,8 +574,37 @@
         console.log('[Repo Images] Loaded banner from pageData:', repoBanner);
       }
 
-      // Also fetch from announcement directly as fallback
+      // Also fetch from announcement directly as fallback (only if not private or user has access)
       if (!repoImage && !repoBanner) {
+        const data = $page.data as typeof pageData;
+        // Check access for private repos
+        if (data.repoIsPrivate) {
+          const headers: Record<string, string> = {};
+          if (userPubkey) {
+            try {
+              const decoded = nip19.decode(userPubkey);
+              if (decoded.type === 'npub') {
+                headers['X-User-Pubkey'] = decoded.data as string;
+              } else {
+                headers['X-User-Pubkey'] = userPubkey;
+              }
+            } catch {
+              headers['X-User-Pubkey'] = userPubkey;
+            }
+          }
+          
+          const accessResponse = await fetch(`/api/repos/${npub}/${repo}/access`, { headers });
+          if (!accessResponse.ok) {
+            // Access check failed, don't fetch images
+            return;
+          }
+          const accessData = await accessResponse.json();
+          if (!accessData.canView) {
+            // User doesn't have access, don't fetch images
+            return;
+          }
+        }
+        
         const decoded = nip19.decode(npub);
         if (decoded.type === 'npub') {
           const repoOwnerPubkey = decoded.data as string;
