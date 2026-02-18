@@ -116,7 +116,7 @@ export const GET: RequestHandler = createRepoGetHandler(
       );
     }
   },
-  { operation: 'getBranches', requireRepoExists: false, requireRepoAccess: false } // Branches are public info, handle on-demand fetching
+  { operation: 'getBranches', requireRepoExists: false, requireRepoAccess: true } // Handle on-demand fetching, but check access for private repos
 );
 
 export const POST: RequestHandler = createRepoPostHandler(

@@ -7,12 +7,14 @@
   import { KIND } from '$lib/types/nostr.js';
   import { nip19 } from 'nostr-tools';
   import type { NostrEvent } from '$lib/types/nostr.js';
+  import { getPublicKeyWithNIP07, isNIP07Available } from '$lib/services/nostr/nip07-signer.js';
 
   const npub = ($page.params as { npub?: string }).npub || '';
 
   let loading = $state(true);
   let error = $state<string | null>(null);
   let userPubkey = $state<string | null>(null);
+  let viewerPubkeyHex = $state<string | null>(null);
   let repos = $state<NostrEvent[]>([]);
   let userProfile = $state<{ name?: string; about?: string; picture?: string } | null>(null);
 
@@ -20,8 +22,30 @@
   const gitDomain = $page.data.gitDomain || 'localhost:6543';
 
   onMount(async () => {
+    await loadViewerPubkey();
     await loadUserProfile();
   });
+
+  async function loadViewerPubkey() {
+    if (!isNIP07Available()) {
+      return;
+    }
+
+    try {
+      const viewerPubkey = await getPublicKeyWithNIP07();
+      // Convert npub to hex for API calls
+      try {
+        const decoded = nip19.decode(viewerPubkey);
+        if (decoded.type === 'npub') {
+          viewerPubkeyHex = decoded.data as string;
+        }
+      } catch {
+        viewerPubkeyHex = viewerPubkey; // Assume it's already hex
+      }
+    } catch (err) {
+      console.warn('Failed to load viewer pubkey:', err);
+    }
+  }
 
   async function loadUserProfile() {
     loading = true;
@@ -36,27 +60,20 @@
       }
       userPubkey = decoded.data as string;
 
-      // Fetch user's repositories
-      const repoEvents = await nostrClient.fetchEvents([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [userPubkey],
-          limit: 100
-        }
-      ]);
-
-      // Filter for repos that list our domain
-      repos = repoEvents.filter(event => {
-        const cloneUrls = event.tags
-          .filter(t => t[0] === 'clone')
-          .flatMap(t => t.slice(1))
-          .filter(url => url && typeof url === 'string');
-        
-        return cloneUrls.some(url => url.includes(gitDomain));
+      // Fetch user's repositories via API (with privacy filtering)
+      const url = `/api/users/${npub}/repos?domain=${encodeURIComponent(gitDomain)}`;
+      const response = await fetch(url, {
+        headers: viewerPubkeyHex ? {
+          'X-User-Pubkey': viewerPubkeyHex
+        } : {}
       });
 
-      // Sort by created_at descending
-      repos.sort((a, b) => b.created_at - a.created_at);
+      if (!response.ok) {
+        throw new Error(`Failed to load repositories: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      repos = data.repos || [];
 
       // Try to fetch user profile (kind 0)
       const profileEvents = await nostrClient.fetchEvents([

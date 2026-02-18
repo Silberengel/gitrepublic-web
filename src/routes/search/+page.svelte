@@ -3,16 +3,44 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import UserBadge from '$lib/components/UserBadge.svelte';
+  import { getPublicKeyWithNIP07, isNIP07Available } from '$lib/services/nostr/nip07-signer.js';
+  import { nip19 } from 'nostr-tools';
 
   let query = $state('');
   let searchType = $state<'repos' | 'code' | 'all'>('repos');
   let loading = $state(false);
+  let userPubkeyHex = $state<string | null>(null);
   let results = $state<{
     repos: Array<{ id: string; name: string; description: string; owner: string; npub: string }>;
     code: Array<{ repo: string; npub: string; file: string; matches: number }>;
     total: number;
   } | null>(null);
   let error = $state<string | null>(null);
+
+  onMount(async () => {
+    await loadUserPubkey();
+  });
+
+  async function loadUserPubkey() {
+    if (!isNIP07Available()) {
+      return;
+    }
+
+    try {
+      const userPubkey = await getPublicKeyWithNIP07();
+      // Convert npub to hex for API calls
+      try {
+        const decoded = nip19.decode(userPubkey);
+        if (decoded.type === 'npub') {
+          userPubkeyHex = decoded.data as string;
+        }
+      } catch {
+        userPubkeyHex = userPubkey; // Assume it's already hex
+      }
+    } catch (err) {
+      console.warn('Failed to load user pubkey:', err);
+    }
+  }
 
   async function performSearch() {
     if (!query.trim() || query.length < 2) {
@@ -24,7 +52,14 @@
     results = null; // Reset results
 
     try {
-      const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=${searchType}`);
+      const headers: Record<string, string> = {};
+      if (userPubkeyHex) {
+        headers['X-User-Pubkey'] = userPubkeyHex;
+      }
+      
+      const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=${searchType}`, {
+        headers
+      });
       if (response.ok) {
         const data = await response.json();
         // The API returns { query, type, results: { repos, code }, total }

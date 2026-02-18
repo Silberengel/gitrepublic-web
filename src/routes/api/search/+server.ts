@@ -5,6 +5,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
+import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS } from '$lib/config.js';
 import { KIND } from '$lib/types/nostr.js';
 import { FileManager } from '$lib/services/git/file-manager.js';
@@ -12,14 +13,21 @@ import { nip19 } from 'nostr-tools';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { handleApiError, handleValidationError } from '$lib/utils/error-handler.js';
+import { extractRequestContext } from '$lib/utils/api-context.js';
+import logger from '$lib/services/logger.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const fileManager = new FileManager(repoRoot);
+const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
 
-export const GET: RequestHandler = async ({ url }) => {
-  const query = url.searchParams.get('q');
-  const type = url.searchParams.get('type') || 'repos'; // repos, code, or all
-  const limit = parseInt(url.searchParams.get('limit') || '20', 10);
+export const GET: RequestHandler = async (event) => {
+  const query = event.url.searchParams.get('q');
+  const type = event.url.searchParams.get('type') || 'repos'; // repos, code, or all
+  const limit = parseInt(event.url.searchParams.get('limit') || '20', 10);
+  
+  // Extract user pubkey for privacy filtering
+  const requestContext = extractRequestContext(event);
+  const userPubkey = requestContext.userPubkeyHex || null;
 
   if (!query || query.trim().length === 0) {
     return handleValidationError('Missing or empty query parameter', { operation: 'search' });
@@ -80,12 +88,37 @@ export const GET: RequestHandler = async ({ url }) => {
         });
       }
       
-      // Process events into results
+      // Process events into results with privacy filtering
       const searchLower = query.toLowerCase();
       for (const event of events) {
+        const repoId = event.tags.find(t => t[0] === 'd')?.[1];
+        if (!repoId) continue;
+        
+        // Check privacy
+        const isPrivate = event.tags.some(t => 
+          (t[0] === 'private' && t[1] === 'true') || 
+          (t[0] === 't' && t[1] === 'private')
+        );
+        
+        // Check if user can view this repo
+        let canView = false;
+        if (!isPrivate) {
+          canView = true; // Public repos are viewable by anyone
+        } else if (userPubkey) {
+          // Private repos require authentication
+          try {
+            canView = await maintainerService.canView(userPubkey, event.pubkey, repoId);
+          } catch (err) {
+            logger.warn({ error: err, pubkey: event.pubkey, repo: repoId }, 'Failed to check repo access in search');
+            canView = false;
+          }
+        }
+        
+        // Only include repos the user can view
+        if (!canView) continue;
+        
         const name = event.tags.find(t => t[0] === 'name')?.[1] || '';
         const description = event.tags.find(t => t[0] === 'description')?.[1] || '';
-        const repoId = event.tags.find(t => t[0] === 'd')?.[1] || '';
 
         try {
           const npub = nip19.npubEncode(event.pubkey);
@@ -155,11 +188,30 @@ export const GET: RequestHandler = async ({ url }) => {
         // If we can't list repos, skip code search
       }
 
+      // Filter repos by privacy before searching code
+      const accessibleRepos: Array<{ npub: string; repo: string }> = [];
+      for (const { npub, repo } of allRepos.slice(0, 10)) { // Limit to 10 repos for performance
+        try {
+          // Decode npub to get pubkey
+          const decoded = nip19.decode(npub);
+          if (decoded.type !== 'npub') continue;
+          const repoOwnerPubkey = decoded.data as string;
+          
+          // Check if user can view this repo
+          const canView = await maintainerService.canView(userPubkey, repoOwnerPubkey, repo);
+          if (canView) {
+            accessibleRepos.push({ npub, repo });
+          }
+        } catch {
+          // Skip if can't decode npub or check access
+        }
+      }
+
       // Search in files (limited to avoid performance issues)
       const searchLower = query.toLowerCase();
       let codeResults: Array<{ repo: string; npub: string; file: string; matches: number }> = [];
 
-      for (const { npub, repo } of allRepos.slice(0, 10)) { // Limit to 10 repos for performance
+      for (const { npub, repo } of accessibleRepos) {
         try {
           const files = await fileManager.listFiles(npub, repo, 'HEAD', '');
           

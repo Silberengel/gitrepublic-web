@@ -118,5 +118,5 @@ export const GET: RequestHandler = createRepoGetHandler(
       isMarkdown: readmePath?.toLowerCase().endsWith('.md') || readmePath?.toLowerCase().endsWith('.markdown')
     });
   },
-  { operation: 'getReadme', requireRepoExists: false, requireRepoAccess: false } // Handle on-demand fetching, readme is public
+  { operation: 'getReadme', requireRepoExists: false, requireRepoAccess: true } // Handle on-demand fetching, but check access for private repos
 );

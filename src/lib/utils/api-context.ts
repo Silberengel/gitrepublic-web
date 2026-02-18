@@ -50,8 +50,9 @@ export function extractRequestContext(
 ): RequestContext {
   const requestUrl = url || event.url;
   
-  // Extract user pubkey from query params or headers
+  // Extract user pubkey from query params or headers (support both lowercase and capitalized)
   const userPubkey = requestUrl.searchParams.get('userPubkey') || 
+                     event.request.headers.get('X-User-Pubkey') ||
                      event.request.headers.get('x-user-pubkey') || 
                      null;
   

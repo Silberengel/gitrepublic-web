@@ -4,9 +4,11 @@
 
 import type { PageLoad } from './$types';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
+import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { KIND } from '$lib/types/nostr.js';
 import { nip19 } from 'nostr-tools';
+import { extractRequestContext } from '$lib/utils/api-context.js';
 
 export const load: PageLoad = async ({ params, url, parent }) => {
   const { npub, repo } = params;
@@ -49,6 +51,20 @@ export const load: PageLoad = async ({ params, url, parent }) => {
     }
 
     const announcement = events[0];
+    
+    // Check privacy - for private repos, we'll let the API endpoints handle access control
+    // The page load function runs server-side but doesn't have access to client auth headers
+    // So we'll mark it as private and let the frontend handle access denial
+    const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
+    const isPrivate = announcement.tags.some(t => 
+      (t[0] === 'private' && t[1] === 'true') || 
+      (t[0] === 't' && t[1] === 'private')
+    );
+    
+    // For private repos, we can't check access here (no user context in page load)
+    // The frontend will need to check access via API and show appropriate error
+    // We still expose basic metadata (name) but the API will enforce access
+    
     const name = announcement.tags.find(t => t[0] === 'name')?.[1] || repo;
     const description = announcement.tags.find(t => t[0] === 'description')?.[1] || '';
     const image = announcement.tags.find(t => t[0] === 'image')?.[1];

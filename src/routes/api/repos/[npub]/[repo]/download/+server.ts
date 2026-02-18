@@ -260,5 +260,5 @@ export const GET: RequestHandler = createRepoGetHandler(
       throw archiveError;
     }
   },
-  { operation: 'download', requireRepoExists: false, requireRepoAccess: false } // Handle on-demand fetching, downloads are public
+  { operation: 'download', requireRepoExists: false, requireRepoAccess: true } // Handle on-demand fetching, but check access for private repos
 );

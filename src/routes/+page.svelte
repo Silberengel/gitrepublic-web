@@ -9,15 +9,24 @@
   import { ForkCountService } from '../lib/services/nostr/fork-count-service.js';
   import { getPublicKeyWithNIP07, isNIP07Available } from '../lib/services/nostr/nip07-signer.js';
 
-  let repos = $state<NostrEvent[]>([]);
-  let allRepos = $state<NostrEvent[]>([]); // Store all repos for filtering
+  // Registered repos (with domain in clone URLs)
+  let registeredRepos = $state<Array<{ event: NostrEvent; npub: string; repoName: string }>>([]);
+  let allRegisteredRepos = $state<Array<{ event: NostrEvent; npub: string; repoName: string }>>([]);
+  
+  // Local clones (repos without domain in clone URLs)
+  let localRepos = $state<Array<{ npub: string; repoName: string; announcement: NostrEvent | null; lastModified: number }>>([]);
+  let allLocalRepos = $state<Array<{ npub: string; repoName: string; announcement: NostrEvent | null; lastModified: number }>>([]);
+  
   let loading = $state(true);
+  let loadingLocal = $state(false);
   let error = $state<string | null>(null);
   let forkCounts = $state<Map<string, number>>(new Map());
   let searchQuery = $state('');
   let showOnlyMyContacts = $state(false);
   let userPubkey = $state<string | null>(null);
+  let userPubkeyHex = $state<string | null>(null);
   let contactPubkeys = $state<Set<string>>(new Set());
+  let deletingRepo = $state<{ npub: string; repo: string } | null>(null);
 
   import { DEFAULT_NOSTR_RELAYS } from '../lib/config.js';
   const forkCountService = new ForkCountService(DEFAULT_NOSTR_RELAYS);
@@ -36,13 +45,24 @@
 
     try {
       userPubkey = await getPublicKeyWithNIP07();
-      contactPubkeys.add(userPubkey); // Include user's own repos
+      
+      // Convert npub to hex for API calls
+      try {
+        const decoded = nip19.decode(userPubkey);
+        if (decoded.type === 'npub') {
+          userPubkeyHex = decoded.data as string;
+        }
+      } catch {
+        userPubkeyHex = userPubkey; // Assume it's already hex
+      }
+      
+      contactPubkeys.add(userPubkeyHex); // Include user's own repos
 
       // Fetch user's kind 3 contact list
       const contactEvents = await nostrClient.fetchEvents([
         {
           kinds: [KIND.CONTACT_LIST],
-          authors: [userPubkey],
+          authors: [userPubkeyHex],
           limit: 1
         }
       ]);
@@ -78,46 +98,103 @@
     error = null;
     
     try {
-      const events = await nostrClient.fetchEvents([
-        { kinds: [KIND.REPO_ANNOUNCEMENT], limit: 100 }
-      ]);
-      
-      // Get git domain from layout data
       const gitDomain = $page.data.gitDomain || 'localhost:6543';
+      const url = `/api/repos/list?domain=${encodeURIComponent(gitDomain)}`;
       
-      // Filter for repos that list our domain in clone tags and are public
-      repos = events.filter(event => {
-        const cloneUrls = event.tags
-          .filter(t => t[0] === 'clone')
-          .flatMap(t => t.slice(1))
-          .filter(url => url && typeof url === 'string');
-        
-        const hasDomain = cloneUrls.some(url => url.includes(gitDomain));
-        if (!hasDomain) return false;
-
-        // Filter out private repos from public listing
-        const isPrivate = event.tags.some(t => 
-          (t[0] === 'private' && t[1] === 'true') || 
-          (t[0] === 't' && t[1] === 'private')
-        );
-        
-        return !isPrivate; // Only show public repos
+      const response = await fetch(url, {
+        headers: userPubkeyHex ? {
+          'X-User-Pubkey': userPubkeyHex
+        } : {}
       });
       
-      // Sort by created_at descending
-      repos.sort((a, b) => b.created_at - a.created_at);
-      allRepos = [...repos]; // Store all repos for filtering
-
-      // Load fork counts for all repos (in parallel, but don't block)
-      loadForkCounts(repos).catch(err => {
+      if (!response.ok) {
+        throw new Error(`Failed to load repositories: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      
+      // Set registered repos
+      registeredRepos = data.registered || [];
+      allRegisteredRepos = [...registeredRepos];
+      
+      // Load fork counts for registered repos (in parallel, but don't block)
+      loadForkCounts(registeredRepos.map(r => r.event)).catch(err => {
         console.warn('[RepoList] Failed to load some fork counts:', err);
       });
+      
+      // Load local repos separately (async, don't block)
+      loadLocalRepos();
     } catch (e) {
       error = String(e);
       console.error('[RepoList] Failed to load repos:', e);
     } finally {
       loading = false;
     }
+  }
+  
+  async function loadLocalRepos() {
+    loadingLocal = true;
+    
+    try {
+      const gitDomain = $page.data.gitDomain || 'localhost:6543';
+      const url = `/api/repos/local?domain=${encodeURIComponent(gitDomain)}`;
+      
+      const response = await fetch(url, {
+        headers: userPubkeyHex ? {
+          'X-User-Pubkey': userPubkeyHex
+        } : {}
+      });
+      
+      if (!response.ok) {
+        console.warn('Failed to load local repos:', response.statusText);
+        return;
+      }
+      
+      const data = await response.json();
+      localRepos = data || [];
+      allLocalRepos = [...localRepos];
+    } catch (e) {
+      console.warn('[RepoList] Failed to load local repos:', e);
+    } finally {
+      loadingLocal = false;
+    }
+  }
+  
+  async function deleteLocalRepo(npub: string, repo: string) {
+    if (!confirm(`Are you sure you want to delete the local clone of ${repo}? This will remove the repository from this server but will not delete the announcement on Nostr.`)) {
+      return;
+    }
+    
+    deletingRepo = { npub, repo };
+    
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/delete`, {
+        method: 'DELETE',
+        headers: userPubkeyHex ? {
+          'X-User-Pubkey': userPubkeyHex
+        } : {}
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to delete repository');
+      }
+      
+      // Remove from local repos list
+      localRepos = localRepos.filter(r => !(r.npub === npub && r.repoName === repo));
+      allLocalRepos = [...localRepos];
+      
+      alert('Repository deleted successfully');
+    } catch (e) {
+      alert(`Failed to delete repository: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      deletingRepo = null;
+    }
+  }
+  
+  function registerRepo(npub: string, repo: string) {
+    // Navigate to signup page with repo pre-filled
+    goto(`/signup?npub=${encodeURIComponent(npub)}&repo=${encodeURIComponent(repo)}`);
   }
 
   async function loadForkCounts(repoEvents: NostrEvent[]) {
@@ -146,6 +223,19 @@
     if (!dTag) return 0;
     const repoKey = `${event.pubkey}:${dTag}`;
     return forkCounts.get(repoKey) || 0;
+  }
+  
+  function isOwner(npub: string, repoName: string): boolean {
+    if (!userPubkeyHex) return false;
+    try {
+      const decoded = nip19.decode(npub);
+      if (decoded.type === 'npub') {
+        return decoded.data === userPubkeyHex;
+      }
+    } catch {
+      // Invalid npub
+    }
+    return false;
   }
 
   function goToSearch() {
@@ -256,17 +346,18 @@
 
   function performSearch() {
     if (!searchQuery.trim()) {
-      repos = [...allRepos];
+      registeredRepos = [...allRegisteredRepos];
+      localRepos = [...allLocalRepos];
       return;
     }
 
     const query = searchQuery.trim().toLowerCase();
-    const results: SearchResult[] = [];
 
-    // Filter by contacts if enabled
-    let reposToSearch = allRepos;
+    // Search registered repos
+    let registeredToSearch = allRegisteredRepos;
     if (showOnlyMyContacts && contactPubkeys.size > 0) {
-      reposToSearch = allRepos.filter(event => {
+      registeredToSearch = allRegisteredRepos.filter(item => {
+        const event = item.event;
         // Check if owner is in contacts
         if (contactPubkeys.has(event.pubkey)) return true;
         
@@ -290,155 +381,49 @@
       });
     }
 
-    for (const repo of reposToSearch) {
+    const registeredResults: Array<{ item: typeof allRegisteredRepos[0]; score: number }> = [];
+    for (const item of registeredToSearch) {
+      const repo = item.event;
       let score = 0;
-      let matchType = '';
-
-      // Extract repo fields
+      
       const name = getRepoName(repo).toLowerCase();
       const dTag = repo.tags.find(t => t[0] === 'd')?.[1]?.toLowerCase() || '';
       const description = getRepoDescription(repo).toLowerCase();
-      const cloneUrls = getCloneUrls(repo).map(url => url.toLowerCase());
-      const maintainerTags = repo.tags.filter(t => t[0] === 'maintainers');
-      const maintainers: string[] = [];
-      for (const tag of maintainerTags) {
-        for (let i = 1; i < tag.length; i++) {
-          if (tag[i]) maintainers.push(tag[i].toLowerCase());
-        }
-      }
-
-      // Try to decode query as hex id, naddr, or nevent
-      let queryHex = '';
-      try {
-        const decoded = nip19.decode(query);
-        if (decoded.type === 'nevent') {
-          const data = decoded.data as { id: string };
-          queryHex = data.id || '';
-        } else if (decoded.type === 'naddr') {
-          // For naddr, we can't extract an event ID directly, skip
-        } else if (decoded.type === 'note') {
-          queryHex = decoded.data as string;
-        }
-      } catch {
-        // Not a bech32 encoded value
-      }
-
-      // Check if query is a hex pubkey or npub
-      let queryPubkey = '';
-      try {
-        const decoded = nip19.decode(query);
-        if (decoded.type === 'npub') {
-          queryPubkey = decoded.data as string;
-        }
-      } catch {
-        // Check if it's a hex pubkey (64 hex chars)
-        if (/^[0-9a-f]{64}$/i.test(query)) {
-          queryPubkey = query;
-        }
-      }
-
-      // Exact matches get highest score
-      if (name === query) {
-        score += 1000;
-        matchType = 'exact-name';
-      } else if (dTag === query) {
-        score += 1000;
-        matchType = 'exact-d-tag';
-      } else if (repo.id.toLowerCase() === query || repo.id.toLowerCase() === queryHex) {
-        score += 1000;
-        matchType = 'exact-id';
-      } else if (repo.pubkey.toLowerCase() === queryPubkey.toLowerCase()) {
-        score += 800;
-        matchType = 'exact-pubkey';
-      }
-
-      // Name matches
-      if (name.includes(query)) {
-        score += name.startsWith(query) ? 100 : 50;
-        if (!matchType) matchType = 'name';
-      }
-
-      // D-tag matches
-      if (dTag.includes(query)) {
-        score += dTag.startsWith(query) ? 100 : 50;
-        if (!matchType) matchType = 'd-tag';
-      }
-
-      // Description matches
-      if (description.includes(query)) {
-        score += 30;
-        if (!matchType) matchType = 'description';
-      }
-
-      // Pubkey matches (owner)
-      if (repo.pubkey.toLowerCase().includes(query.toLowerCase()) || 
-          (queryPubkey && repo.pubkey.toLowerCase() === queryPubkey.toLowerCase())) {
-        score += 200;
-        if (!matchType) matchType = 'pubkey';
-      }
-
-      // Maintainer matches
-      for (const maintainer of maintainers) {
-        if (maintainer.includes(query.toLowerCase())) {
-          score += 150;
-          if (!matchType) matchType = 'maintainer';
-          break;
-        }
-        // Check if maintainer is npub and matches query
-        try {
-          const decoded = nip19.decode(maintainer);
-          if (decoded.type === 'npub') {
-            const maintainerPubkey = decoded.data as string;
-            if (maintainerPubkey.toLowerCase().includes(query.toLowerCase()) ||
-                (queryPubkey && maintainerPubkey.toLowerCase() === queryPubkey.toLowerCase())) {
-              score += 150;
-              if (!matchType) matchType = 'maintainer';
-              break;
-            }
-          }
-        } catch {
-          // Not an npub, already checked above
-        }
-      }
-
-      // Clone URL matches
-      for (const url of cloneUrls) {
-        if (url.includes(query)) {
-          score += 40;
-          if (!matchType) matchType = 'clone-url';
-          break;
-        }
-      }
-
-      // Fulltext search in all tags and content
-      const allText = [
-        name,
-        dTag,
-        description,
-        ...cloneUrls,
-        ...maintainers,
-        repo.content.toLowerCase()
-      ].join(' ');
-
-      if (allText.includes(query)) {
-        score += 10;
-        if (!matchType) matchType = 'fulltext';
-      }
-
+      
+      if (name.includes(query)) score += 100;
+      if (dTag.includes(query)) score += 100;
+      if (description.includes(query)) score += 30;
+      
       if (score > 0) {
-        results.push({ repo, score, matchType });
+        registeredResults.push({ item, score });
       }
     }
-
-    // Sort by score (descending), then by created_at (descending)
-    results.sort((a, b) => {
-      if (b.score !== a.score) {
-        return b.score - a.score;
+    
+    registeredResults.sort((a, b) => b.score - a.score || b.item.event.created_at - a.item.event.created_at);
+    registeredRepos = registeredResults.map(r => r.item);
+    
+    // Search local repos
+    const localResults: Array<{ item: typeof allLocalRepos[0]; score: number }> = [];
+    for (const item of allLocalRepos) {
+      let score = 0;
+      const repoName = item.repoName.toLowerCase();
+      const announcement = item.announcement;
+      
+      if (repoName.includes(query)) score += 100;
+      if (announcement) {
+        const name = getRepoName(announcement).toLowerCase();
+        const description = getRepoDescription(announcement).toLowerCase();
+        if (name.includes(query)) score += 100;
+        if (description.includes(query)) score += 30;
       }
-      return b.repo.created_at - a.repo.created_at;
-    });
-
-    repos = results.map(r => r.repo);
+      
+      if (score > 0) {
+        localResults.push({ item, score });
+      }
+    }
+    
+    localResults.sort((a, b) => b.score - a.score || b.item.lastModified - a.item.lastModified);
+    localRepos = localResults.map(r => r.item);
   }
 
   // Reactive search when query or filter changes
@@ -511,50 +496,143 @@
       </div>
     {:else if loading}
       <div class="loading">Loading repositories...</div>
-    {:else if repos.length === 0}
-      <div class="empty">No repositories found.</div>
     {:else}
-      <div class="repos-list">
-        {#each repos as repo}
-          {@const repoImage = getRepoImage(repo)}
-          {@const repoBanner = getRepoBanner(repo)}
-          <div class="repo-card">
-            {#if repoBanner}
-              <div class="repo-card-banner">
-                <img src={repoBanner} alt="Banner" />
-              </div>
-            {/if}
-            <div class="repo-card-content">
-              <div class="repo-header">
-                {#if repoImage}
-                  <img src={repoImage} alt="Repository" class="repo-card-image" />
+      <!-- Registered Repositories Section -->
+      <div class="repo-section">
+        <div class="section-header">
+          <h3>Registered Repositories</h3>
+          <span class="section-badge">{registeredRepos.length}</span>
+        </div>
+        {#if registeredRepos.length === 0}
+          <div class="empty">No registered repositories found.</div>
+        {:else}
+          <div class="repos-list">
+            {#each registeredRepos as item}
+              {@const repo = item.event}
+              {@const repoImage = getRepoImage(repo)}
+              {@const repoBanner = getRepoBanner(repo)}
+              <div class="repo-card repo-card-registered">
+                {#if repoBanner}
+                  <div class="repo-card-banner">
+                    <img src={repoBanner} alt="Banner" />
+                  </div>
                 {/if}
-                <div class="repo-header-text">
-                  <h3>{getRepoName(repo)}</h3>
-                  {#if getRepoDescription(repo)}
-                    <p class="description">{getRepoDescription(repo)}</p>
-                  {/if}
+                <div class="repo-card-content">
+                  <div class="repo-header">
+                    {#if repoImage}
+                      <img src={repoImage} alt="Repository" class="repo-card-image" />
+                    {/if}
+                    <div class="repo-header-text">
+                      <h3>{getRepoName(repo)}</h3>
+                      {#if getRepoDescription(repo)}
+                        <p class="description">{getRepoDescription(repo)}</p>
+                      {/if}
+                    </div>
+                    <a href="/repos/{item.npub}/{item.repoName}" class="view-button">
+                      View & Edit →
+                    </a>
+                  </div>
+                  <div class="clone-urls">
+                    <strong>Clone URLs:</strong>
+                    {#each getCloneUrls(repo) as url}
+                      <code>{url}</code>
+                    {/each}
+                  </div>
+                  <div class="repo-meta">
+                    <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
+                    {#if getForkCount(repo) > 0}
+                      {@const forkCount = getForkCount(repo)}
+                      <span class="fork-count">🍴 {forkCount} fork{forkCount === 1 ? '' : 's'}</span>
+                    {/if}
+                  </div>
                 </div>
-                <a href="/repos/{getNpubFromEvent(repo)}/{getRepoNameFromUrl(repo)}" class="view-button">
-                  View & Edit →
-                </a>
               </div>
-              <div class="clone-urls">
-                <strong>Clone URLs:</strong>
-                {#each getCloneUrls(repo) as url}
-                  <code>{url}</code>
-                {/each}
-              </div>
-              <div class="repo-meta">
-                <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
-                {#if getForkCount(repo) > 0}
-                  {@const forkCount = getForkCount(repo)}
-                  <span class="fork-count">🍴 {forkCount} fork{forkCount === 1 ? '' : 's'}</span>
-                {/if}
-              </div>
-            </div>
+            {/each}
           </div>
-        {/each}
+        {/if}
+      </div>
+
+      <!-- Local Clones Section -->
+      <div class="repo-section">
+        <div class="section-header">
+          <h3>Local Clones</h3>
+          <span class="section-badge">{localRepos.length}</span>
+          <span class="section-description">Repositories cloned locally but not registered with this domain</span>
+        </div>
+        {#if loadingLocal}
+          <div class="loading">Loading local repositories...</div>
+        {:else if localRepos.length === 0}
+          <div class="empty">No local clones found.</div>
+        {:else}
+          <div class="repos-list">
+            {#each localRepos as item}
+              {@const repo = item.announcement}
+              {@const repoImage = repo ? getRepoImage(repo) : null}
+              {@const repoBanner = repo ? getRepoBanner(repo) : null}
+              {@const canDelete = isOwner(item.npub, item.repoName)}
+              <div class="repo-card repo-card-local">
+                {#if repoBanner}
+                  <div class="repo-card-banner">
+                    <img src={repoBanner} alt="Banner" />
+                  </div>
+                {/if}
+                <div class="repo-card-content">
+                  <div class="repo-header">
+                    {#if repoImage}
+                      <img src={repoImage} alt="Repository" class="repo-card-image" />
+                    {/if}
+                    <div class="repo-header-text">
+                      <h3>{repo ? getRepoName(repo) : item.repoName}</h3>
+                      {#if repo && getRepoDescription(repo)}
+                        <p class="description">{getRepoDescription(repo)}</p>
+                      {:else}
+                        <p class="description">No description available</p>
+                      {/if}
+                    </div>
+                    <div class="repo-actions">
+                      <a href="/repos/{item.npub}/{item.repoName}" class="view-button">
+                        View & Edit →
+                      </a>
+                      {#if canDelete}
+                        <button 
+                          class="delete-button"
+                          onclick={() => deleteLocalRepo(item.npub, item.repoName)}
+                          disabled={deletingRepo?.npub === item.npub && deletingRepo?.repo === item.repoName}
+                        >
+                          {deletingRepo?.npub === item.npub && deletingRepo?.repo === item.repoName ? 'Deleting...' : 'Delete'}
+                        </button>
+                      {/if}
+                      <button 
+                        class="register-button"
+                        onclick={() => registerRepo(item.npub, item.repoName)}
+                      >
+                        Register
+                      </button>
+                    </div>
+                  </div>
+                  {#if repo}
+                    <div class="clone-urls">
+                      <strong>Clone URLs:</strong>
+                      {#each getCloneUrls(repo) as url}
+                        <code>{url}</code>
+                      {/each}
+                    </div>
+                  {/if}
+                  <div class="repo-meta">
+                    <span>Last modified: {new Date(item.lastModified).toLocaleDateString()}</span>
+                    {#if repo}
+                      <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
+                      {#if getForkCount(repo) > 0}
+                        {@const forkCount = getForkCount(repo)}
+                        <span class="fork-count">🍴 {forkCount} fork{forkCount === 1 ? '' : 's'}</span>
+                      {/if}
+                    {/if}
+                  </div>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     {/if}
   </main>

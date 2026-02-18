@@ -1204,6 +1204,98 @@ label.filter-checkbox > span,
   gap: 1.5rem;
 }
 
+/* Repository sections */
+.repo-section {
+  margin-bottom: 3rem;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 2px solid var(--card-border);
+}
+
+.section-header h3 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.section-badge {
+  background: var(--accent);
+  color: var(--accent-text);
+  padding: 0.25rem 0.75rem;
+  border-radius: 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.section-description {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  margin-left: auto;
+}
+
+/* Visual distinction between registered and local repos */
+.repo-card-registered {
+  border-left: 4px solid var(--success, #10b981);
+}
+
+.repo-card-local {
+  border-left: 4px solid var(--warning, #f59e0b);
+  background: var(--bg-secondary, rgba(245, 158, 11, 0.05));
+}
+
+/* Repo actions */
+.repo-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.delete-button,
+.register-button {
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid;
+}
+
+.delete-button {
+  background: var(--error-bg, rgba(239, 68, 68, 0.1));
+  color: var(--error, #ef4444);
+  border-color: var(--error, #ef4444);
+}
+
+.delete-button:hover:not(:disabled) {
+  background: var(--error, #ef4444);
+  color: white;
+}
+
+.delete-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.register-button {
+  background: var(--accent);
+  color: var(--accent-text, white);
+  border-color: var(--accent);
+}
+
+.register-button:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
 .repo-header {
   display: flex;
   justify-content: space-between;
