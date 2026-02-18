@@ -10,6 +10,9 @@ import { maintainerService } from '../services/service-registry.js';
 import { fileManager } from '../services/service-registry.js';
 import type { RepoContext, RequestContext, RepoRequestContext } from './api-context.js';
 import { handleValidationError, handleAuthError, handleAuthorizationError, handleNotFoundError } from './error-handler.js';
+import { BookmarksService } from '../services/nostr/bookmarks-service.js';
+import { DEFAULT_NOSTR_RELAYS } from '../config.js';
+import { KIND } from '../types/nostr.js';
 
 /**
  * Check if user has access to a repository (privacy check)
@@ -24,18 +27,40 @@ export async function requireRepoAccess(
   requestContext: RequestContext,
   operation?: string
 ): Promise<void> {
+  // First check if user is owner/maintainer (or repo is public)
   const canView = await maintainerService.canView(
     requestContext.userPubkeyHex || null,
     repoContext.repoOwnerPubkey,
     repoContext.repo
   );
   
-  if (!canView) {
-    throw handleAuthorizationError(
-      'This repository is private. Only owners and maintainers can view it.',
-      { operation, npub: repoContext.npub, repo: repoContext.repo }
-    );
+  if (canView) {
+    return; // User is owner/maintainer or repo is public, allow access
   }
+  
+  // canView returned false, which means repo is private and user is not owner/maintainer
+  // Check if user has bookmarked the private repo
+  if (requestContext.userPubkeyHex) {
+    try {
+      const bookmarksService = new BookmarksService(DEFAULT_NOSTR_RELAYS);
+      const repoAddress = `${KIND.REPO_ANNOUNCEMENT}:${repoContext.repoOwnerPubkey}:${repoContext.repo}`;
+      const isBookmarked = await bookmarksService.isBookmarked(requestContext.userPubkeyHex, repoAddress);
+      
+      if (isBookmarked) {
+        return; // User has bookmarked the private repo, allow access
+      }
+    } catch (err) {
+      // If bookmark check fails, continue to deny access
+      // Log error but don't expose it to user
+      console.error('[API Auth] Error checking bookmarks:', err);
+    }
+  }
+  
+  // All checks failed - deny access
+  throw handleAuthorizationError(
+    'This repository is private. Only owners, maintainers, and users who have bookmarked it can view it.',
+    { operation, npub: repoContext.npub, repo: repoContext.repo }
+  );
 }
 
 /**

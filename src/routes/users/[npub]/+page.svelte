@@ -13,6 +13,7 @@
   import { getUserRelays } from '$lib/services/nostr/user-relays.js';
   import UserBadge from '$lib/components/UserBadge.svelte';
   import { forwardEventIfEnabled } from '$lib/services/messaging/event-forwarder.js';
+  import { userStore } from '$lib/stores/user-store.js';
 
   const npub = ($page.params as { npub?: string }).npub || '';
 
@@ -20,6 +21,31 @@
   let error = $state<string | null>(null);
   let userPubkey = $state<string | null>(null);
   let viewerPubkeyHex = $state<string | null>(null);
+
+  // Sync with userStore
+  $effect(() => {
+    const currentUser = $userStore;
+    const wasLoggedIn = userPubkey !== null || viewerPubkeyHex !== null;
+    
+    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
+      const wasDifferent = userPubkey !== currentUser.userPubkey || viewerPubkeyHex !== currentUser.userPubkeyHex;
+      userPubkey = currentUser.userPubkey;
+      viewerPubkeyHex = currentUser.userPubkeyHex;
+      
+      // Reload profile and repos when user logs in or pubkey changes
+      if (wasDifferent) {
+        loadUserProfile().catch(err => console.warn('Failed to reload user profile after login:', err));
+      }
+    } else {
+      userPubkey = null;
+      viewerPubkeyHex = null;
+      
+      // Reload profile when user logs out to hide private repos
+      if (wasLoggedIn) {
+        loadUserProfile().catch(err => console.warn('Failed to reload user profile after logout:', err));
+      }
+    }
+  });
   let repos = $state<NostrEvent[]>([]);
   let userProfile = $state<{ name?: string; about?: string; picture?: string } | null>(null);
   
@@ -48,12 +74,22 @@
   });
 
   async function loadViewerPubkey() {
+    // Check userStore first
+    const currentUser = $userStore;
+    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
+      userPubkey = currentUser.userPubkey;
+      viewerPubkeyHex = currentUser.userPubkeyHex;
+      return;
+    }
+    
+    // Fallback: try NIP-07 if store doesn't have it
     if (!isNIP07Available()) {
       return;
     }
 
     try {
       const viewerPubkey = await getPublicKeyWithNIP07();
+      userPubkey = viewerPubkey;
       // Convert npub to hex for API calls
       try {
         const decoded = nip19.decode(viewerPubkey);

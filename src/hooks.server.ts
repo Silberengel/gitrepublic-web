@@ -53,7 +53,7 @@ export const handle: Handle = async ({ event, resolve }) => {
   } else if (url.pathname.startsWith('/api/search')) {
     rateLimitType = 'search';
   }
-
+  
   // Extract user pubkey for rate limiting (authenticated users get higher limits)
   const userPubkey = event.request.headers.get('X-User-Pubkey') || 
                      event.request.headers.get('x-user-pubkey') ||
@@ -66,8 +66,26 @@ export const handle: Handle = async ({ event, resolve }) => {
   const rateLimitIdentifier = userPubkey ? `user:${userPubkey}` : `ip:${clientIp}`;
   const isAnonymous = !userPubkey;
 
-  // Check rate limit (skip for Vite internal requests)
-  const rateLimitResult = isViteInternalRequest 
+  // Skip rate limiting for read-only GET requests to repo endpoints (page loads)
+  // These are necessary for normal page functionality and are not write operations
+  const isReadOnlyRepoRequest = event.request.method === 'GET' && 
+                                 url.pathname.startsWith('/api/repos/') &&
+                                 !url.pathname.includes('/file') && // File operations are rate limited separately
+                                 !url.pathname.includes('/delete') &&
+                                 !url.pathname.includes('/transfer') &&
+                                 !url.pathname.includes('/settings') && // Settings might be write operations
+                                 (url.pathname.endsWith('/fork') || // GET /fork is read-only
+                                  url.pathname.endsWith('/verify') || // GET /verify is read-only
+                                  url.pathname.endsWith('/readme') || // GET /readme is read-only
+                                  url.pathname.endsWith('/branches') || // GET /branches is read-only
+                                  url.pathname.endsWith('/tags') || // GET /tags is read-only
+                                  url.pathname.endsWith('/tree') || // GET /tree is read-only
+                                  url.pathname.endsWith('/commits') || // GET /commits is read-only
+                                  url.pathname.endsWith('/access') || // GET /access is read-only
+                                  url.pathname.endsWith('/maintainers')); // GET /maintainers is read-only
+
+  // Check rate limit (skip for Vite internal requests and read-only repo requests)
+  const rateLimitResult = (isViteInternalRequest || isReadOnlyRepoRequest)
     ? { allowed: true, resetAt: Date.now() }
     : rateLimiter.check(rateLimitType, rateLimitIdentifier, isAnonymous);
   if (!rateLimitResult.allowed) {

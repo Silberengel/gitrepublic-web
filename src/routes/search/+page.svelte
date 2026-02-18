@@ -5,11 +5,35 @@
   import UserBadge from '$lib/components/UserBadge.svelte';
   import { getPublicKeyWithNIP07, isNIP07Available } from '$lib/services/nostr/nip07-signer.js';
   import { nip19 } from 'nostr-tools';
+  import { userStore } from '$lib/stores/user-store.js';
 
   let query = $state('');
   let searchType = $state<'repos' | 'code' | 'all'>('repos');
   let loading = $state(false);
   let userPubkeyHex = $state<string | null>(null);
+
+  // Sync with userStore
+  $effect(() => {
+    const currentUser = $userStore;
+    const wasLoggedIn = userPubkeyHex !== null;
+    
+    if (currentUser.userPubkeyHex) {
+      const wasDifferent = userPubkeyHex !== currentUser.userPubkeyHex;
+      userPubkeyHex = currentUser.userPubkeyHex;
+      
+      // If user just logged in and we have search results, reload to show private repos
+      if (wasDifferent && results && query.trim()) {
+        performSearch().catch(err => console.warn('Failed to reload search after login:', err));
+      }
+    } else {
+      userPubkeyHex = null;
+      
+      // If user just logged out and we have search results, reload to hide private repos
+      if (wasLoggedIn && results && query.trim()) {
+        performSearch().catch(err => console.warn('Failed to reload search after logout:', err));
+      }
+    }
+  });
   let results = $state<{
     repos: Array<{ id: string; name: string; description: string; owner: string; npub: string }>;
     code: Array<{ repo: string; npub: string; file: string; matches: number }>;
@@ -22,6 +46,14 @@
   });
 
   async function loadUserPubkey() {
+    // Check userStore first
+    const currentUser = $userStore;
+    if (currentUser.userPubkeyHex) {
+      userPubkeyHex = currentUser.userPubkeyHex;
+      return;
+    }
+    
+    // Fallback: try NIP-07 if store doesn't have it
     if (!isNIP07Available()) {
       return;
     }

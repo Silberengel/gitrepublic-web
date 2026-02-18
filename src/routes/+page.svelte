@@ -14,10 +14,14 @@
   let checkingLevel = $state(false);
   let levelMessage = $state<string | null>(null);
 
-  // React to userStore changes (e.g., when user logs out)
+  // React to userStore changes (e.g., when user logs in or out)
   $effect(() => {
     const currentUser = $userStore;
-    if (!currentUser.userPubkey) {
+    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
+      // User is logged in - sync local state with store
+      userPubkey = currentUser.userPubkey;
+      userPubkeyHex = currentUser.userPubkeyHex;
+    } else {
       // User has logged out - clear local state
       userPubkey = null;
       userPubkeyHex = null;
@@ -28,15 +32,18 @@
     // Prevent body scroll when splash page is shown
     document.body.style.overflow = 'hidden';
     
-    // Check userStore first - if user has logged out, don't check extension
+    // Check userStore first - if user is already logged in, use store values
     const currentUser = $userStore;
-    if (!currentUser.userPubkey) {
-      // User has logged out or never logged in
-      userPubkey = null;
-      userPubkeyHex = null;
+    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
+      // User is already logged in - use store values
+      userPubkey = currentUser.userPubkey;
+      userPubkeyHex = currentUser.userPubkeyHex;
       checkingAuth = false;
+      // Don't redirect immediately - let the user see they're logged in
+      // They can click "View Repositories" or navigate away
     } else {
-      // Check auth asynchronously
+      // User not logged in - check if extension is available
+      checkingAuth = true;
       checkAuth();
     }
     
@@ -94,54 +101,90 @@
   }
 
   async function handleLogin() {
-    if (isNIP07Available()) {
+    if (!isNIP07Available()) {
+      alert('Nostr extension not found. Please install a Nostr extension like nos2x or Alby to login.');
+      return;
+    }
+
+    try {
+      checkingLevel = true;
+      levelMessage = 'Connecting to Nostr extension...';
+      
+      // Get public key directly from NIP-07
+      let pubkey: string;
       try {
-        checkingLevel = true;
-        levelMessage = 'Checking authentication...';
-        
-        await checkAuth();
-        
-        if (userPubkey && userPubkeyHex) {
-          levelMessage = 'Verifying relay write access...';
-          
-          // Determine user level (checks relay write access)
-          const levelResult = await determineUserLevel(userPubkey, userPubkeyHex);
-          
-          // Update user store
-          userStore.setUser(
-            levelResult.userPubkey,
-            levelResult.userPubkeyHex,
-            levelResult.level,
-            levelResult.error || null
-          );
-          
-          // Update activity tracking on successful login
-          updateActivity();
-          
-          checkingLevel = false;
-          levelMessage = null;
-          
-          // Show appropriate message based on level
-          if (levelResult.level === 'unlimited') {
-            levelMessage = 'Unlimited access granted!';
-          } else if (levelResult.level === 'rate_limited') {
-            levelMessage = 'Logged in with rate-limited access.';
-          }
-          
-          // User is logged in, go to repos page
-          goto('/repos');
-        } else {
-          checkingLevel = false;
-          levelMessage = null;
+        pubkey = await getPublicKeyWithNIP07();
+        if (!pubkey) {
+          throw new Error('No public key returned from extension');
         }
       } catch (err) {
-        console.error('Login failed:', err);
+        console.error('Failed to get public key from NIP-07:', err);
         checkingLevel = false;
         levelMessage = null;
-        alert('Failed to login. Please make sure you have a Nostr extension installed (like nos2x or Alby).');
+        alert('Failed to connect to Nostr extension. Please make sure your extension is unlocked and try again.');
+        return;
       }
-    } else {
-      alert('Nostr extension not found. Please install a Nostr extension like nos2x or Alby to login.');
+
+      // Convert npub to hex for API calls
+      let pubkeyHex: string;
+      if (/^[0-9a-f]{64}$/i.test(pubkey)) {
+        // Already hex format
+        pubkeyHex = pubkey.toLowerCase();
+        userPubkey = pubkey;
+      } else {
+        // Try to decode as npub
+        try {
+          const decoded = nip19.decode(pubkey);
+          if (decoded.type === 'npub') {
+            pubkeyHex = decoded.data as string;
+            userPubkey = pubkey; // Keep original npub format
+          } else {
+            throw new Error('Invalid pubkey format');
+          }
+        } catch (decodeErr) {
+          console.error('Failed to decode pubkey:', decodeErr);
+          checkingLevel = false;
+          levelMessage = null;
+          alert('Invalid public key format. Please try again.');
+          return;
+        }
+      }
+
+      userPubkeyHex = pubkeyHex;
+      levelMessage = 'Verifying relay write access...';
+      
+      // Determine user level (checks relay write access)
+      const levelResult = await determineUserLevel(userPubkey, userPubkeyHex);
+      
+      // Update user store
+      userStore.setUser(
+        levelResult.userPubkey,
+        levelResult.userPubkeyHex,
+        levelResult.level,
+        levelResult.error || null
+      );
+      
+      // Update activity tracking on successful login
+      updateActivity();
+      
+      checkingLevel = false;
+      levelMessage = null;
+      
+      // Show appropriate message based on level
+      if (levelResult.level === 'unlimited') {
+        levelMessage = 'Unlimited access granted!';
+      } else if (levelResult.level === 'rate_limited') {
+        levelMessage = 'Logged in with rate-limited access.';
+      }
+      
+      // User is logged in, go to repos page
+      goto('/repos');
+    } catch (err) {
+      console.error('Login failed:', err);
+      checkingLevel = false;
+      levelMessage = null;
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      alert(`Failed to login: ${errorMessage}. Please make sure your Nostr extension is unlocked and try again.`);
     }
   }
 

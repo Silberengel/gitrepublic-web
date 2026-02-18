@@ -13,6 +13,7 @@
   import { BookmarksService } from '$lib/services/nostr/bookmarks-service.js';
   import { KIND } from '$lib/types/nostr.js';
   import { nip19 } from 'nostr-tools';
+  import { userStore } from '$lib/stores/user-store.js';
 
   // Get page data for OpenGraph metadata - use $derived to make it reactive
   const pageData = $derived($page.data as {
@@ -50,8 +51,44 @@
   let currentBranch = $state('main');
   let commitMessage = $state('');
   let userPubkey = $state<string | null>(null);
+  let userPubkeyHex = $state<string | null>(null);
   let showCommitDialog = $state(false);
   let activeTab = $state<'files' | 'history' | 'tags' | 'issues' | 'prs' | 'docs' | 'discussions'>('discussions');
+
+  // Sync with userStore
+  $effect(() => {
+    const currentUser = $userStore;
+    const wasLoggedIn = userPubkey !== null || userPubkeyHex !== null;
+    
+    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
+      const wasDifferent = userPubkey !== currentUser.userPubkey || userPubkeyHex !== currentUser.userPubkeyHex;
+      userPubkey = currentUser.userPubkey;
+      userPubkeyHex = currentUser.userPubkeyHex;
+      
+      // Reload data when user logs in or pubkey changes
+      if (wasDifferent) {
+        checkMaintainerStatus().catch(err => console.warn('Failed to reload maintainer status after login:', err));
+        loadBookmarkStatus().catch(err => console.warn('Failed to reload bookmark status after login:', err));
+        // Reload current tab data if needed
+        if (activeTab === 'files' && !loading) {
+          loadFiles().catch(err => console.warn('Failed to reload files after login:', err));
+        }
+      }
+    } else {
+      userPubkey = null;
+      userPubkeyHex = null;
+      
+      // Reload data when user logs out to hide private content
+      if (wasLoggedIn) {
+        checkMaintainerStatus().catch(err => console.warn('Failed to reload maintainer status after logout:', err));
+        loadBookmarkStatus().catch(err => console.warn('Failed to reload bookmark status after logout:', err));
+        // If repo is private and user logged out, reload to trigger access check
+        if (!loading && activeTab === 'files') {
+          loadFiles().catch(err => console.warn('Failed to reload files after logout:', err));
+        }
+      }
+    }
+  });
 
   // Navigation stack for directories
   let pathStack = $state<string[]>([]);
@@ -788,9 +825,35 @@
   });
 
   async function checkAuth() {
+    // Check userStore first
+    const currentUser = $userStore;
+    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
+      userPubkey = currentUser.userPubkey;
+      userPubkeyHex = currentUser.userPubkeyHex;
+      // Recheck maintainer status and bookmark status after auth
+      await checkMaintainerStatus();
+      await loadBookmarkStatus();
+      return;
+    }
+    
+    // Fallback: try NIP-07 if store doesn't have it
     try {
       if (isNIP07Available()) {
-        userPubkey = await getPublicKeyWithNIP07();
+        const pubkey = await getPublicKeyWithNIP07();
+        userPubkey = pubkey;
+        // Convert to hex if needed
+        if (/^[0-9a-f]{64}$/i.test(pubkey)) {
+          userPubkeyHex = pubkey.toLowerCase();
+        } else {
+          try {
+            const decoded = nip19.decode(pubkey);
+            if (decoded.type === 'npub') {
+              userPubkeyHex = decoded.data as string;
+            }
+          } catch {
+            userPubkeyHex = pubkey;
+          }
+        }
         // Recheck maintainer status and bookmark status after auth
         await checkMaintainerStatus();
         await loadBookmarkStatus();
@@ -798,16 +861,43 @@
     } catch (err) {
       console.log('NIP-07 not available or user not connected');
       userPubkey = null;
+      userPubkeyHex = null;
     }
   }
 
   async function login() {
+    // Check userStore first
+    const currentUser = $userStore;
+    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
+      userPubkey = currentUser.userPubkey;
+      userPubkeyHex = currentUser.userPubkeyHex;
+      // Re-check maintainer status and bookmark status after login
+      await checkMaintainerStatus();
+      await loadBookmarkStatus();
+      return;
+    }
+    
+    // Fallback: try NIP-07
     try {
       if (!isNIP07Available()) {
         alert('NIP-07 extension not found. Please install a Nostr extension like Alby or nos2x.');
         return;
       }
-      userPubkey = await getPublicKeyWithNIP07();
+      const pubkey = await getPublicKeyWithNIP07();
+      userPubkey = pubkey;
+      // Convert to hex if needed
+      if (/^[0-9a-f]{64}$/i.test(pubkey)) {
+        userPubkeyHex = pubkey.toLowerCase();
+      } else {
+        try {
+          const decoded = nip19.decode(pubkey);
+          if (decoded.type === 'npub') {
+            userPubkeyHex = decoded.data as string;
+          }
+        } catch {
+          userPubkeyHex = pubkey;
+        }
+      }
       // Re-check maintainer status and bookmark status after login
       await checkMaintainerStatus();
       await loadBookmarkStatus();
@@ -1624,14 +1714,18 @@
             class="bookmark-button"
             class:bookmarked={isBookmarked}
             title={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
+            aria-label={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
           >
-            {loadingBookmark ? '...' : (isBookmarked ? '★ Bookmarked' : '☆ Bookmark')}
+            {loadingBookmark ? '...' : (isBookmarked ? '★' : '☆')}
           </button>
           {#if isMaintainer}
             <a href={`/repos/${npub}/${repo}/settings`} class="settings-button">Settings</a>
           {/if}
           {#if isMaintainer}
-            <button onclick={() => showCreateBranchDialog = true} class="create-branch-button">+ New Branch</button>
+            <button onclick={() => {
+              if (!userPubkey || !isMaintainer) return;
+              showCreateBranchDialog = true;
+            }} class="create-branch-button">+ New Branch</button>
           {/if}
           <span class="auth-status">
             <img src="/icons/check-circle.svg" alt="Verified" class="icon-inline" />
@@ -1738,7 +1832,10 @@
               <button onclick={handleBack} class="back-button">← Back</button>
             {/if}
             {#if userPubkey && isMaintainer}
-              <button onclick={() => showCreateFileDialog = true} class="create-file-button">+ New File</button>
+              <button onclick={() => {
+                if (!userPubkey || !isMaintainer) return;
+                showCreateFileDialog = true;
+              }} class="create-file-button">+ New File</button>
             {/if}
             <button 
               onclick={() => showFileListOnMobile = !showFileListOnMobile} 
@@ -1818,7 +1915,10 @@
         <div class="tags-header">
           <h2>Tags</h2>
           {#if userPubkey && isMaintainer}
-            <button onclick={() => showCreateTagDialog = true} class="create-tag-button">+ New Tag</button>
+            <button onclick={() => {
+              if (!userPubkey || !isMaintainer) return;
+              showCreateTagDialog = true;
+            }} class="create-tag-button">+ New Tag</button>
           {/if}
         </div>
         {#if tags.length === 0}
@@ -1845,7 +1945,10 @@
         <div class="issues-header">
           <h2>Issues</h2>
           {#if userPubkey}
-            <button onclick={() => showCreateIssueDialog = true} class="create-issue-button">+ New Issue</button>
+            <button onclick={() => {
+              if (!userPubkey) return;
+              showCreateIssueDialog = true;
+            }} class="create-issue-button">+ New Issue</button>
           {/if}
         </div>
         {#if loadingIssues}
@@ -1879,7 +1982,10 @@
         <div class="prs-header">
           <h2>Pull Requests</h2>
           {#if userPubkey}
-            <button onclick={() => showCreatePRDialog = true} class="create-pr-button">+ New PR</button>
+            <button onclick={() => {
+              if (!userPubkey) return;
+              showCreatePRDialog = true;
+            }} class="create-pr-button">+ New PR</button>
           {/if}
         </div>
         {#if loadingPRs}
@@ -1954,7 +2060,10 @@
                 <span class="unsaved-indicator">● Unsaved changes</span>
               {/if}
               {#if isMaintainer}
-                <button onclick={() => showCommitDialog = true} disabled={!hasChanges || saving} class="save-button">
+                <button onclick={() => {
+                  if (!userPubkey || !isMaintainer) return;
+                  showCommitDialog = true;
+                }} disabled={!hasChanges || saving} class="save-button">
                   {saving ? 'Saving...' : 'Save'}
                 </button>
               {:else if userPubkey}
@@ -2163,7 +2272,7 @@
   </main>
 
   <!-- Create File Dialog -->
-  {#if showCreateFileDialog}
+  {#if showCreateFileDialog && userPubkey && isMaintainer}
     <div 
       class="modal-overlay" 
       role="dialog"
@@ -2200,7 +2309,7 @@
   {/if}
 
   <!-- Create Branch Dialog -->
-  {#if showCreateBranchDialog}
+  {#if showCreateBranchDialog && userPubkey && isMaintainer}
     <div 
       class="modal-overlay" 
       role="dialog"
@@ -2241,7 +2350,7 @@
   {/if}
 
   <!-- Create Tag Dialog -->
-  {#if showCreateTagDialog}
+  {#if showCreateTagDialog && userPubkey && isMaintainer}
     <div 
       class="modal-overlay" 
       role="dialog"
@@ -2282,7 +2391,7 @@
   {/if}
 
   <!-- Create Issue Dialog -->
-  {#if showCreateIssueDialog}
+  {#if showCreateIssueDialog && userPubkey}
     <div 
       class="modal-overlay" 
       role="dialog"
@@ -2319,7 +2428,7 @@
   {/if}
 
   <!-- Create PR Dialog -->
-  {#if showCreatePRDialog}
+  {#if showCreatePRDialog && userPubkey}
     <div 
       class="modal-overlay" 
       role="dialog"
@@ -2364,7 +2473,7 @@
   {/if}
 
   <!-- Commit Dialog -->
-  {#if showCommitDialog}
+  {#if showCommitDialog && userPubkey && isMaintainer}
     <div 
       class="modal-overlay" 
       role="dialog"
@@ -2446,21 +2555,29 @@
   }
 
   .bookmark-button {
-    padding: 0.5rem 1rem;
-    font-size: 0.875rem;
+    padding: 0.5rem;
+    font-size: 1.25rem;
     font-weight: 500;
     border: 1px solid var(--border-color);
     border-radius: 0.375rem;
     background: var(--bg-primary);
-    color: var(--text-primary);
+    color: var(--text-muted);
     cursor: pointer;
     transition: all 0.2s ease;
     font-family: 'IBM Plex Serif', serif;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+    line-height: 1;
   }
 
   .bookmark-button:hover:not(:disabled) {
     background: var(--bg-secondary);
     border-color: var(--accent);
+    color: var(--accent);
+    transform: scale(1.1);
   }
 
   .bookmark-button:disabled {
@@ -2470,12 +2587,18 @@
 
   .bookmark-button.bookmarked {
     background: var(--accent);
-    color: var(--accent-text, white);
+    color: var(--accent-text, #ffffff);
     border-color: var(--accent);
+  }
+
+  [data-theme="dark"] .bookmark-button.bookmarked {
+    background: var(--accent);
+    color: #ffffff;
   }
 
   .bookmark-button.bookmarked:hover:not(:disabled) {
     opacity: 0.9;
+    transform: scale(1.1);
   }
 
   .repo-banner {
@@ -2753,20 +2876,32 @@
 
   .fork-badge {
     padding: 0.25rem 0.5rem;
-    background: var(--accent-light);
-    color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-text, #ffffff);
     border-radius: 4px;
     font-size: 0.85rem;
     margin-left: 0.5rem;
+    font-weight: 500;
+  }
+
+  [data-theme="dark"] .fork-badge {
+    background: var(--accent);
+    color: #ffffff;
   }
 
   .fork-badge a {
-    color: var(--accent);
+    color: var(--accent-text, #ffffff);
     text-decoration: none;
+    font-weight: 500;
+  }
+
+  [data-theme="dark"] .fork-badge a {
+    color: #ffffff;
   }
 
   .fork-badge a:hover {
     text-decoration: underline;
+    opacity: 0.9;
   }
 
   .repo-meta-info {
@@ -2812,10 +2947,18 @@
 
   .topic-tag {
     padding: 0.25rem 0.5rem;
-    background: var(--accent-light);
-    color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-text, #ffffff);
     border-radius: 0.25rem;
     font-size: 0.75rem;
+    font-weight: 500;
+    border: 1px solid transparent;
+  }
+
+  /* Ensure high contrast in both themes */
+  [data-theme="dark"] .topic-tag {
+    background: var(--accent);
+    color: #ffffff;
   }
 
   .repo-website {
@@ -2919,35 +3062,32 @@
   }
 
   .contributor-badge.owner {
-    /* High contrast colors that work in both light and dark modes */
+    /* High contrast colors for light mode */
     background: #4a5568;
     color: #ffffff;
     border-color: #2d3748;
   }
 
   /* Dark mode adjustments for owner badge */
-  @media (prefers-color-scheme: dark) {
-    .contributor-badge.owner {
-      background: #718096;
-      color: #ffffff;
-      border-color: #a0aec0;
-    }
+  [data-theme="dark"] .contributor-badge.owner {
+    background: #718096;
+    color: #ffffff;
+    border-color: #a0aec0;
   }
 
   .contributor-badge.maintainer {
-    /* High contrast colors that work in both light and dark modes */
+    /* High contrast colors for light mode */
     background: #22543d;
     color: #ffffff;
     border-color: #1a202c;
   }
 
   /* Dark mode adjustments for maintainer badge */
-  @media (prefers-color-scheme: dark) {
-    .contributor-badge.maintainer {
-      background: #48bb78;
-      color: #1a202c;
-      border-color: #68d391;
-    }
+  [data-theme="dark"] .contributor-badge.maintainer {
+    background: #48bb78;
+    color: #1a202c;
+    border-color: #68d391;
+    font-weight: 700;
   }
 
   header h1 {
@@ -3401,7 +3541,7 @@
   }
 
   .commit-item, .tag-item {
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border-color);
   }
 
   .commit-button {
@@ -3419,7 +3559,13 @@
   }
 
   .commit-item.selected .commit-button {
-    background: var(--accent-light);
+    background: var(--accent);
+    color: var(--accent-text, #ffffff);
+  }
+
+  [data-theme="dark"] .commit-item.selected .commit-button {
+    background: var(--accent);
+    color: #ffffff;
   }
 
   .commit-hash {
@@ -3746,8 +3892,15 @@
   }
 
   .issue-status.open, .pr-status.open {
-    background: var(--accent-light);
-    color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-text, #ffffff);
+    font-weight: 600;
+  }
+
+  [data-theme="dark"] .issue-status.open,
+  [data-theme="dark"] .pr-status.open {
+    background: var(--accent);
+    color: #ffffff;
   }
 
   .issue-status.closed, .pr-status.closed {

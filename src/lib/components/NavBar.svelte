@@ -96,9 +96,10 @@
     </a>
     <nav class:mobile-open={mobileMenuOpen}>
       <div class="nav-links">
-        <a href="/" class:active={isActive('/') && $page.url.pathname === '/'} onclick={closeMobileMenu}>Repositories</a>
+        <a href="/repos" class:active={isActive('/repos')} onclick={closeMobileMenu}>Repositories</a>
         <a href="/search" class:active={isActive('/search')} onclick={closeMobileMenu}>Search</a>
         <a href="/signup" class:active={isActive('/signup')} onclick={closeMobileMenu}>Register</a>
+        <a href="/verify" class:active={isActive('/verify')} onclick={closeMobileMenu}>Verify Repo</a>
         <a href="/docs" class:active={isActive('/docs')} onclick={closeMobileMenu}>Docs</a>
       </div>
     </nav>

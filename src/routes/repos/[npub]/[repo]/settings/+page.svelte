@@ -3,6 +3,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { getPublicKeyWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
+  import { userStore } from '$lib/stores/user-store.js';
 
   const npub = ($page.params as { npub?: string; repo?: string }).npub || '';
   const repo = ($page.params as { npub?: string; repo?: string }).repo || '';
@@ -11,6 +12,16 @@
   let saving = $state(false);
   let error = $state<string | null>(null);
   let userPubkey = $state<string | null>(null);
+
+  // Sync with userStore
+  $effect(() => {
+    const currentUser = $userStore;
+    if (currentUser.userPubkey) {
+      userPubkey = currentUser.userPubkey;
+    } else {
+      userPubkey = null;
+    }
+  });
   
   let name = $state('');
   let description = $state('');
@@ -25,6 +36,14 @@
   });
 
   async function checkAuth() {
+    // Check userStore first
+    const currentUser = $userStore;
+    if (currentUser.userPubkey) {
+      userPubkey = currentUser.userPubkey;
+      return;
+    }
+    
+    // Fallback: try NIP-07 if store doesn't have it
     try {
       if (typeof window !== 'undefined' && window.nostr) {
         userPubkey = await getPublicKeyWithNIP07();

@@ -77,44 +77,50 @@ export class BookmarksService {
 
   /**
    * Add a repo to bookmarks
-   * Creates or updates the bookmark list event
+   * Creates or updates the bookmark list event, preserving all existing tags
+   * Per NIP-51: new items are appended to the end, and duplicates are removed
    */
   async addBookmark(pubkey: string, repoAddress: string, relays: string[]): Promise<boolean> {
     try {
       // Get existing bookmarks
       const existingBookmarks = await this.getBookmarks(pubkey);
       
-      // Extract existing a-tags (for repos)
-      const existingATags: string[] = [];
+      // Preserve ALL existing tags (not just a-tags)
+      const existingTags: string[][] = [];
+      const seenAddresses = new Set<string>();
+      
       if (existingBookmarks) {
         for (const tag of existingBookmarks.tags) {
+          // For 'a' tags, deduplicate repo addresses
           if (tag[0] === 'a' && tag[1]) {
-            // Only include repo announcement addresses
             if (tag[1].startsWith(`${KIND.REPO_ANNOUNCEMENT}:`)) {
-              existingATags.push(tag[1]);
+              // Skip if we've already seen this address (deduplication)
+              if (seenAddresses.has(tag[1])) {
+                continue;
+              }
+              seenAddresses.add(tag[1]);
             }
           }
+          // Preserve all other tags as-is
+          existingTags.push([...tag]);
         }
       }
 
       // Check if already bookmarked
-      if (existingATags.includes(repoAddress)) {
+      if (seenAddresses.has(repoAddress)) {
         logger.debug({ pubkey: truncatePubkey(pubkey), repoAddress }, 'Repo already bookmarked');
         return true;
       }
 
       // Add new bookmark to the end (chronological order per NIP-51)
-      existingATags.push(repoAddress);
-
-      // Create new bookmark event
-      const tags: string[][] = existingATags.map(addr => ['a', addr]);
+      existingTags.push(['a', repoAddress]);
 
       const eventTemplate: Omit<NostrEvent, 'id' | 'sig'> = {
         kind: KIND.BOOKMARKS,
         pubkey,
         created_at: Math.floor(Date.now() / 1000),
         content: '', // Public bookmarks use tags, not encrypted content
-        tags
+        tags: existingTags
       };
 
       // Sign with NIP-07
@@ -138,7 +144,7 @@ export class BookmarksService {
 
   /**
    * Remove a repo from bookmarks
-   * Creates a new bookmark list event without the specified repo
+   * Creates a new bookmark list event without the specified repo, preserving all other tags
    */
   async removeBookmark(pubkey: string, repoAddress: string, relays: string[]): Promise<boolean> {
     try {
@@ -150,32 +156,32 @@ export class BookmarksService {
         return true;
       }
 
-      // Extract existing a-tags (for repos), excluding the one to remove
-      const existingATags: string[] = [];
+      // Preserve ALL existing tags except the one to remove
+      const existingTags: string[][] = [];
+      let found = false;
+      
       for (const tag of existingBookmarks.tags) {
-        if (tag[0] === 'a' && tag[1]) {
-          // Only include repo announcement addresses, and exclude the one to remove
-          if (tag[1].startsWith(`${KIND.REPO_ANNOUNCEMENT}:`) && tag[1] !== repoAddress) {
-            existingATags.push(tag[1]);
-          }
+        // Skip the tag that matches the repo address to remove
+        if (tag[0] === 'a' && tag[1] === repoAddress) {
+          found = true;
+          continue; // Skip this tag
         }
+        // Preserve all other tags
+        existingTags.push([...tag]);
       }
 
       // Check if it was bookmarked
-      if (existingATags.length === existingBookmarks.tags.filter(t => t[0] === 'a' && t[1]?.startsWith(`${KIND.REPO_ANNOUNCEMENT}:`)).length) {
+      if (!found) {
         logger.debug({ pubkey: truncatePubkey(pubkey), repoAddress }, 'Repo was not bookmarked');
         return true;
       }
-
-      // Create new bookmark event without the removed bookmark
-      const tags: string[][] = existingATags.map(addr => ['a', addr]);
 
       const eventTemplate: Omit<NostrEvent, 'id' | 'sig'> = {
         kind: KIND.BOOKMARKS,
         pubkey,
         created_at: Math.floor(Date.now() / 1000),
         content: '', // Public bookmarks use tags, not encrypted content
-        tags
+        tags: existingTags
       };
 
       // Sign with NIP-07

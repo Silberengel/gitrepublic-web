@@ -8,6 +8,7 @@
   import { nip19 } from 'nostr-tools';
   import { ForkCountService } from '$lib/services/nostr/fork-count-service.js';
   import { getPublicKeyWithNIP07, isNIP07Available } from '$lib/services/nostr/nip07-signer.js';
+  import { userStore } from '$lib/stores/user-store.js';
 
   // Registered repos (with domain in clone URLs)
   let registeredRepos = $state<Array<{ event: NostrEvent; npub: string; repoName: string }>>([]);
@@ -27,6 +28,10 @@
   let userPubkeyHex = $state<string | null>(null);
   let contactPubkeys = $state<Set<string>>(new Set());
   let deletingRepo = $state<{ npub: string; repo: string } | null>(null);
+  
+  // User's own repositories (where they are owner or maintainer)
+  let myRepos = $state<Array<{ event: NostrEvent; npub: string; repoName: string }>>([]);
+  let loadingMyRepos = $state(false);
 
   import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
   const forkCountService = new ForkCountService(DEFAULT_NOSTR_RELAYS);
@@ -36,6 +41,7 @@
   onMount(async () => {
     await loadRepos();
     await loadUserAndContacts();
+    await loadMyRepos();
   });
 
   // Reload repos when page becomes visible (e.g., after returning from another page)
@@ -45,6 +51,7 @@
         if (document.visibilityState === 'visible') {
           // Reload repos when page becomes visible to catch newly published repos
           loadRepos().catch(err => console.warn('Failed to reload repos on visibility change:', err));
+          loadMyRepos().catch(err => console.warn('Failed to reload my repos on visibility change:', err));
         }
       };
       document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -52,14 +59,72 @@
     }
   });
 
+  // Sync with userStore - if userStore says logged out, clear local state
+  $effect(() => {
+    const currentUser = $userStore;
+    if (!currentUser.userPubkey || !currentUser.userPubkeyHex) {
+      // User is logged out according to store - clear local state
+      const wasLoggedIn = userPubkey !== null || userPubkeyHex !== null;
+      userPubkey = null;
+      userPubkeyHex = null;
+      myRepos = [];
+      contactPubkeys.clear();
+      
+      // If user was logged in before, reload repos to hide private ones
+      if (wasLoggedIn) {
+        loadRepos().catch(err => console.warn('Failed to reload repos after logout:', err));
+        loadLocalRepos().catch(err => console.warn('Failed to reload local repos after logout:', err));
+      }
+    } else if (currentUser.userPubkey && currentUser.userPubkeyHex) {
+      // User is logged in according to store - sync local state
+      // Only update if different to avoid unnecessary reloads
+      const wasDifferent = userPubkey !== currentUser.userPubkey || userPubkeyHex !== currentUser.userPubkeyHex;
+      const wasLoggedOut = userPubkey === null && userPubkeyHex === null;
+      
+      if (wasDifferent) {
+        userPubkey = currentUser.userPubkey;
+        userPubkeyHex = currentUser.userPubkeyHex;
+        
+        // Reload everything when user logs in or pubkey changes
+        loadRepos().catch(err => console.warn('Failed to reload repos after login:', err));
+        loadLocalRepos().catch(err => console.warn('Failed to reload local repos after login:', err));
+        loadMyRepos().catch(err => console.warn('Failed to load my repos after store sync:', err));
+        loadContacts().catch(err => console.warn('Failed to load contacts after store sync:', err));
+      }
+    }
+  });
+
   async function loadUserAndContacts() {
+    // Check userStore first - if user is logged out, don't try to get pubkey
+    const currentUser = $userStore;
+    if (!currentUser.userPubkey || !currentUser.userPubkeyHex) {
+      userPubkey = null;
+      userPubkeyHex = null;
+      contactPubkeys.clear();
+      return;
+    }
+
+    // If userStore has user info, use it
+    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
+      userPubkey = currentUser.userPubkey;
+      userPubkeyHex = currentUser.userPubkeyHex;
+      contactPubkeys.add(userPubkeyHex); // Include user's own repos
+      
+      // Still fetch contacts even if we have store data
+      await loadContacts();
+      return;
+    }
+
+    // Fallback: try to get from NIP-07 if store doesn't have it
     if (!isNIP07Available()) {
       return;
     }
 
     try {
-      userPubkey = await getPublicKeyWithNIP07();
-      if (!userPubkey) return;
+      const pubkey = await getPublicKeyWithNIP07();
+      if (!pubkey) return;
+      
+      userPubkey = pubkey;
       
       // Convert npub to hex for API calls
       // NIP-07 may return either npub or hex, so check format first
@@ -82,39 +147,96 @@
       }
       
       if (userPubkeyHex) {
-        // Fetch user's kind 3 contact list
-        const contactEvents = await nostrClient.fetchEvents([
-          {
-            kinds: [KIND.CONTACT_LIST],
-            authors: [userPubkeyHex],
-            limit: 1
-          }
-        ]);
-        
-        if (contactEvents.length > 0) {
-          const contactEvent = contactEvents[0];
-          // Extract pubkeys from 'p' tags
-          for (const tag of contactEvent.tags) {
-            if (tag[0] === 'p' && tag[1]) {
-              let pubkey = tag[1];
-              // Try to decode if it's an npub
-              try {
-                const decoded = nip19.decode(pubkey);
-                if (decoded.type === 'npub') {
-                  pubkey = decoded.data as string;
-                }
-              } catch {
-                // Assume it's already a hex pubkey
+        await loadContacts();
+      }
+    } catch (err) {
+      console.warn('Failed to load user or contacts:', err);
+    }
+  }
+
+  async function loadContacts() {
+    if (!userPubkeyHex) return;
+    
+    try {
+      // Fetch user's kind 3 contact list
+      const contactEvents = await nostrClient.fetchEvents([
+        {
+          kinds: [KIND.CONTACT_LIST],
+          authors: [userPubkeyHex],
+          limit: 1
+        }
+      ]);
+      
+      if (contactEvents.length > 0) {
+        const contactEvent = contactEvents[0];
+        // Extract pubkeys from 'p' tags
+        for (const tag of contactEvent.tags) {
+          if (tag[0] === 'p' && tag[1]) {
+            let pubkey = tag[1];
+            // Try to decode if it's an npub
+            try {
+              const decoded = nip19.decode(pubkey);
+              if (decoded.type === 'npub') {
+                pubkey = decoded.data as string;
               }
-              if (pubkey) {
-                contactPubkeys.add(pubkey);
-              }
+            } catch {
+              // Assume it's already a hex pubkey
+            }
+            if (pubkey) {
+              contactPubkeys.add(pubkey);
             }
           }
         }
       }
     } catch (err) {
-      console.warn('Failed to load user or contacts:', err);
+      console.warn('Failed to load contacts:', err);
+    }
+  }
+
+  async function loadMyRepos() {
+    if (!userPubkey || !userPubkeyHex) {
+      myRepos = [];
+      return;
+    }
+
+    loadingMyRepos = true;
+    try {
+      // Fetch all repos where user is owner
+      const ownerRepos = await nostrClient.fetchEvents([
+        {
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          authors: [userPubkeyHex],
+          limit: 100
+        }
+      ]);
+
+      const repos: Array<{ event: NostrEvent; npub: string; repoName: string }> = [];
+      
+      for (const event of ownerRepos) {
+        const dTag = event.tags.find(t => t[0] === 'd')?.[1];
+        if (!dTag) continue;
+        
+        try {
+          const npub = nip19.npubEncode(event.pubkey);
+          repos.push({
+            event,
+            npub,
+            repoName: dTag
+          });
+        } catch (err) {
+          console.warn('Failed to encode npub for repo:', err);
+        }
+      }
+
+      // Sort by created_at descending (newest first)
+      repos.sort((a, b) => b.event.created_at - a.event.created_at);
+      
+      myRepos = repos;
+    } catch (err) {
+      console.warn('Failed to load my repos:', err);
+      myRepos = [];
+    } finally {
+      loadingMyRepos = false;
     }
   }
 
@@ -408,6 +530,26 @@
 
 <div class="container">
   <main>
+    {#if userPubkey && myRepos.length > 0}
+      <div class="my-repos-section">
+        <h3>My Repositories</h3>
+        <div class="my-repos-badges">
+          {#each myRepos as item}
+            {@const repo = item.event}
+            {@const repoImage = getRepoImage(repo)}
+            <a href="/repos/{item.npub}/{item.repoName}" class="repo-badge">
+              {#if repoImage}
+                <img src={repoImage} alt={getRepoName(repo)} class="repo-badge-image" />
+              {:else}
+                <div class="repo-badge-icon">📦</div>
+              {/if}
+              <span class="repo-badge-name">{getRepoName(repo)}</span>
+            </a>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
     <div class="repos-header">
       <h2>Repositories on {$page.data.gitDomain || 'localhost:6543'}</h2>
       <button onclick={loadRepos} disabled={loading}>
@@ -541,21 +683,24 @@
                       <a href="/repos/{item.npub}/{item.repoName}" class="register-button">
                         View & Edit →
                       </a>
-                      {#if canDelete}
-                        <button 
-                          class="delete-button"
-                          onclick={() => deleteLocalRepo(item.npub, item.repoName)}
-                          disabled={deletingRepo?.npub === item.npub && deletingRepo?.repo === item.repoName}
-                        >
-                          {deletingRepo?.npub === item.npub && deletingRepo?.repo === item.repoName ? 'Deleting...' : 'Delete'}
-                        </button>
+                      {#if userPubkey}
+                        {#if canDelete}
+                          <button 
+                            class="delete-button"
+                            onclick={() => deleteLocalRepo(item.npub, item.repoName)}
+                            disabled={deletingRepo?.npub === item.npub && deletingRepo?.repo === item.repoName}
+                          >
+                            {deletingRepo?.npub === item.npub && deletingRepo?.repo === item.repoName ? 'Deleting...' : 'Delete'}
+                          </button>
+                        {:else}
+                          <button 
+                            class="register-button"
+                            onclick={() => registerRepo(item.npub, item.repoName)}
+                          >
+                            Register
+                          </button>
+                        {/if}
                       {/if}
-                      <button 
-                        class="register-button"
-                        onclick={() => registerRepo(item.npub, item.repoName)}
-                      >
-                        Register
-                      </button>
                     </div>
                   </div>
                   {#if repo}

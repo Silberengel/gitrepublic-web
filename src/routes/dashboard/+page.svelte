@@ -3,10 +3,21 @@
   import { getPublicKeyWithNIP07, isNIP07Available } from '$lib/services/nostr/nip07-signer.js';
   import { nip19 } from 'nostr-tools';
   import type { ExternalIssue, ExternalPullRequest } from '$lib/services/git-platforms/git-platform-fetcher.js';
+  import { userStore } from '$lib/stores/user-store.js';
 
   let loading = $state(true);
   let error = $state<string | null>(null);
   let userPubkeyHex = $state<string | null>(null);
+
+  // Sync with userStore
+  $effect(() => {
+    const currentUser = $userStore;
+    if (currentUser.userPubkeyHex) {
+      userPubkeyHex = currentUser.userPubkeyHex;
+    } else {
+      userPubkeyHex = null;
+    }
+  });
   let issues = $state<ExternalIssue[]>([]);
   let pullRequests = $state<ExternalPullRequest[]>([]);
   let activeTab = $state<'issues' | 'prs' | 'all'>('all');
@@ -32,6 +43,14 @@
   });
 
   async function loadUserPubkey() {
+    // Check userStore first
+    const currentUser = $userStore;
+    if (currentUser.userPubkeyHex) {
+      userPubkeyHex = currentUser.userPubkeyHex;
+      return;
+    }
+    
+    // Fallback: try NIP-07 if store doesn't have it
     if (!isNIP07Available()) {
       return;
     }
@@ -234,7 +253,7 @@
               <span class="status-badge" class:open={item.state === 'open'} class:closed={item.state === 'closed'} class:merged={item.state === 'merged'}>
                 {item.state}
               </span>
-              {#if isPR && item.merged_at}
+              {#if isPR && 'merged_at' in item && item.merged_at}
                 <span class="merged-indicator">✓ Merged</span>
               {/if}
             </div>

@@ -23,6 +23,7 @@
   --accent: var(--royal-plum);
   --accent-hover: #6a1f4d;
   --accent-light: var(--lilac);
+  --accent-text: #ffffff; /* White text for accent backgrounds */
   --link-color: #5a0d4f; /* Darker plum for better contrast on light bg */
   --link-hover: #4a0a3f; /* Even darker for hover */
   --card-bg: #ffffff;
@@ -62,6 +63,7 @@
   --accent: var(--royal-plum);
   --accent-hover: #b84a8a;
   --accent-light: var(--lilac);
+  --accent-text: #ffffff; /* White text for accent backgrounds */
   --link-color: #d84ab8; /* Brighter plum for better contrast on dark bg */
   --link-hover: #e85ac8; /* Even brighter for hover */
   --card-bg: var(--lavender-blush);
@@ -750,6 +752,94 @@ input:disabled, textarea:disabled, select:disabled {
 }
 
 /* Cards */
+/* My Repositories Section */
+.my-repos-section {
+  margin-bottom: 2rem;
+  padding: 1.5rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+}
+
+.my-repos-section h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1.25rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.my-repos-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.repo-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 0.375rem;
+  text-decoration: none;
+  color: var(--text-primary);
+  transition: all 0.2s ease;
+  font-size: 0.9rem;
+}
+
+.repo-badge:hover {
+  background: var(--bg-secondary);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.repo-badge-image {
+  width: 24px;
+  height: 24px;
+  object-fit: cover;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.repo-badge-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+
+.repo-badge-name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+@media (max-width: 768px) {
+  .my-repos-section {
+    padding: 1rem;
+  }
+  
+  .my-repos-badges {
+    gap: 0.5rem;
+  }
+  
+  .repo-badge {
+    padding: 0.4rem 0.6rem;
+    font-size: 0.85rem;
+  }
+  
+  .repo-badge-name {
+    max-width: 150px;
+  }
+}
+
 .card, .repo-card {
   border: 1px solid var(--card-border);
   border-radius: 0.5rem;
@@ -783,7 +873,7 @@ input:disabled, textarea:disabled, select:disabled {
 .repo-card-image, .repo-image {
   width: 64px;
   height: 64px;
-  border-radius: 8px;
+  border-radius: 50%;
   object-fit: cover;
   flex-shrink: 0;
 }
@@ -862,22 +952,62 @@ input:disabled, textarea:disabled, select:disabled {
   color: var(--success-text);
 }
 
+/* Fork button - ensure it uses primary button style */
+.fork-button {
+  background: var(--button-primary);
+  color: var(--accent-text, #ffffff);
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  font-family: 'IBM Plex Serif', serif;
+}
+
+.fork-button:hover:not(:disabled) {
+  background: var(--button-primary-hover);
+}
+
+.fork-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+[data-theme="dark"] .fork-button {
+  background: var(--button-primary);
+  color: #ffffff;
+}
+
 .fork-badge {
   padding: 0.25rem 0.5rem;
-  background: var(--accent-light);
-  color: var(--text-primary); /* Better contrast */
+  background: var(--accent);
+  color: var(--accent-text, #ffffff);
   border-radius: 4px;
   font-size: 0.85rem;
   margin-left: 0.5rem;
+  font-weight: 500;
+}
+
+[data-theme="dark"] .fork-badge {
+  background: var(--accent);
+  color: #ffffff;
 }
 
 .fork-badge a {
-  color: var(--link-color); /* Use link color for better visibility */
+  color: var(--accent-text, #ffffff);
   text-decoration: none;
+  font-weight: 500;
+}
+
+[data-theme="dark"] .fork-badge a {
+  color: #ffffff;
 }
 
 .fork-badge a:hover {
   text-decoration: underline;
+  opacity: 0.9;
 }
 
 .verification-status {

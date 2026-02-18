@@ -79,7 +79,7 @@ export class RateLimiter {
     
     const defaultLimits: Record<string, number> = {
       git: 60,      // Git operations: 60/min (authenticated), 30/min (anonymous)
-      api: 120,     // API requests: 120/min (authenticated), 60/min (anonymous)
+      api: 300,     // API requests: 300/min (authenticated), 150/min (anonymous) - increased for page loads
       file: 30,     // File operations: 30/min (authenticated), 15/min (anonymous)
       search: 20    // Search requests: 20/min (authenticated), 10/min (anonymous)
     };
