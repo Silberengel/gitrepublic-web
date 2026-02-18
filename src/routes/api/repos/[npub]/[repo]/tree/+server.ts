@@ -35,36 +35,25 @@ export const GET: RequestHandler = createRepoGetHandler(
         ]);
 
         if (events.length > 0) {
-          // Try to fetch the repository from remote clone URLs
-          const fetched = await repoManager.fetchRepoOnDemand(
-            context.npub,
-            context.repo,
-            events[0]
-          );
+          // Try API-based fetching first (no cloning)
+          const { tryApiFetch } = await import('$lib/utils/api-repo-helper.js');
+          const apiData = await tryApiFetch(events[0], context.npub, context.repo);
           
-          // Always check if repo exists after fetch attempt (might have been created)
-          // Also clear cache to ensure fileManager sees it
-          if (existsSync(repoPath)) {
-            repoCache.delete(RepoCache.repoExistsKey(context.npub, context.repo));
-            // Repo exists, continue with normal flow
-          } else if (!fetched) {
-            // Fetch failed and repo doesn't exist
-            throw handleNotFoundError(
-              'Repository not found and could not be fetched from remote. The repository may not have any accessible clone URLs.',
-              { operation: 'listFiles', npub: context.npub, repo: context.repo }
-            );
-          } else {
-            // Fetch returned true but repo doesn't exist - this shouldn't happen, but clear cache anyway
-            repoCache.delete(RepoCache.repoExistsKey(context.npub, context.repo));
-            // Wait a moment for filesystem to sync, then check again
-            await new Promise(resolve => setTimeout(resolve, 100));
-            if (!existsSync(repoPath)) {
-              throw handleNotFoundError(
-                'Repository fetch completed but repository is not accessible',
-                { operation: 'listFiles', npub: context.npub, repo: context.repo }
-              );
-            }
+          if (apiData && apiData.files) {
+            // Return API data directly without cloning
+            const path = context.path || '';
+            // Filter files by path if specified
+            const filteredFiles = path 
+              ? apiData.files.filter(f => f.path.startsWith(path))
+              : apiData.files.filter(f => !f.path.includes('/') || f.path.split('/').length === 1);
+            return json(filteredFiles);
           }
+          
+          // API fetch failed - repo is not cloned and API fetch didn't work
+          throw handleNotFoundError(
+            'Repository is not cloned locally and could not be fetched via API. Privileged users can clone this repository using the "Clone to Server" button.',
+            { operation: 'listFiles', npub: context.npub, repo: context.repo }
+          );
         } else {
           throw handleNotFoundError(
             'Repository announcement not found in Nostr',
@@ -86,7 +75,7 @@ export const GET: RequestHandler = createRepoGetHandler(
       }
     }
 
-    // Double-check repo exists after on-demand fetch
+    // Double-check repo exists (should be true if we got here)
     if (!existsSync(repoPath)) {
       throw handleNotFoundError(
         'Repository not found',

@@ -119,7 +119,8 @@
       updateActivity();
       
       // Show success message
-      if (levelResult.level === 'unlimited') {
+      const { hasUnlimitedAccess } = await import('../../lib/utils/user-access.js');
+      if (hasUnlimitedAccess(levelResult.level)) {
         console.log('Unlimited access granted!');
       } else if (levelResult.level === 'rate_limited') {
         console.log('Logged in with rate-limited access.');

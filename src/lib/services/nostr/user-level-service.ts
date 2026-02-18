@@ -16,6 +16,7 @@ import { createProofEvent } from './relay-write-proof.js';
 import { nip19 } from 'nostr-tools';
 import { NostrClient } from './nostr-client.js';
 import { DEFAULT_NOSTR_RELAYS } from '../../config.js';
+import { hasUnlimitedAccess } from '../../utils/user-access.js';
 
 export type UserLevel = 'unlimited' | 'rate_limited' | 'strictly_rate_limited';
 
@@ -84,7 +85,7 @@ export async function checkRelayWriteAccess(
     const result = await response.json();
     
     return {
-      hasAccess: result.level === 'unlimited',
+      hasAccess: hasUnlimitedAccess(result.level as UserLevel),
       error: result.error
     };
   } catch (error) {

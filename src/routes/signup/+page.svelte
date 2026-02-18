@@ -9,7 +9,7 @@
   import type { NostrEvent } from '../../lib/types/nostr.js';
   import { nip19 } from 'nostr-tools';
   import { userStore } from '../../lib/stores/user-store.js';
-  import { hasUnlimitedAccess } from '../../lib/utils/user-access.js';
+  import { hasUnlimitedAccess, isLoggedIn } from '../../lib/utils/user-access.js';
 
   let nip07Available = $state(false);
   let loading = $state(false);
@@ -2197,7 +2197,7 @@
       <div class="form-actions">
         <button
           type="submit"
-          disabled={loading || !nip07Available}
+          disabled={loading || !nip07Available || !isLoggedIn($userStore.userLevel) || !hasUnlimitedAccess($userStore.userLevel)}
         >
           {loading ? 'Publishing...' : 'Publish Repository Announcement'}
         </button>

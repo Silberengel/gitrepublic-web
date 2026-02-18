@@ -22,6 +22,7 @@ import { ResourceLimits } from '$lib/services/security/resource-limits.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 import { ForkCountService } from '$lib/services/nostr/fork-count-service.js';
 import { getCachedUserLevel } from '$lib/services/security/user-level-cache.js';
+import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
 import logger from '$lib/services/logger.js';
 import { handleApiError, handleValidationError, handleNotFoundError, handleAuthorizationError } from '$lib/utils/error-handler.js';
 
@@ -111,7 +112,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
     // Check if user has unlimited access (required for storing repos locally)
     const userLevel = getCachedUserLevel(userPubkeyHex);
-    if (!userLevel || userLevel.level !== 'unlimited') {
+    if (!hasUnlimitedAccess(userLevel?.level)) {
       const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
       auditLogger.logRepoFork(
         userPubkeyHex,

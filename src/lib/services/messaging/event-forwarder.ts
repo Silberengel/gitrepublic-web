@@ -621,7 +621,8 @@ export async function forwardEventIfEnabled(
   try {
     // Early returns for eligibility checks
     const cached = getCachedUserLevel(userPubkeyHex);
-    if (!cached || cached.level !== 'unlimited') {
+    const { hasUnlimitedAccess } = await import('../utils/user-access.js');
+    if (!hasUnlimitedAccess(cached?.level)) {
       return;
     }
 

@@ -12,6 +12,7 @@ import type { RequestHandler } from './$types';
 import { verifyEvent } from 'nostr-tools';
 import { storePreferences, getPreferences, deletePreferences, hasPreferences, getRateLimitStatus } from '$lib/services/messaging/preferences-storage.server.js';
 import { getCachedUserLevel } from '$lib/services/security/user-level-cache.js';
+import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
 import { extractRequestContext } from '$lib/utils/api-context.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 import logger from '$lib/services/logger.js';
@@ -87,7 +88,7 @@ export const POST: RequestHandler = async (event) => {
 
     // Verify user has unlimited access
     const cached = getCachedUserLevel(userPubkeyHex);
-    if (!cached || cached.level !== 'unlimited') {
+    if (!hasUnlimitedAccess(cached?.level)) {
       auditLogger.log({
         user: userPubkeyHex,
         ip: clientIp,
@@ -152,7 +153,7 @@ export const GET: RequestHandler = async (event) => {
 
     // Verify user has unlimited access
     const cached = getCachedUserLevel(requestContext.userPubkeyHex);
-    if (!cached || cached.level !== 'unlimited') {
+    if (!hasUnlimitedAccess(cached?.level)) {
       return error(403, 'Messaging forwarding requires unlimited access level');
     }
 
@@ -189,7 +190,7 @@ export const DELETE: RequestHandler = async (event) => {
 
     // Verify user has unlimited access
     const cached = getCachedUserLevel(requestContext.userPubkeyHex);
-    if (!cached || cached.level !== 'unlimited') {
+    if (!hasUnlimitedAccess(cached?.level)) {
       return error(403, 'Messaging forwarding requires unlimited access level');
     }
 

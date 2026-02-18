@@ -10,6 +10,7 @@ import type { RequestHandler } from './$types';
 import { extractRequestContext } from '$lib/utils/api-context.js';
 import { storeAttestation, getUserAttestations, verifyAttestation, calculateSSHKeyFingerprint } from '$lib/services/ssh/ssh-key-attestation.js';
 import { getCachedUserLevel } from '$lib/services/security/user-level-cache.js';
+import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '$lib/types/nostr.js';
@@ -68,7 +69,7 @@ export const POST: RequestHandler = async (event) => {
 
     // Check user has unlimited access (same requirement as messaging forwarding)
     const userLevel = getCachedUserLevel(requestContext.userPubkeyHex);
-    if (!userLevel || userLevel.level !== 'unlimited') {
+    if (!hasUnlimitedAccess(userLevel?.level)) {
       return error(403, 'SSH key attestation requires unlimited access. Please verify you can write to at least one default Nostr relay.');
     }
 

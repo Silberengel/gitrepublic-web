@@ -14,6 +14,7 @@ import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { KIND } from '$lib/types/nostr.js';
 import { extractRequestContext } from '$lib/utils/api-context.js';
 import { getCachedUserLevel } from '$lib/services/security/user-level-cache.js';
+import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
 import logger from '$lib/services/logger.js';
 import { handleApiError, handleValidationError } from '$lib/utils/error-handler.js';
 
@@ -38,7 +39,7 @@ export const POST: RequestHandler = async (event) => {
 
   // Check if user has unlimited access
   const userLevel = getCachedUserLevel(userPubkeyHex);
-  if (!userLevel || userLevel.level !== 'unlimited') {
+  if (!hasUnlimitedAccess(userLevel?.level)) {
     throw error(403, 'Only users with unlimited access can clone repositories to the server.');
   }
 

@@ -171,7 +171,8 @@
       levelMessage = null;
       
       // Show appropriate message based on level
-      if (levelResult.level === 'unlimited') {
+      const { hasUnlimitedAccess } = await import('../lib/utils/user-access.js');
+      if (hasUnlimitedAccess(levelResult.level)) {
         levelMessage = 'Unlimited access granted!';
       } else if (levelResult.level === 'rate_limited') {
         levelMessage = 'Logged in with rate-limited access.';

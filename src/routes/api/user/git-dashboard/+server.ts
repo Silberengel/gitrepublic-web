@@ -10,6 +10,7 @@ import type { RequestHandler } from './$types';
 import { extractRequestContext } from '$lib/utils/api-context.js';
 import { getAllExternalItems } from '$lib/services/git-platforms/git-platform-fetcher.js';
 import { getCachedUserLevel } from '$lib/services/security/user-level-cache.js';
+import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
 import logger from '$lib/services/logger.js';
 
 /**
@@ -27,7 +28,7 @@ export const GET: RequestHandler = async (event) => {
 
     // Check user has unlimited access (same requirement as messaging forwarding)
     const userLevel = getCachedUserLevel(requestContext.userPubkeyHex);
-    if (!userLevel || userLevel.level !== 'unlimited') {
+    if (!hasUnlimitedAccess(userLevel?.level)) {
       return json({
         issues: [],
         pullRequests: [],

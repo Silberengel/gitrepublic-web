@@ -213,7 +213,8 @@ export async function storePreferences(
 
   // Verify user has unlimited access
   const cached = getCachedUserLevel(userPubkeyHex);
-  if (!cached || cached.level !== 'unlimited') {
+  const { hasUnlimitedAccess } = await import('../utils/user-access.js');
+  if (!hasUnlimitedAccess(cached?.level)) {
     throw new Error('Messaging forwarding requires unlimited access');
   }
 

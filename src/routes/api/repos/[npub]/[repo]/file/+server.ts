@@ -60,30 +60,10 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
         ]);
 
         if (events.length > 0) {
-          // Try to fetch the repository from remote clone URLs
-          const fetched = await repoManager.fetchRepoOnDemand(
-            npub,
-            repo,
-            events[0]
-          );
-          
-          // Always check if repo exists after fetch attempt (might have been created)
-          // Also clear cache to ensure fileManager sees it
-          if (existsSync(repoPath)) {
-            repoCache.delete(RepoCache.repoExistsKey(npub, repo));
-            // Repo exists, continue with normal flow
-          } else if (!fetched) {
-            // Fetch failed and repo doesn't exist
-            return error(404, 'Repository not found and could not be fetched from remote. The repository may not have any accessible clone URLs.');
-          } else {
-            // Fetch returned true but repo doesn't exist - this shouldn't happen, but clear cache anyway
-            repoCache.delete(RepoCache.repoExistsKey(npub, repo));
-            // Wait a moment for filesystem to sync, then check again
-            await new Promise(resolve => setTimeout(resolve, 100));
-            if (!existsSync(repoPath)) {
-              return error(404, 'Repository fetch completed but repository is not accessible');
-            }
-          }
+          // Try API-based fetching first (no cloning)
+          // For file endpoint, we can't easily fetch individual files via API without cloning
+          // So we return 404 with helpful message
+          return error(404, 'Repository is not cloned locally. To view files, privileged users can clone this repository using the "Clone to Server" button.');
         } else {
           return error(404, 'Repository announcement not found in Nostr');
         }
@@ -99,7 +79,7 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
       }
     }
 
-    // Double-check repo exists after on-demand fetch
+    // Double-check repo exists (should be true if we got here)
     if (!existsSync(repoPath)) {
       return error(404, 'Repository not found');
     }

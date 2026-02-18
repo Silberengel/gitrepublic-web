@@ -45,17 +45,29 @@ export const GET: RequestHandler = createRepoGetHandler(
         ]);
 
         if (events.length > 0) {
-          // Try to fetch the repository from remote clone URLs
-          const fetched = await repoManager.fetchRepoOnDemand(
-            context.npub,
-            context.repo,
-            events[0]
-          );
+          // Try API-based fetching first (no cloning)
+          const { tryApiFetch } = await import('$lib/utils/api-repo-helper.js');
+          const apiData = await tryApiFetch(events[0], context.npub, context.repo);
           
-          if (!fetched) {
-            // If fetch fails, return not found (readme endpoint is non-critical)
-            return json({ found: false });
+          if (apiData && apiData.files) {
+            // Try to find README in API files
+            const readmeFiles = ['README.md', 'README.markdown', 'README.txt', 'readme.md', 'readme.markdown', 'readme.txt', 'README', 'readme'];
+            for (const readmeFile of readmeFiles) {
+              const readmeFileObj = apiData.files.find(f => 
+                f.name.toLowerCase() === readmeFile.toLowerCase() || 
+                f.path.toLowerCase() === readmeFile.toLowerCase()
+              );
+              if (readmeFileObj) {
+                // Try to fetch README content via API
+                // For now, return that we found it but can't get content without cloning
+                // In the future, we could enhance api-repo-fetcher to fetch file content
+                return json({ found: false }); // Can't get content via API yet
+              }
+            }
           }
+          
+          // API fetch failed or README not found - return not found
+          return json({ found: false });
         } else {
           // No announcement found, return not found
           return json({ found: false });

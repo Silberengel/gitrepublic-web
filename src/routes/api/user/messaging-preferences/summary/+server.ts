@@ -7,6 +7,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { getPreferencesSummary } from '$lib/services/messaging/preferences-storage.server.js';
 import { getCachedUserLevel } from '$lib/services/security/user-level-cache.js';
+import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
 import { extractRequestContext } from '$lib/utils/api-context.js';
 import logger from '$lib/services/logger.js';
 
@@ -24,7 +25,7 @@ export const GET: RequestHandler = async (event) => {
 
     // Verify user has unlimited access
     const cached = getCachedUserLevel(requestContext.userPubkeyHex);
-    if (!cached || cached.level !== 'unlimited') {
+    if (!hasUnlimitedAccess(cached?.level)) {
       return error(403, 'Messaging forwarding requires unlimited access level');
     }
 
