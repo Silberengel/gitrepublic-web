@@ -6,6 +6,7 @@
   import PRDetail from '$lib/components/PRDetail.svelte';
   import UserBadge from '$lib/components/UserBadge.svelte';
   import ForwardingConfig from '$lib/components/ForwardingConfig.svelte';
+  import EventCopyButton from '$lib/components/EventCopyButton.svelte';
   import { getPublicKeyWithNIP07, isNIP07Available, signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
   import { NostrClient } from '$lib/services/nostr/nostr-client.js';
   import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS, combineRelays } from '$lib/config.js';
@@ -144,7 +145,7 @@
   let loadingVerification = $state(false);
 
   // Issues
-  let issues = $state<Array<{ id: string; subject: string; content: string; status: string; author: string; created_at: number }>>([]);
+  let issues = $state<Array<{ id: string; subject: string; content: string; status: string; author: string; created_at: number; kind: number }>>([]);
   let loadingIssues = $state(false);
   let showCreateIssueDialog = $state(false);
   let newIssueSubject = $state('');
@@ -152,7 +153,7 @@
   let newIssueLabels = $state<string[]>(['']);
 
   // Pull Requests
-  let prs = $state<Array<{ id: string; subject: string; content: string; status: string; author: string; created_at: number; commitId?: string }>>([]);
+  let prs = $state<Array<{ id: string; subject: string; content: string; status: string; author: string; created_at: number; commitId?: string; kind: number }>>([]);
   let loadingPRs = $state(false);
   let showCreatePRDialog = $state(false);
   let newPRSubject = $state('');
@@ -176,8 +177,8 @@
   // Thread replies
   let expandedThreads = $state<Set<string>>(new Set());
   let showReplyDialog = $state(false);
-  let replyingToThreadId = $state<string | null>(null);
-  let replyingToCommentId = $state<string | null>(null); // For replying to comments
+  let replyingToThread = $state<{ id: string; kind?: number; pubkey?: string; author: string } | null>(null);
+  let replyingToComment = $state<{ id: string; kind?: number; pubkey?: string; author: string } | null>(null);
   let replyContent = $state('');
   let creatingReply = $state(false);
 
@@ -188,22 +189,30 @@
     title: string; 
     content: string; 
     author: string; 
-    createdAt: number; 
+    createdAt: number;
+    kind?: number;
+    pubkey?: string;
     comments?: Array<{ 
       id: string; 
       content: string; 
       author: string; 
       createdAt: number;
+      kind?: number;
+      pubkey?: string;
       replies?: Array<{
         id: string;
         content: string;
         author: string;
         createdAt: number;
+        kind?: number;
+        pubkey?: string;
         replies?: Array<{
           id: string;
           content: string;
           author: string;
           createdAt: number;
+          kind?: number;
+          pubkey?: string;
         }>;
       }>;
     }> 
@@ -725,6 +734,8 @@
         content: entry.content,
         author: entry.author,
         createdAt: entry.createdAt,
+        kind: entry.kind,
+        pubkey: entry.pubkey,
         comments: entry.comments
       }));
     } catch (err) {
@@ -734,6 +745,7 @@
       loadingDiscussions = false;
     }
   }
+
 
   async function createDiscussionThread() {
     if (!userPubkey || !userPubkeyHex) {
@@ -831,7 +843,7 @@
     }
   }
 
-  async function createThreadReply(threadId: string | null, commentId: string | null) {
+  async function createThreadReply() {
     if (!userPubkey || !userPubkeyHex) {
       error = 'You must be logged in to reply';
       return;
@@ -842,7 +854,7 @@
       return;
     }
 
-    if (!threadId && !commentId) {
+    if (!replyingToThread && !replyingToComment) {
       error = 'Must reply to either a thread or a comment';
       return;
     }
@@ -899,76 +911,34 @@
       let parentKind: number;
       let parentPubkey: string;
 
-      if (commentId) {
-        // Replying to a comment - get the comment event
-        const commentEvents = await client.fetchEvents([
-          {
-            kinds: [KIND.COMMENT],
-            ids: [commentId],
-            limit: 1
-          }
-        ]);
-
-        if (commentEvents.length === 0) {
-          throw new Error('Comment not found');
-        }
-
-        const commentEvent = commentEvents[0];
+      if (replyingToComment) {
+        // Replying to a comment - use the comment object we already have
+        const comment = replyingToComment;
         
-        // Find root event (E tag) or use thread ID if replying to thread comment
-        const ETag = commentEvent.tags.find(t => t[0] === 'E');
-        const KTag = commentEvent.tags.find(t => t[0] === 'K');
-        const PTag = commentEvent.tags.find(t => t[0] === 'P');
-        
-        if (ETag && KTag) {
-          // Comment has root tags, use them
-          rootEventId = ETag[1];
-          rootKind = parseInt(KTag[1]);
-          rootPubkey = PTag?.[1] || commentEvent.pubkey;
-        } else if (threadId) {
-          // Replying to a comment in a thread, use thread as root
-          const threadEvents = await client.fetchEvents([
-            {
-              kinds: [KIND.THREAD],
-              ids: [threadId],
-              limit: 1
-            }
-          ]);
-          if (threadEvents.length === 0) {
-            throw new Error('Thread not found');
-          }
-          rootEventId = threadId;
-          rootKind = KIND.THREAD;
-          rootPubkey = threadEvents[0].pubkey;
+        // Determine root: if we have a thread, use it as root; otherwise use announcement
+        if (replyingToThread) {
+          rootEventId = replyingToThread.id;
+          rootKind = replyingToThread.kind || KIND.THREAD;
+          rootPubkey = replyingToThread.pubkey || replyingToThread.author;
         } else {
-          throw new Error('Cannot determine root event');
+          // Comment is directly on announcement (in "Comments" pseudo-thread)
+          rootEventId = announcement.id;
+          rootKind = KIND.REPO_ANNOUNCEMENT;
+          rootPubkey = announcement.pubkey;
         }
 
         // Parent is the comment we're replying to
-        parentEventId = commentId;
-        parentKind = KIND.COMMENT;
-        parentPubkey = commentEvent.pubkey;
-      } else if (threadId) {
-        // Replying directly to a thread
-        const threadEvents = await client.fetchEvents([
-          {
-            kinds: [KIND.THREAD],
-            ids: [threadId],
-            limit: 1
-          }
-        ]);
-
-        if (threadEvents.length === 0) {
-          throw new Error('Thread not found');
-        }
-
-        const threadEvent = threadEvents[0];
-        rootEventId = threadId;
-        rootKind = KIND.THREAD;
-        rootPubkey = threadEvent.pubkey;
-        parentEventId = threadId;
-        parentKind = KIND.THREAD;
-        parentPubkey = threadEvent.pubkey;
+        parentEventId = comment.id;
+        parentKind = comment.kind || KIND.COMMENT;
+        parentPubkey = comment.pubkey || comment.author;
+      } else if (replyingToThread) {
+        // Replying directly to a thread - use the thread object we already have
+        rootEventId = replyingToThread.id;
+        rootKind = replyingToThread.kind || KIND.THREAD;
+        rootPubkey = replyingToThread.pubkey || replyingToThread.author;
+        parentEventId = replyingToThread.id;
+        parentKind = replyingToThread.kind || KIND.THREAD;
+        parentPubkey = replyingToThread.pubkey || replyingToThread.author;
       } else {
         throw new Error('Must specify thread or comment to reply to');
       }
@@ -1000,18 +970,21 @@
         throw new Error('Failed to publish reply to all relays');
       }
 
+      // Save thread ID before clearing (for expanding after reload)
+      const threadIdToExpand = replyingToThread?.id;
+
       // Clear form and close dialog
       replyContent = '';
       showReplyDialog = false;
-      replyingToThreadId = null;
-      replyingToCommentId = null;
+      replyingToThread = null;
+      replyingToComment = null;
 
       // Reload discussions to show the new reply
       await loadDiscussions();
       
       // Expand the thread if we were replying to a thread
-      if (threadId) {
-        expandedThreads.add(threadId);
+      if (threadIdToExpand) {
+        expandedThreads.add(threadIdToExpand);
         expandedThreads = new Set(expandedThreads); // Trigger reactivity
       }
     } catch (err) {
@@ -1994,13 +1967,14 @@
       });
       if (response.ok) {
         const data = await response.json();
-        issues = data.map((issue: { id: string; tags: string[][]; content: string; status?: string; pubkey: string; created_at: number }) => ({
+        issues = data.map((issue: { id: string; tags: string[][]; content: string; status?: string; pubkey: string; created_at: number; kind?: number }) => ({
           id: issue.id,
           subject: issue.tags.find((t: string[]) => t[0] === 'subject')?.[1] || 'Untitled',
           content: issue.content,
           status: issue.status || 'open',
           author: issue.pubkey,
-          created_at: issue.created_at
+          created_at: issue.created_at,
+          kind: issue.kind || KIND.ISSUE
         }));
       }
     } catch (err) {
@@ -2070,14 +2044,15 @@
       });
       if (response.ok) {
         const data = await response.json();
-        prs = data.map((pr: { id: string; tags: string[][]; content: string; status?: string; pubkey: string; created_at: number; commitId?: string }) => ({
+        prs = data.map((pr: { id: string; tags: string[][]; content: string; status?: string; pubkey: string; created_at: number; commitId?: string; kind?: number }) => ({
           id: pr.id,
           subject: pr.tags.find((t: string[]) => t[0] === 'subject')?.[1] || 'Untitled',
           content: pr.content,
           status: pr.status || 'open',
           author: pr.pubkey,
           created_at: pr.created_at,
-          commitId: pr.tags.find((t: string[]) => t[0] === 'c')?.[1]
+          commitId: pr.tags.find((t: string[]) => t[0] === 'c')?.[1],
+          kind: pr.kind || KIND.PULL_REQUEST
         }));
       }
     } catch (err) {
@@ -2576,6 +2551,7 @@
                 <div class="issue-meta">
                   <span>#{issue.id.slice(0, 7)}</span>
                   <span>{new Date(issue.created_at * 1000).toLocaleDateString()}</span>
+                  <EventCopyButton eventId={issue.id} kind={issue.kind} pubkey={issue.author} />
                 </div>
               </li>
             {/each}
@@ -2616,6 +2592,7 @@
                     <span class="pr-commit">Commit: {pr.commitId.slice(0, 7)}</span>
                   {/if}
                   <span>{new Date(pr.created_at * 1000).toLocaleDateString()}</span>
+                  <EventCopyButton eventId={pr.id} kind={pr.kind} pubkey={pr.author} />
                 </div>
               </li>
             {/each}
@@ -2906,11 +2883,13 @@
                         <span class="discussion-type">Comments</span>
                       {/if}
                       <span>Created {new Date(discussion.createdAt * 1000).toLocaleString()}</span>
+                      <EventCopyButton eventId={discussion.id} kind={discussion.kind} pubkey={discussion.pubkey} />
                       {#if discussion.type === 'thread' && userPubkey}
                         <button 
                           class="btn btn-small"
                           onclick={() => {
-                            replyingToThreadId = discussion.id;
+                            replyingToThread = { id: discussion.id, kind: discussion.kind, pubkey: discussion.pubkey, author: discussion.author };
+                            replyingToComment = null;
                             showReplyDialog = true;
                           }}
                         >
@@ -2932,12 +2911,13 @@
                           <div class="comment-meta">
                             <UserBadge pubkey={comment.author} />
                             <span>{new Date(comment.createdAt * 1000).toLocaleString()}</span>
+                            <EventCopyButton eventId={comment.id} kind={comment.kind} pubkey={comment.pubkey} />
                             {#if userPubkey}
                               <button 
                                 class="btn btn-small"
                                 onclick={() => {
-                                  replyingToThreadId = discussion.id;
-                                  replyingToCommentId = comment.id;
+                                  replyingToThread = { id: discussion.id, kind: discussion.kind, pubkey: discussion.pubkey, author: discussion.author };
+                                  replyingToComment = { id: comment.id, kind: comment.kind, pubkey: comment.pubkey, author: comment.author };
                                   showReplyDialog = true;
                                 }}
                               >
@@ -2955,12 +2935,13 @@
                                   <div class="comment-meta">
                                     <UserBadge pubkey={reply.author} />
                                     <span>{new Date(reply.createdAt * 1000).toLocaleString()}</span>
+                                    <EventCopyButton eventId={reply.id} kind={reply.kind} pubkey={reply.pubkey} />
                                     {#if userPubkey}
                                       <button 
                                         class="btn btn-small"
                                         onclick={() => {
-                                          replyingToThreadId = discussion.id;
-                                          replyingToCommentId = reply.id;
+                                          replyingToThread = { id: discussion.id, kind: discussion.kind, pubkey: discussion.pubkey, author: discussion.author };
+                                          replyingToComment = { id: reply.id, kind: reply.kind, pubkey: reply.pubkey, author: reply.author };
                                           showReplyDialog = true;
                                         }}
                                       >
@@ -2978,12 +2959,13 @@
                                           <div class="comment-meta">
                                             <UserBadge pubkey={nestedReply.author} />
                                             <span>{new Date(nestedReply.createdAt * 1000).toLocaleString()}</span>
+                                            <EventCopyButton eventId={nestedReply.id} kind={nestedReply.kind} pubkey={nestedReply.pubkey} />
                                             {#if userPubkey}
                                               <button 
                                                 class="btn btn-small"
                                                 onclick={() => {
-                                                  replyingToThreadId = discussion.id;
-                                                  replyingToCommentId = nestedReply.id;
+                                                  replyingToThread = { id: discussion.id, kind: discussion.kind, pubkey: discussion.pubkey, author: discussion.author };
+                                                  replyingToComment = { id: nestedReply.id, kind: nestedReply.kind, pubkey: nestedReply.pubkey, author: nestedReply.author };
                                                   showReplyDialog = true;
                                                 }}
                                               >
@@ -3013,12 +2995,13 @@
                           <div class="comment-meta">
                             <UserBadge pubkey={comment.author} />
                             <span>{new Date(comment.createdAt * 1000).toLocaleString()}</span>
+                            <EventCopyButton eventId={comment.id} kind={comment.kind} pubkey={comment.pubkey} />
                             {#if userPubkey}
                               <button 
                                 class="btn btn-small"
                                 onclick={() => {
-                                  replyingToThreadId = null;
-                                  replyingToCommentId = comment.id;
+                                  replyingToThread = { id: discussion.id, kind: discussion.kind, pubkey: discussion.pubkey, author: discussion.author };
+                                  replyingToComment = { id: comment.id, kind: comment.kind, pubkey: comment.pubkey, author: comment.author };
                                   showReplyDialog = true;
                                 }}
                               >
@@ -3036,12 +3019,13 @@
                                   <div class="comment-meta">
                                     <UserBadge pubkey={reply.author} />
                                     <span>{new Date(reply.createdAt * 1000).toLocaleString()}</span>
+                                    <EventCopyButton eventId={reply.id} kind={reply.kind} pubkey={reply.pubkey} />
                                     {#if userPubkey}
                                       <button 
                                         class="btn btn-small"
                                         onclick={() => {
-                                          replyingToThreadId = null;
-                                          replyingToCommentId = reply.id;
+                                          replyingToThread = { id: discussion.id, kind: discussion.kind, pubkey: discussion.pubkey, author: discussion.author };
+                                          replyingToComment = { id: reply.id, kind: reply.kind, pubkey: reply.pubkey, author: reply.author };
                                           showReplyDialog = true;
                                         }}
                                       >
@@ -3059,12 +3043,13 @@
                                           <div class="comment-meta">
                                             <UserBadge pubkey={nestedReply.author} />
                                             <span>{new Date(nestedReply.createdAt * 1000).toLocaleString()}</span>
+                                            <EventCopyButton eventId={nestedReply.id} kind={nestedReply.kind} pubkey={nestedReply.pubkey} />
                                             {#if userPubkey}
                                               <button 
                                                 class="btn btn-small"
                                                 onclick={() => {
-                                                  replyingToThreadId = null;
-                                                  replyingToCommentId = nestedReply.id;
+                                                  replyingToThread = { id: discussion.id, kind: discussion.kind, pubkey: discussion.pubkey, author: discussion.author };
+                                                  replyingToComment = { id: nestedReply.id, kind: nestedReply.kind, pubkey: nestedReply.pubkey, author: nestedReply.author };
                                                   showReplyDialog = true;
                                                 }}
                                               >
@@ -3290,7 +3275,7 @@
   {/if}
 
   <!-- Reply to Thread/Comment Dialog -->
-  {#if showReplyDialog && userPubkey && (replyingToThreadId || replyingToCommentId)}
+  {#if showReplyDialog && userPubkey && (replyingToThread || replyingToComment)}
     <div 
       class="modal-overlay" 
       role="dialog"
@@ -3298,8 +3283,8 @@
       aria-label="Reply to thread"
       onclick={() => {
         showReplyDialog = false;
-        replyingToThreadId = null;
-        replyingToCommentId = null;
+        replyingToThread = null;
+        replyingToComment = null;
         replyContent = '';
       }}
       onkeydown={(e) => e.key === 'Escape' && (showReplyDialog = false)}
@@ -3313,9 +3298,9 @@
         onclick={(e) => e.stopPropagation()}
       >
         <h3>
-          {#if replyingToCommentId}
+          {#if replyingToComment}
             Reply to Comment
-          {:else if replyingToThreadId}
+          {:else if replyingToThread}
             Reply to Thread
           {:else}
             Reply
@@ -3329,8 +3314,8 @@
           <button 
             onclick={() => {
               showReplyDialog = false;
-              replyingToThreadId = null;
-              replyingToCommentId = null;
+              replyingToThread = null;
+              replyingToComment = null;
               replyContent = '';
             }} 
             class="cancel-button"
@@ -3338,7 +3323,7 @@
             Cancel
           </button>
           <button 
-            onclick={() => createThreadReply(replyingToThreadId, replyingToCommentId)} 
+            onclick={() => createThreadReply()} 
             disabled={!replyContent.trim() || creatingReply} 
             class="save-button"
           >
@@ -3551,11 +3536,6 @@
     background: var(--accent);
     color: var(--accent-text, #ffffff);
     border-color: var(--accent);
-  }
-
-  [data-theme="dark"] .bookmark-button.bookmarked {
-    background: var(--accent);
-    color: #ffffff;
   }
 
   .bookmark-button.bookmarked:hover:not(:disabled) {
@@ -3873,19 +3853,10 @@
     font-weight: 500;
   }
 
-  [data-theme="dark"] .fork-badge {
-    background: var(--accent);
-    color: #ffffff;
-  }
-
   .fork-badge a {
     color: var(--accent-text, #ffffff);
     text-decoration: none;
     font-weight: 500;
-  }
-
-  [data-theme="dark"] .fork-badge a {
-    color: #ffffff;
   }
 
   .fork-badge a:hover {
@@ -3944,11 +3915,6 @@
     border: 1px solid transparent;
   }
 
-  /* Ensure high contrast in both themes */
-  [data-theme="dark"] .topic-tag {
-    background: var(--accent);
-    color: #ffffff;
-  }
 
   .repo-website {
     margin-top: 0.5rem;
@@ -4057,12 +4023,6 @@
     border-color: #2d3748;
   }
 
-  /* Dark mode adjustments for owner badge */
-  [data-theme="dark"] .contributor-badge.owner {
-    background: #718096;
-    color: #ffffff;
-    border-color: #a0aec0;
-  }
 
   .contributor-badge.maintainer {
     /* High contrast colors for light mode */
@@ -4071,13 +4031,6 @@
     border-color: #1a202c;
   }
 
-  /* Dark mode adjustments for maintainer badge */
-  [data-theme="dark"] .contributor-badge.maintainer {
-    background: #48bb78;
-    color: #1a202c;
-    border-color: #68d391;
-    font-weight: 700;
-  }
 
   header h1 {
     margin: 0;
@@ -4622,11 +4575,6 @@
   .commit-item.selected .commit-button {
     background: var(--accent);
     color: var(--accent-text, #ffffff);
-  }
-
-  [data-theme="dark"] .commit-item.selected .commit-button {
-    background: var(--accent);
-    color: #ffffff;
   }
 
   .commit-hash {
@@ -5188,12 +5136,6 @@
     background: var(--accent);
     color: var(--accent-text, #ffffff);
     font-weight: 600;
-  }
-
-  [data-theme="dark"] .issue-status.open,
-  [data-theme="dark"] .pr-status.open {
-    background: var(--accent);
-    color: #ffffff;
   }
 
   .issue-status.closed, .pr-status.closed {

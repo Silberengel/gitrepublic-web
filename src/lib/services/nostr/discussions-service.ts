@@ -31,21 +31,29 @@ export interface DiscussionEntry {
   content: string;
   author: string;
   createdAt: number;
+  kind?: number; // Event kind (11 for threads, 1111 for comments)
+  pubkey?: string; // Event pubkey (for naddr encoding)
   comments?: Array<{
     id: string;
     content: string;
     author: string;
     createdAt: number;
+    kind?: number; // Event kind (1111 for comments)
+    pubkey?: string; // Event pubkey
     replies?: Array<{
       id: string;
       content: string;
       author: string;
       createdAt: number;
+      kind?: number;
+      pubkey?: string;
       replies?: Array<{
         id: string;
         content: string;
         author: string;
         createdAt: number;
+        kind?: number;
+        pubkey?: string;
       }>;
     }>;
   }>;
@@ -313,6 +321,8 @@ export class DiscussionsService {
       content: string;
       author: string;
       createdAt: number;
+      kind?: number;
+      pubkey?: string;
       parentId?: string;
       replies: any[];
     }>();
@@ -328,6 +338,8 @@ export class DiscussionsService {
         content: comment.content,
         author: comment.pubkey,
         createdAt: comment.created_at,
+        kind: comment.kind,
+        pubkey: comment.pubkey,
         parentId,
         replies: []
       });
@@ -353,6 +365,8 @@ export class DiscussionsService {
         content: comment.content,
         author: comment.author,
         createdAt: comment.createdAt,
+        kind: comment.kind,
+        pubkey: comment.pubkey,
         replies: comment.replies.length > 0 ? comment.replies.map(formatComment) : undefined
       };
     };
@@ -390,6 +404,8 @@ export class DiscussionsService {
         content: thread.content,
         author: thread.pubkey,
         createdAt: thread.created_at,
+        kind: thread.kind,
+        pubkey: thread.pubkey,
         comments: commentTree
       });
     }
@@ -416,7 +432,9 @@ export class DiscussionsService {
           id: c.id,
           content: c.content,
           author: c.pubkey,
-          createdAt: c.created_at
+          createdAt: c.created_at,
+          kind: c.kind,
+          pubkey: c.pubkey
         }))
       });
     }
