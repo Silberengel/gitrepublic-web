@@ -164,6 +164,10 @@
   let verificationFileContent = $state<string | null>(null);
   let loadingVerification = $state(false);
 
+  // Deletion request
+  let deletingAnnouncement = $state(false);
+  let announcementEventId = $state<string | null>(null);
+
   // Issues
   let issues = $state<Array<{ id: string; subject: string; content: string; status: string; author: string; created_at: number; kind: number }>>([]);
   let loadingIssues = $state(false);
@@ -1543,6 +1547,80 @@
     });
   }
 
+  async function deleteAnnouncement() {
+    if (!userPubkey || !userPubkeyHex) {
+      alert('Please connect your NIP-07 extension');
+      return;
+    }
+
+    if (!pageData.repoOwnerPubkey || userPubkeyHex !== pageData.repoOwnerPubkey) {
+      alert('Only the repository owner can delete the announcement');
+      return;
+    }
+
+    if (!confirm('Are you sure you want to send a deletion request for this repository announcement? This will request relays to delete the announcement event. This action cannot be undone.')) {
+      return;
+    }
+
+    deletingAnnouncement = true;
+    error = null;
+
+    try {
+      // Fetch the repository announcement to get its event ID
+      const nostrClient = new NostrClient([...new Set([...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS])]);
+      const events = await nostrClient.fetchEvents([
+        {
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          authors: [pageData.repoOwnerPubkey],
+          '#d': [repo],
+          limit: 1
+        }
+      ]);
+
+      if (events.length === 0) {
+        throw new Error('Repository announcement not found');
+      }
+
+      const announcement = events[0];
+      announcementEventId = announcement.id;
+
+      // Get user relays
+      const { outbox } = await getUserRelays(userPubkeyHex, nostrClient);
+      const combinedRelays = combineRelays(outbox);
+
+      // Create deletion request (NIP-09)
+      const deletionRequestTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
+        kind: KIND.DELETION_REQUEST,
+        pubkey: userPubkeyHex,
+        created_at: Math.floor(Date.now() / 1000),
+        content: `Requesting deletion of repository announcement for ${repo}`,
+        tags: [
+          ['e', announcement.id], // Reference to the announcement event
+          ['a', `${KIND.REPO_ANNOUNCEMENT}:${pageData.repoOwnerPubkey}:${repo}`], // Repository address
+          ['k', KIND.REPO_ANNOUNCEMENT.toString()] // Kind of event being deleted
+        ]
+      };
+
+      // Sign with NIP-07
+      const signedDeletionRequest = await signEventWithNIP07(deletionRequestTemplate);
+
+      // Publish to relays
+      const publishResult = await nostrClient.publishEvent(signedDeletionRequest, combinedRelays);
+
+      if (publishResult.success.length > 0) {
+        alert(`Deletion request published successfully to ${publishResult.success.length} relay(s).`);
+      } else {
+        throw new Error(`Failed to publish deletion request to any relay. Errors: ${publishResult.failed.map(f => `${f.relay}: ${f.error}`).join('; ')}`);
+      }
+    } catch (err) {
+      console.error('Failed to delete announcement:', err);
+      error = err instanceof Error ? err.message : 'Failed to send deletion request';
+      alert(error);
+    } finally {
+      deletingAnnouncement = false;
+    }
+  }
+
   function downloadVerificationFile() {
     if (!verificationFileContent) return;
     
@@ -2869,13 +2947,24 @@
           {#if isMaintainer}
             <a href={`/repos/${npub}/${repo}/settings`} class="settings-button">Settings</a>
           {/if}
-          {#if pageData.repoOwnerPubkey && userPubkeyHex === pageData.repoOwnerPubkey && verificationStatus?.verified !== true}
+          {#if pageData.repoOwnerPubkey && userPubkeyHex === pageData.repoOwnerPubkey}
+            {#if verificationStatus?.verified !== true}
+              <button 
+                onclick={generateVerificationFileForRepo} 
+                class="verify-button"
+                title="Generate verification file"
+              >
+                Generate Verification File
+              </button>
+            {/if}
             <button 
-              onclick={generateVerificationFileForRepo} 
-              class="verify-button"
-              title="Generate verification file"
+              onclick={deleteAnnouncement} 
+              disabled={deletingAnnouncement}
+              class="delete-announcement-button"
+              title="Send deletion request for repository announcement (NIP-09)"
+              style="background: var(--danger, #dc2626); color: white; border: none; padding: 0.5rem 1rem; border-radius: 0.25rem; cursor: pointer; font-size: 0.875rem;"
             >
-              Generate Verification File
+              {deletingAnnouncement ? 'Deleting...' : 'Delete Announcement'}
             </button>
           {/if}
           {#if isMaintainer}
