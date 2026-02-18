@@ -10,6 +10,7 @@ import type { RequestHandler } from './$types';
 import { extractRequestContext } from '$lib/utils/api-context.js';
 import { storeAttestation, getUserAttestations, verifyAttestation, calculateSSHKeyFingerprint } from '$lib/services/ssh/ssh-key-attestation.js';
 import { getCachedUserLevel } from '$lib/services/security/user-level-cache.js';
+import { auditLogger } from '$lib/services/security/audit-logger.js';
 import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import { KIND } from '$lib/types/nostr.js';
@@ -27,6 +28,7 @@ import logger from '$lib/services/logger.js';
 export const POST: RequestHandler = async (event) => {
   const requestContext = extractRequestContext(event);
   const clientIp = requestContext.clientIp || 'unknown';
+  let attestationFingerprint: string | null = null;
 
   try {
     if (!requestContext.userPubkeyHex) {
@@ -39,6 +41,15 @@ export const POST: RequestHandler = async (event) => {
     }
 
     const attestationEvent: NostrEvent = body.event;
+    
+    // Calculate fingerprint for audit logging (before storing)
+    try {
+      if (attestationEvent.content) {
+        attestationFingerprint = calculateSSHKeyFingerprint(attestationEvent.content);
+      }
+    } catch {
+      // Ignore fingerprint calculation errors
+    }
 
     // Verify event signature
     if (!verifyEvent(attestationEvent)) {
@@ -64,6 +75,14 @@ export const POST: RequestHandler = async (event) => {
     // Store attestation
     const attestation = storeAttestation(attestationEvent);
 
+    // Audit log
+    auditLogger.logSSHKeyAttestation(
+      requestContext.userPubkeyHex,
+      attestation.revoked ? 'revoke' : 'submit',
+      attestation.sshKeyFingerprint,
+      'success'
+    );
+
     logger.info({
       userPubkey: requestContext.userPubkeyHex.slice(0, 16) + '...',
       fingerprint: attestation.sshKeyFingerprint.slice(0, 20) + '...',
@@ -84,6 +103,18 @@ export const POST: RequestHandler = async (event) => {
     });
   } catch (e) {
     const errorMessage = e instanceof Error ? e.message : 'Failed to store SSH key attestation';
+    
+    // Audit log failure (if we have user context and fingerprint)
+    if (requestContext.userPubkeyHex && attestationFingerprint) {
+      auditLogger.logSSHKeyAttestation(
+        requestContext.userPubkeyHex,
+        'submit',
+        attestationFingerprint,
+        'failure',
+        errorMessage
+      );
+    }
+    
     logger.error({ error: e, clientIp }, 'Failed to store SSH key attestation');
     
     if (errorMessage.includes('Rate limit')) {

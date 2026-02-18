@@ -120,6 +120,8 @@ const response = await fetch('/api/user/ssh-keys', {
 }
 ```
 
+**Note**: You can have multiple SSH keys attested. All active (non-revoked) keys will be returned, sorted by creation date (newest first).
+
 ### Verify SSH Key
 
 **Endpoint**: `POST /api/user/ssh-keys/verify`
@@ -223,10 +225,17 @@ git remote add origin git@your-gitrepublic-server.com:repos/{npub}/{repo}.git
   - In production, use Redis or a database for persistent storage
 - Only users with "unlimited access" can create attestations
 
+## Current Status
+
+✅ **Implemented:**
+- Support for multiple SSH keys per user (users can attest multiple SSH keys)
+- Rate limiting (10 attestations per hour per user)
+- Revocation support
+- HMAC-based fingerprint lookup for security
+- Audit logging for SSH key attestation operations (submit, revoke, verify)
+
 ## Future Improvements
 
-- Persistent storage (Redis/database) for attestations
-- SSH server implementation
-- Support for multiple SSH keys per user
+- Persistent storage (Redis/database) for attestations (currently in-memory)
+- SSH server implementation (API is ready, server integration needed)
 - Key expiration/rotation policies
-- Audit logging for SSH operations

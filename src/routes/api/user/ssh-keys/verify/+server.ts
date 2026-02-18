@@ -8,6 +8,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { extractRequestContext } from '$lib/utils/api-context.js';
 import { verifyAttestation } from '$lib/services/ssh/ssh-key-attestation.js';
+import { auditLogger } from '$lib/services/security/audit-logger.js';
 import logger from '$lib/services/logger.js';
 
 /**
@@ -30,11 +31,28 @@ export const POST: RequestHandler = async (event) => {
     const attestation = verifyAttestation(body.fingerprint);
 
     if (!attestation) {
+      // Audit log failed verification
+      auditLogger.logSSHKeyAttestation(
+        'unknown',
+        'verify',
+        body.fingerprint,
+        'failure',
+        'SSH key not attested or attestation revoked'
+      );
+      
       return json({
         valid: false,
         message: 'SSH key not attested or attestation revoked'
       });
     }
+
+    // Audit log successful verification
+    auditLogger.logSSHKeyAttestation(
+      attestation.userPubkey,
+      'verify',
+      body.fingerprint,
+      'success'
+    );
 
     return json({
       valid: true,
