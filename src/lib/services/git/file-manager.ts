@@ -70,24 +70,61 @@ export class FileManager {
     }
     
     const worktreeRoot = join(this.repoRoot, npub, `${repoName}.worktrees`);
-    const worktreePath = join(worktreeRoot, branch);
+    // Use resolve to ensure we have an absolute path (important for git worktree add)
+    const worktreePath = resolve(join(worktreeRoot, branch));
+    const resolvedWorktreeRoot = resolve(worktreeRoot);
     
     // Additional security: Ensure resolved path is still within worktreeRoot
-    const resolvedPath = resolve(worktreePath).replace(/\\/g, '/');
-    const resolvedRoot = resolve(worktreeRoot).replace(/\\/g, '/');
+    const resolvedPath = worktreePath.replace(/\\/g, '/');
+    const resolvedRoot = resolvedWorktreeRoot.replace(/\\/g, '/');
     if (!resolvedPath.startsWith(resolvedRoot + '/')) {
       throw new Error('Path traversal detected: worktree path outside allowed root');
     }
     const { mkdir, rm } = await import('fs/promises');
     
-    // Ensure worktree root exists
-    if (!existsSync(worktreeRoot)) {
-      await mkdir(worktreeRoot, { recursive: true });
+    // Ensure worktree root exists (use resolved path)
+    if (!existsSync(resolvedWorktreeRoot)) {
+      await mkdir(resolvedWorktreeRoot, { recursive: true });
     }
     
     const git = simpleGit(repoPath);
     
-    // Check if worktree already exists
+    // Check for existing worktrees for this branch and clean them up if they're in the wrong location
+    try {
+      const worktreeList = await git.raw(['worktree', 'list', '--porcelain']);
+      const lines = worktreeList.split('\n');
+      let currentWorktreePath: string | null = null;
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.startsWith('worktree ')) {
+          currentWorktreePath = line.substring(9).trim();
+        } else if (line.startsWith('branch ') && line.includes(`refs/heads/${branch}`)) {
+          // Found a worktree for this branch
+          if (currentWorktreePath && currentWorktreePath !== worktreePath) {
+            // Worktree exists but in wrong location - remove it
+            logger.warn({ oldPath: currentWorktreePath, newPath: worktreePath, branch }, 'Removing worktree from incorrect location');
+            try {
+              await git.raw(['worktree', 'remove', currentWorktreePath, '--force']);
+            } catch (err) {
+              // If git worktree remove fails, try to remove the directory manually
+              logger.warn({ error: err, path: currentWorktreePath }, 'Failed to remove worktree via git, will try manual removal');
+              try {
+                await rm(currentWorktreePath, { recursive: true, force: true });
+              } catch (rmErr) {
+                logger.error({ error: rmErr, path: currentWorktreePath }, 'Failed to manually remove worktree directory');
+              }
+            }
+          }
+          break;
+        }
+      }
+    } catch (err) {
+      // If worktree list fails, continue - might be no worktrees yet
+      logger.debug({ error: err }, 'Could not list worktrees (this is okay if no worktrees exist)');
+    }
+    
+    // Check if worktree already exists at the correct location
     if (existsSync(worktreePath)) {
       // Verify it's a valid worktree
       try {
@@ -202,10 +239,23 @@ export class FileManager {
         gitProcess.on('error', reject);
       });
       
+      // Verify the worktree directory was actually created (after the promise resolves)
+      if (!existsSync(worktreePath)) {
+        throw new Error(`Worktree directory was not created: ${worktreePath}`);
+      }
+      
+      // Verify it's a valid git repository
+      const worktreeGit = simpleGit(worktreePath);
+      try {
+        await worktreeGit.status();
+      } catch (err) {
+        throw new Error(`Created worktree directory is not a valid git repository: ${worktreePath}`);
+      }
+      
       return worktreePath;
     } catch (error) {
       const sanitizedError = sanitizeError(error);
-      logger.error({ error: sanitizedError, repoPath, branch }, 'Failed to create worktree');
+      logger.error({ error: sanitizedError, repoPath, branch, worktreePath }, 'Failed to create worktree');
       throw new Error(`Failed to create worktree: ${sanitizedError}`);
     }
   }
@@ -505,7 +555,38 @@ export class FileManager {
 
     try {
       // Get file content using git show
-      const content = await git.show([`${ref}:${filePath}`]);
+      // Use raw() for better error handling and to catch stderr
+      let content: string;
+      try {
+        content = await git.raw(['show', `${ref}:${filePath}`]);
+      } catch (gitError: any) {
+        // simple-git might throw errors in different formats
+        // Check stderr if available
+        const stderr = gitError?.stderr || gitError?.message || String(gitError);
+        const stderrLower = stderr.toLowerCase();
+        
+        logger.debug({ gitError, repoPath, filePath, ref, stderr }, 'git.raw() error details');
+        
+        // Check if it's a "not found" type error
+        if (stderrLower.includes('not found') || 
+            stderrLower.includes('no such file') || 
+            stderrLower.includes('does not exist') ||
+            stderrLower.includes('fatal:') ||
+            stderr.includes('pathspec') ||
+            stderr.includes('ambiguous argument') ||
+            stderr.includes('unknown revision') ||
+            stderr.includes('bad revision')) {
+          throw new Error(`File not found: ${filePath} at ref ${ref}`);
+        }
+        
+        // Re-throw with more context
+        throw new Error(`Git command failed: ${stderr}`);
+      }
+      
+      // Check if content is undefined or null (indicates error)
+      if (content === undefined || content === null) {
+        throw new Error(`File not found: ${filePath} at ref ${ref}`);
+      }
       
       // Try to determine encoding (assume UTF-8 for text files)
       const encoding = 'utf-8';
@@ -517,15 +598,40 @@ export class FileManager {
         size
       };
     } catch (error) {
-      logger.error({ error, repoPath, filePath, ref }, 'Error reading file');
-      throw new Error(`Failed to read file: ${error instanceof Error ? error.message : String(error)}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorLower = errorMessage.toLowerCase();
+      const errorString = String(error);
+      const errorStringLower = errorString.toLowerCase();
+      
+      logger.error({ error, repoPath, filePath, ref, errorMessage, errorString }, 'Error reading file');
+      
+      // Check if it's a "not found" type error (check both errorMessage and errorString)
+      if (errorLower.includes('not found') || 
+          errorStringLower.includes('not found') ||
+          errorLower.includes('no such file') || 
+          errorStringLower.includes('no such file') ||
+          errorLower.includes('does not exist') ||
+          errorStringLower.includes('does not exist') ||
+          errorLower.includes('fatal:') ||
+          errorStringLower.includes('fatal:') ||
+          errorMessage.includes('pathspec') ||
+          errorString.includes('pathspec') ||
+          errorMessage.includes('ambiguous argument') ||
+          errorString.includes('ambiguous argument') ||
+          errorString.includes('unknown revision') ||
+          errorString.includes('bad revision')) {
+        throw new Error(`File not found: ${filePath} at ref ${ref}`);
+      }
+      
+      throw new Error(`Failed to read file: ${errorMessage}`);
     }
   }
 
   /**
    * Write file and commit changes
    * @param signingOptions - Optional commit signing options:
-   *   - useNIP07: Use NIP-07 browser extension (client-side, secure - keys never leave browser)
+   *   - commitSignatureEvent: Pre-signed commit signature event from client (NIP-07, recommended)
+   *   - useNIP07: Use NIP-07 browser extension (DEPRECATED: use commitSignatureEvent instead)
    *   - nip98Event: Use NIP-98 auth event as signature (server-side, for git operations)
    *   - nsecKey: Use direct nsec/hex key (server-side ONLY, via environment variables - NOT for client requests)
    */
@@ -539,6 +645,7 @@ export class FileManager {
     authorEmail: string,
     branch: string = 'main',
     signingOptions?: {
+      commitSignatureEvent?: NostrEvent;
       useNIP07?: boolean;
       nip98Event?: NostrEvent;
       nsecKey?: string;
@@ -630,7 +737,7 @@ export class FileManager {
 
       // Sign commit if signing options are provided
       let finalCommitMessage = commitMessage;
-      if (signingOptions && (signingOptions.useNIP07 || signingOptions.nip98Event || signingOptions.nsecKey)) {
+      if (signingOptions && (signingOptions.commitSignatureEvent || signingOptions.useNIP07 || signingOptions.nip98Event || signingOptions.nsecKey)) {
         try {
           const { signedMessage } = await createGitCommitSignature(
             commitMessage,
@@ -652,8 +759,9 @@ export class FileManager {
         '--author': `${authorName} <${authorEmail}>`
       });
 
-      // Push to bare repo (worktree is already connected)
-      await workGit.push(['origin', branch]);
+      // Note: No push needed - worktrees of bare repos share the same object database,
+      // so the commit is already in the bare repository. We don't push to remote origin
+      // to avoid requiring remote authentication and to keep changes local-only.t
 
       // Clean up worktree (but keep it for potential reuse)
       // Note: We could keep worktrees for better performance, but clean up for now
@@ -742,10 +850,44 @@ export class FileManager {
     const git: SimpleGit = simpleGit(repoPath);
 
     try {
-      const branches = await git.branch(['-r']);
-      const branchList = branches.all
+      // For bare repositories, list local branches (they're stored in refs/heads/)
+      // Also check remote branches in case the repo has remotes configured
+      const [localBranches, remoteBranches] = await Promise.all([
+        git.branch(['-a']).catch(() => ({ all: [] })), // List all branches (local and remote)
+        git.branch(['-r']).catch(() => ({ all: [] }))  // Also try remote branches separately
+      ]);
+      
+      // Combine local and remote branches, removing duplicates
+      const allBranches = new Set<string>();
+      
+      // Add local branches (from -a, filter out remotes)
+      localBranches.all
+        .filter(b => !b.startsWith('remotes/') && !b.includes('HEAD'))
+        .forEach(b => allBranches.add(b));
+      
+      // Add remote branches (remove origin/ prefix)
+      remoteBranches.all
         .map(b => b.replace(/^origin\//, ''))
-        .filter(b => !b.includes('HEAD'));
+        .filter(b => !b.includes('HEAD'))
+        .forEach(b => allBranches.add(b));
+      
+      // If no branches found, try listing refs directly (for bare repos)
+      if (allBranches.size === 0) {
+        try {
+          const refs = await git.raw(['for-each-ref', '--format=%(refname:short)', 'refs/heads/']);
+          if (refs) {
+            refs.trim().split('\n').forEach(b => {
+              if (b && !b.includes('HEAD')) {
+                allBranches.add(b);
+              }
+            });
+          }
+        } catch {
+          // If that fails too, continue with empty set
+        }
+      }
+      
+      const branchList = Array.from(allBranches).sort();
       
       // Cache the result (cache for 2 minutes)
       repoCache.set(cacheKey, branchList, 2 * 60 * 1000);
@@ -796,6 +938,7 @@ export class FileManager {
     authorEmail: string,
     branch: string = 'main',
     signingOptions?: {
+      commitSignatureEvent?: NostrEvent;
       useNIP07?: boolean;
       nip98Event?: NostrEvent;
       nsecKey?: string;
@@ -867,7 +1010,7 @@ export class FileManager {
 
       // Sign commit if signing options are provided
       let finalCommitMessage = commitMessage;
-      if (signingOptions && (signingOptions.useNIP07 || signingOptions.nip98Event || signingOptions.nsecKey)) {
+      if (signingOptions && (signingOptions.commitSignatureEvent || signingOptions.useNIP07 || signingOptions.nip98Event || signingOptions.nsecKey)) {
         try {
           const { signedMessage } = await createGitCommitSignature(
             commitMessage,
@@ -889,8 +1032,9 @@ export class FileManager {
         '--author': `${authorName} <${authorEmail}>`
       });
 
-      // Push to bare repo (worktree is already connected)
-      await workGit.push(['origin', branch]);
+      // Note: No push needed - worktrees of bare repos share the same object database,
+      // so the commit is already in the bare repository. We don't push to remote origin
+      // to avoid requiring remote authentication and to keep changes local-only.
 
       // Clean up worktree
       await this.removeWorktree(repoPath, workDir);
@@ -931,14 +1075,76 @@ export class FileManager {
       // Create and checkout new branch
       await workGit.checkout(['-b', branchName]);
 
-      // Push new branch
-      await workGit.push(['origin', branchName]);
+      // Note: No push needed - worktrees of bare repos share the same object database,
+      // so the branch is already in the bare repository. We don't push to remote origin
+      // to avoid requiring remote authentication and to keep changes local-only.
 
       // Clean up worktree
       await this.removeWorktree(repoPath, workDir);
     } catch (error) {
       logger.error({ error, repoPath, branchName, npub }, 'Error creating branch');
       throw new Error(`Failed to create branch: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Delete a branch
+   */
+  async deleteBranch(
+    npub: string,
+    repoName: string,
+    branchName: string
+  ): Promise<void> {
+    // Security: Validate branch name to prevent path traversal
+    if (!isValidBranchName(branchName)) {
+      throw new Error(`Invalid branch name: ${branchName}`);
+    }
+
+    const repoPath = this.getRepoPath(npub, repoName);
+    
+    if (!this.repoExists(npub, repoName)) {
+      throw new Error('Repository not found');
+    }
+
+    // Prevent deleting the default branch
+    const defaultBranch = await this.getDefaultBranch(npub, repoName);
+    if (branchName === defaultBranch) {
+      throw new Error(`Cannot delete the default branch (${defaultBranch}). Please switch to a different branch first.`);
+    }
+
+    const git: SimpleGit = simpleGit(repoPath);
+
+    try {
+      // Check if branch exists
+      const branches = await git.branch(['-a']);
+      const branchExists = branches.all.some(b => 
+        b === branchName || 
+        b === `refs/heads/${branchName}` ||
+        b.replace(/^origin\//, '') === branchName
+      );
+
+      if (!branchExists) {
+        throw new Error(`Branch ${branchName} does not exist`);
+      }
+
+      // Delete the branch (use -D to force delete even if not merged)
+      // For bare repos, we delete the ref directly
+      await git.raw(['branch', '-D', branchName]).catch(async () => {
+        // If branch -D fails (might be a remote branch reference), try deleting the ref directly
+        try {
+          await git.raw(['update-ref', '-d', `refs/heads/${branchName}`]);
+        } catch (refError) {
+          // If that also fails, the branch might not exist locally
+          throw new Error(`Failed to delete branch: ${branchName}`);
+        }
+      });
+
+      // Invalidate branches cache
+      const cacheKey = RepoCache.branchesKey(npub, repoName);
+      repoCache.delete(cacheKey);
+    } catch (error) {
+      logger.error({ error, repoPath, branchName, npub }, 'Error deleting branch');
+      throw new Error(`Failed to delete branch: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

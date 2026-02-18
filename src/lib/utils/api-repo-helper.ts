@@ -160,7 +160,13 @@ export async function tryApiFetchFile(
         if (platform === 'gitea' || platform === 'github') {
           // Gitea and GitHub return base64 encoded content
           if (fileData.content) {
-            const content = atob(fileData.content.replace(/\s/g, ''));
+            // Use Buffer on server-side, atob on client-side
+            let content: string;
+            if (isServerSide()) {
+              content = Buffer.from(fileData.content.replace(/\s/g, ''), 'base64').toString('utf-8');
+            } else {
+              content = atob(fileData.content.replace(/\s/g, ''));
+            }
             return {
               content,
               encoding: 'base64'

@@ -138,8 +138,25 @@ export const POST: RequestHandler = createRepoPostHandler(
       throw handleValidationError('Missing branchName parameter', { operation: 'createBranch', npub: context.npub, repo: context.repo });
     }
 
-    await fileManager.createBranch(context.npub, context.repo, branchName, fromBranch || 'main');
+    // Get default branch if fromBranch not provided
+    const sourceBranch = fromBranch || await fileManager.getDefaultBranch(context.npub, context.repo);
+    await fileManager.createBranch(context.npub, context.repo, branchName, sourceBranch);
     return json({ success: true, message: 'Branch created successfully' });
   },
   { operation: 'createBranch' }
+);
+
+export const DELETE: RequestHandler = createRepoPostHandler(
+  async (context: RepoRequestContext, event: RequestEvent) => {
+    const body = await event.request.json();
+    const { branchName } = body;
+
+    if (!branchName) {
+      throw handleValidationError('Missing branchName parameter', { operation: 'deleteBranch', npub: context.npub, repo: context.repo });
+    }
+
+    await fileManager.deleteBranch(context.npub, context.repo, branchName);
+    return json({ success: true, message: 'Branch deleted successfully' });
+  },
+  { operation: 'deleteBranch' }
 );

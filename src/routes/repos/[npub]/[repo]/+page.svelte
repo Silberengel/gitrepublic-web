@@ -52,7 +52,8 @@
   let hasChanges = $state(false);
   let saving = $state(false);
   let branches = $state<Array<string | { name: string; commit?: any }>>([]);
-  let currentBranch = $state('main');
+  let currentBranch = $state<string | null>(null);
+  let defaultBranch = $state<string | null>(null);
   let commitMessage = $state('');
   let userPubkey = $state<string | null>(null);
   let userPubkeyHex = $state<string | null>(null);
@@ -73,9 +74,16 @@
       if (wasDifferent) {
         // Reset repoNotFound flag when user logs in, so we can retry loading
         repoNotFound = false;
+        // Clear cached email and name when user changes
+        cachedUserEmail = null;
+        cachedUserName = null;
         
         checkMaintainerStatus().catch(err => console.warn('Failed to reload maintainer status after login:', err));
         loadBookmarkStatus().catch(err => console.warn('Failed to reload bookmark status after login:', err));
+        // Recheck clone status after login (force refresh) - delay slightly to ensure auth headers are ready
+        setTimeout(() => {
+          checkCloneStatus(true).catch(err => console.warn('Failed to recheck clone status after login:', err));
+        }, 100);
         // Reload all repository data with the new user context
         if (!loading) {
           loadBranches().catch(err => console.warn('Failed to reload branches after login:', err));
@@ -89,6 +97,9 @@
     } else {
       userPubkey = null;
       userPubkeyHex = null;
+      // Clear cached email and name when user logs out
+      cachedUserEmail = null;
+      cachedUserName = null;
       
       // Reload data when user logs out to hide private content
       if (wasLoggedIn) {
@@ -113,7 +124,7 @@
   // Branch creation
   let showCreateBranchDialog = $state(false);
   let newBranchName = $state('');
-  let newBranchFrom = $state('main');
+  let newBranchFrom = $state<string | null>(null);
 
   // Commit history
   let commits = $state<Array<{ hash: string; message: string; author: string; date: string; files: string[] }>>([]);
@@ -557,18 +568,25 @@
     return count;
   }
 
-  async function checkCloneStatus() {
-    if (checkingCloneStatus || isRepoCloned !== null) return;
+  async function checkCloneStatus(force: boolean = false) {
+    if (checkingCloneStatus || (!force && isRepoCloned !== null)) return;
     
     checkingCloneStatus = true;
     try {
       // Check if repo exists locally by trying to fetch branches
-      // If it returns 404, repo is not cloned
+      // 404 = repo not cloned, 403 = repo exists but access denied (cloned), 200 = cloned and accessible
       const response = await fetch(`/api/repos/${npub}/${repo}/branches`, {
         headers: buildApiHeaders()
       });
-      isRepoCloned = response.ok;
+      // If response is 403, repo exists (cloned) but user doesn't have access
+      // If response is 404, repo doesn't exist (not cloned)
+      // If response is 200, repo exists and is accessible (cloned)
+      const wasCloned = response.status !== 404;
+      isRepoCloned = wasCloned;
+      console.log(`[Clone Status] Repo ${wasCloned ? 'is cloned' : 'is not cloned'} (status: ${response.status})`);
     } catch (err) {
+      // On error, assume not cloned
+      console.warn('[Clone Status] Error checking clone status:', err);
       isRepoCloned = false;
     } finally {
       checkingCloneStatus = false;
@@ -594,14 +612,23 @@
       }
 
       const data = await response.json();
-      isRepoCloned = true;
       
       if (data.alreadyExists) {
         alert('Repository already exists locally.');
+        // Force refresh clone status
+        await checkCloneStatus(true);
       } else {
         alert('Repository cloned successfully! The repository is now available on this server.');
-        // Reload the page to show the cloned repo
-        window.location.reload();
+        // Force refresh clone status
+        await checkCloneStatus(true);
+        // Reload data to use the cloned repo instead of API
+        await Promise.all([
+          loadBranches(),
+          loadFiles(currentPath),
+          loadReadme(),
+          loadTags(),
+          loadCommitHistory()
+        ]);
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to clone repository';
@@ -1282,14 +1309,7 @@
       loading = false;
       return;
     }
-    // Update currentBranch to first available branch if 'main' doesn't exist
-    if (branches.length > 0) {
-      // Branches can be an array of objects with .name property or array of strings
-      const branchNames = branches.map((b: any) => typeof b === 'string' ? b : b.name);
-      if (!branchNames.includes(currentBranch)) {
-        currentBranch = branchNames[0];
-      }
-    }
+    // loadBranches() already handles setting currentBranch to the default branch
     await loadFiles();
     await checkAuth();
     await loadTags();
@@ -1552,8 +1572,34 @@
         if (branches.length > 0) {
           // Branches can be an array of objects with .name property or array of strings
           const branchNames = branches.map((b: any) => typeof b === 'string' ? b : b.name);
-          if (!branchNames.includes(currentBranch)) {
-            currentBranch = branchNames[0];
+          
+          // Fetch the actual default branch from the API
+          try {
+            const defaultBranchResponse = await fetch(`/api/repos/${npub}/${repo}/default-branch`, {
+              headers: buildApiHeaders()
+            });
+            if (defaultBranchResponse.ok) {
+              const defaultBranchData = await defaultBranchResponse.json();
+              defaultBranch = defaultBranchData.defaultBranch || defaultBranchData.branch || null;
+            }
+          } catch (err) {
+            console.warn('Failed to fetch default branch, using fallback logic:', err);
+          }
+          
+          // Fallback: Detect default branch: prefer master, then main, then first branch
+          if (!defaultBranch) {
+            if (branchNames.includes('master')) {
+              defaultBranch = 'master';
+            } else if (branchNames.includes('main')) {
+              defaultBranch = 'main';
+            } else {
+              defaultBranch = branchNames[0];
+            }
+          }
+          
+          // Only update currentBranch if it's not set or if the current branch doesn't exist
+          if (!currentBranch || !branchNames.includes(currentBranch)) {
+            currentBranch = defaultBranch;
           }
         }
       } else if (response.status === 404) {
@@ -1590,7 +1636,10 @@
         } else if (response.status === 403) {
           // 403 means access denied - don't set repoNotFound, just show error
           // This allows retry after login
-          throw new Error(`Access denied: ${response.statusText}. You may need to log in or you may not have permission to view this repository.`);
+          const accessDeniedError = new Error(`Access denied: ${response.statusText}. You may need to log in or you may not have permission to view this repository.`);
+          // Log as info since this is normal client behavior (not logged in or no access)
+          console.info('Access denied (normal behavior):', accessDeniedError.message);
+          throw accessDeniedError;
         }
         throw new Error(`Failed to load files: ${response.statusText}`);
       }
@@ -1610,7 +1659,12 @@
       }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load files';
-      console.error('Error loading files:', err);
+      // Only log as error if it's not a 403 (access denied), which is normal behavior
+      if (err instanceof Error && err.message.includes('Access denied')) {
+        // Already logged as info above, don't log again
+      } else {
+        console.error('Error loading files:', err);
+      }
     } finally {
       loading = false;
     }
@@ -1658,13 +1712,18 @@
     error = null;
     try {
       // Ensure currentBranch is a string (branch name), not an object
+      // If currentBranch is not set, use the first available branch or 'master' as fallback
       const branchName = typeof currentBranch === 'string' 
         ? currentBranch 
         : (typeof currentBranch === 'object' && currentBranch !== null && 'name' in currentBranch 
           ? (currentBranch as { name: string }).name 
-          : 'main');
+          : (branches.length > 0 
+            ? (typeof branches[0] === 'string' ? branches[0] : branches[0].name)
+            : 'master'));
       const url = `/api/repos/${npub}/${repo}/file?path=${encodeURIComponent(filePath)}&ref=${branchName}`;
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        headers: buildApiHeaders()
+      });
       
       if (!response.ok) {
         throw new Error(`Failed to load file: ${response.statusText}`);
@@ -1731,6 +1790,179 @@
     }
   }
 
+  // Cache for user profile email and name
+  let cachedUserEmail = $state<string | null>(null);
+  let cachedUserName = $state<string | null>(null);
+  let fetchingUserEmail = $state(false);
+  let fetchingUserName = $state(false);
+
+  async function getUserEmail(): Promise<string> {
+    // Return cached email if available
+    if (cachedUserEmail) {
+      return cachedUserEmail;
+    }
+
+    // If no user pubkey, can't proceed
+    if (!userPubkeyHex) {
+      throw new Error('User not authenticated');
+    }
+
+    // Prevent concurrent fetches
+    if (fetchingUserEmail) {
+      // Wait a bit and retry (shouldn't happen, but just in case)
+      await new Promise(resolve => setTimeout(resolve, 100));
+      if (cachedUserEmail) {
+        return cachedUserEmail;
+      }
+    }
+
+    fetchingUserEmail = true;
+    let nip05Email: string | null = null;
+    
+    try {
+      const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
+      const profileEvents = await client.fetchEvents([
+        {
+          kinds: [0], // Kind 0 = profile metadata
+          authors: [userPubkeyHex],
+          limit: 1
+        }
+      ]);
+
+      if (profileEvents.length > 0) {
+        const event = profileEvents[0];
+        
+        // First check tags (newer format where NIP-05 might be in tags)
+        const nip05Tag = event.tags.find((tag: string[]) => 
+          (tag[0] === 'nip05' || tag[0] === 'l') && tag[1]
+        );
+        if (nip05Tag && nip05Tag[1]) {
+          nip05Email = nip05Tag[1];
+        }
+        
+        // Also check JSON content (traditional format)
+        if (!nip05Email) {
+          try {
+            const profile = JSON.parse(event.content);
+            // NIP-05 is stored as 'nip05' in the profile JSON
+            if (profile.nip05 && typeof profile.nip05 === 'string') {
+              nip05Email = profile.nip05;
+            }
+          } catch {
+            // Invalid JSON, ignore
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to fetch user profile for email:', err);
+    } finally {
+      fetchingUserEmail = false;
+    }
+
+    // Always prompt user for email address (they might want to use a different domain)
+    // Always use userPubkeyHex to generate npub (userPubkey might be hex instead of npub)
+    const npubFromPubkey = userPubkeyHex ? nip19.npubEncode(userPubkeyHex) : (userPubkey || 'unknown');
+    const fallbackEmail = `${npubFromPubkey}@nostr`;
+    const prefillEmail = nip05Email || fallbackEmail;
+    
+    // Prompt user for email address
+    const userEmail = prompt(
+      'Please enter your email address for git commits.\n\n' +
+      'This will be used as the author email in your commits.\n' +
+      'You can use any email address you prefer.',
+      prefillEmail
+    );
+
+    if (userEmail && userEmail.trim()) {
+      // Basic email validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (emailRegex.test(userEmail.trim())) {
+        cachedUserEmail = userEmail.trim();
+        return cachedUserEmail;
+      } else {
+        alert('Invalid email format. Using fallback email address.');
+      }
+    }
+
+    // Use fallback if user cancelled or entered invalid email
+    cachedUserEmail = fallbackEmail;
+    return cachedUserEmail;
+  }
+
+  async function getUserName(): Promise<string> {
+    // Return cached name if available
+    if (cachedUserName) {
+      return cachedUserName;
+    }
+
+    // If no user pubkey, can't proceed
+    if (!userPubkeyHex) {
+      throw new Error('User not authenticated');
+    }
+
+    // Prevent concurrent fetches
+    if (fetchingUserName) {
+      // Wait a bit and retry (shouldn't happen, but just in case)
+      await new Promise(resolve => setTimeout(resolve, 100));
+      if (cachedUserName) {
+        return cachedUserName;
+      }
+    }
+
+    fetchingUserName = true;
+    let profileName: string | null = null;
+    
+    try {
+      const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
+      const profileEvents = await client.fetchEvents([
+        {
+          kinds: [0], // Kind 0 = profile metadata
+          authors: [userPubkeyHex],
+          limit: 1
+        }
+      ]);
+
+      if (profileEvents.length > 0) {
+        try {
+          const profile = JSON.parse(profileEvents[0].content);
+          // Name is stored as 'name' in the profile JSON
+          if (profile.name && typeof profile.name === 'string') {
+            profileName = profile.name;
+          }
+        } catch {
+          // Invalid JSON, ignore
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to fetch user profile for name:', err);
+    } finally {
+      fetchingUserName = false;
+    }
+
+    // Always prompt user for name (they might want to use a different name)
+    // Always use userPubkeyHex to generate npub (userPubkey might be hex instead of npub)
+    const npubFromPubkey = userPubkeyHex ? nip19.npubEncode(userPubkeyHex) : (userPubkey || 'unknown');
+    const fallbackName = npubFromPubkey;
+    const prefillName = profileName || fallbackName;
+    
+    // Prompt user for name
+    const userName = prompt(
+      'Please enter your name for git commits.\n\n' +
+      'This will be used as the author name in your commits.\n' +
+      'You can use any name you prefer.',
+      prefillName
+    );
+
+    if (userName && userName.trim()) {
+      cachedUserName = userName.trim();
+      return cachedUserName;
+    }
+
+    // Use fallback if user cancelled
+    cachedUserName = fallbackName;
+    return cachedUserName;
+  }
+
   async function saveFile() {
     if (!currentFile || !commitMessage.trim()) {
       alert('Please enter a commit message');
@@ -1742,12 +1974,42 @@
       return;
     }
 
+    // Validate branch selection
+    if (!currentBranch || typeof currentBranch !== 'string') {
+      alert('Please select a branch before saving the file');
+      return;
+    }
+
     saving = true;
     error = null;
 
     try {
-      // Get npub from pubkey
-      const npubFromPubkey = nip19.npubEncode(userPubkey);
+      // Get user email and name (from profile or prompt)
+      const authorEmail = await getUserEmail();
+      const authorName = await getUserName();
+      
+      // Sign commit with NIP-07 (client-side)
+      let commitSignatureEvent: NostrEvent | null = null;
+      if (isNIP07Available()) {
+        try {
+          const { KIND } = await import('$lib/types/nostr.js');
+          const timestamp = Math.floor(Date.now() / 1000);
+          const eventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
+            kind: KIND.COMMIT_SIGNATURE,
+            pubkey: '', // Will be filled by NIP-07
+            created_at: timestamp,
+            tags: [
+              ['author', authorName, authorEmail],
+              ['message', commitMessage.trim()]
+            ],
+            content: `Signed commit: ${commitMessage.trim()}`
+          };
+          commitSignatureEvent = await signEventWithNIP07(eventTemplate);
+        } catch (err) {
+          console.warn('Failed to sign commit with NIP-07:', err);
+          // Continue without signature if signing fails
+        }
+      }
       
       const response = await fetch(`/api/repos/${npub}/${repo}/file`, {
         method: 'POST',
@@ -1759,11 +2021,11 @@
           path: currentFile,
           content: editedContent,
           commitMessage: commitMessage.trim(),
-          authorName: 'Web Editor',
-          authorEmail: `${npubFromPubkey}@nostr`,
+          authorName: authorName,
+          authorEmail: authorEmail,
           branch: currentBranch,
           userPubkey: userPubkey,
-          useNIP07: true // Use NIP-07 for commit signing in web UI
+          commitSignatureEvent: commitSignatureEvent // Send the signed event to server
         })
       });
 
@@ -1786,14 +2048,37 @@
     }
   }
 
-  function handleBranchChange(event: Event) {
+  async function handleBranchChange(event: Event) {
     const target = event.target as HTMLSelectElement;
     currentBranch = target.value;
+    
+    // Reload all branch-dependent data
+    const reloadPromises: Promise<void>[] = [];
+    
+    // Always reload files (and current file if open)
     if (currentFile) {
-      loadFile(currentFile);
+      reloadPromises.push(loadFile(currentFile).catch(err => console.warn('Failed to reload file after branch change:', err)));
     } else {
-      loadFiles(currentPath);
+      reloadPromises.push(loadFiles(currentPath).catch(err => console.warn('Failed to reload files after branch change:', err)));
     }
+    
+    // Reload README (branch-specific)
+    reloadPromises.push(loadReadme().catch(err => console.warn('Failed to reload README after branch change:', err)));
+    
+    // Reload commit history if history tab is active
+    if (activeTab === 'history') {
+      reloadPromises.push(loadCommitHistory().catch(err => console.warn('Failed to reload commit history after branch change:', err)));
+    }
+    
+    // Reload documentation if docs tab is active (might be branch-specific)
+    if (activeTab === 'docs') {
+      // Reset documentation HTML to force reload
+      documentationHtml = null;
+      reloadPromises.push(loadDocumentation().catch(err => console.warn('Failed to reload documentation after branch change:', err)));
+    }
+    
+    // Wait for all reloads to complete
+    await Promise.all(reloadPromises);
   }
 
   async function createFile() {
@@ -1807,12 +2092,44 @@
       return;
     }
 
+    // Validate branch selection
+    if (!currentBranch || typeof currentBranch !== 'string') {
+      alert('Please select a branch before creating the file');
+      return;
+    }
+
     saving = true;
     error = null;
 
     try {
-      const npubFromPubkey = nip19.npubEncode(userPubkey);
+      // Get user email and name (from profile or prompt)
+      const authorEmail = await getUserEmail();
+      const authorName = await getUserName();
       const filePath = currentPath ? `${currentPath}/${newFileName}` : newFileName;
+      const commitMsg = `Create ${newFileName}`;
+      
+      // Sign commit with NIP-07 (client-side)
+      let commitSignatureEvent: NostrEvent | null = null;
+      if (isNIP07Available()) {
+        try {
+          const { KIND } = await import('$lib/types/nostr.js');
+          const timestamp = Math.floor(Date.now() / 1000);
+          const eventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
+            kind: KIND.COMMIT_SIGNATURE,
+            pubkey: '', // Will be filled by NIP-07
+            created_at: timestamp,
+            tags: [
+              ['author', authorName, authorEmail],
+              ['message', commitMsg]
+            ],
+            content: `Signed commit: ${commitMsg}`
+          };
+          commitSignatureEvent = await signEventWithNIP07(eventTemplate);
+        } catch (err) {
+          console.warn('Failed to sign commit with NIP-07:', err);
+          // Continue without signature if signing fails
+        }
+      }
       
       const response = await fetch(`/api/repos/${npub}/${repo}/file`, {
         method: 'POST',
@@ -1823,12 +2140,13 @@
         body: JSON.stringify({
           path: filePath,
           content: newFileContent,
-          commitMessage: `Create ${newFileName}`,
-          authorName: 'Web Editor',
-          authorEmail: `${npubFromPubkey}@nostr`,
+          commitMessage: commitMsg,
+          authorName: authorName,
+          authorEmail: authorEmail,
           branch: currentBranch,
           action: 'create',
-          userPubkey: userPubkey
+          userPubkey: userPubkey,
+          commitSignatureEvent: commitSignatureEvent // Send the signed event to server
         })
       });
 
@@ -1859,11 +2177,43 @@
       return;
     }
 
+    // Validate branch selection
+    if (!currentBranch || typeof currentBranch !== 'string') {
+      alert('Please select a branch before deleting the file');
+      return;
+    }
+
     saving = true;
     error = null;
 
     try {
-      const npubFromPubkey = nip19.npubEncode(userPubkey);
+      // Get user email and name (from profile or prompt)
+      const authorEmail = await getUserEmail();
+      const authorName = await getUserName();
+      const commitMsg = `Delete ${filePath}`;
+      
+      // Sign commit with NIP-07 (client-side)
+      let commitSignatureEvent: NostrEvent | null = null;
+      if (isNIP07Available()) {
+        try {
+          const { KIND } = await import('$lib/types/nostr.js');
+          const timestamp = Math.floor(Date.now() / 1000);
+          const eventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
+            kind: KIND.COMMIT_SIGNATURE,
+            pubkey: '', // Will be filled by NIP-07
+            created_at: timestamp,
+            tags: [
+              ['author', authorName, authorEmail],
+              ['message', commitMsg]
+            ],
+            content: `Signed commit: ${commitMsg}`
+          };
+          commitSignatureEvent = await signEventWithNIP07(eventTemplate);
+        } catch (err) {
+          console.warn('Failed to sign commit with NIP-07:', err);
+          // Continue without signature if signing fails
+        }
+      }
       
       const response = await fetch(`/api/repos/${npub}/${repo}/file`, {
         method: 'POST',
@@ -1873,12 +2223,13 @@
         },
         body: JSON.stringify({
           path: filePath,
-          commitMessage: `Delete ${filePath}`,
-          authorName: 'Web Editor',
-          authorEmail: `${npubFromPubkey}@nostr`,
+          commitMessage: commitMsg,
+          authorName: authorName,
+          authorEmail: authorEmail,
           branch: currentBranch,
           action: 'delete',
-          userPubkey: userPubkey
+          userPubkey: userPubkey,
+          commitSignatureEvent: commitSignatureEvent // Send the signed event to server
         })
       });
 
@@ -1917,7 +2268,7 @@
         },
         body: JSON.stringify({
           branchName: newBranchName,
-          fromBranch: newBranchFrom
+          fromBranch: newBranchFrom || currentBranch
         })
       });
 
@@ -1932,6 +2283,52 @@
       alert('Branch created successfully!');
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to create branch';
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function deleteBranch(branchName: string) {
+    if (!confirm(`Are you sure you want to delete the branch "${branchName}"? This action cannot be undone.`)) {
+      return;
+    }
+
+    if (!userPubkey) {
+      alert('Please connect your NIP-07 extension');
+      return;
+    }
+
+    // Prevent deleting the current branch
+    if (branchName === currentBranch) {
+      alert('Cannot delete the currently selected branch. Please switch to a different branch first.');
+      return;
+    }
+
+    saving = true;
+    error = null;
+
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/branches`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildApiHeaders()
+        },
+        body: JSON.stringify({
+          branchName: branchName
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to delete branch');
+      }
+
+      await loadBranches();
+      alert('Branch deleted successfully!');
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to delete branch';
+      alert(error);
     } finally {
       saving = false;
     }
@@ -2231,12 +2628,34 @@
     }
   });
 
-  // Only load readme when branch changes, not on every render
+  // Reload all branch-dependent data when branch changes
   let lastBranch = $state<string | null>(null);
   $effect(() => {
     if (currentBranch && currentBranch !== lastBranch) {
       lastBranch = currentBranch;
-      loadReadme();
+      
+      // Reload README (always branch-specific)
+      loadReadme().catch(err => console.warn('Failed to reload README after branch change:', err));
+      
+      // Reload files if files tab is active
+      if (activeTab === 'files') {
+        if (currentFile) {
+          loadFile(currentFile).catch(err => console.warn('Failed to reload file after branch change:', err));
+        } else {
+          loadFiles(currentPath).catch(err => console.warn('Failed to reload files after branch change:', err));
+        }
+      }
+      
+      // Reload commit history if history tab is active
+      if (activeTab === 'history') {
+        loadCommitHistory().catch(err => console.warn('Failed to reload commit history after branch change:', err));
+      }
+      
+      // Reload documentation if docs tab is active (reset to force reload)
+      if (activeTab === 'docs') {
+        documentationHtml = null;
+        loadDocumentation().catch(err => console.warn('Failed to reload documentation after branch change:', err));
+      }
     }
   });
 </script>
@@ -2417,14 +2836,31 @@
       </div>
       </div>
       <div class="header-actions">
-      {#if branches.length > 0}
-        <select bind:value={currentBranch} onchange={handleBranchChange} class="branch-select">
-          {#each branches as branch}
-            {@const branchName = typeof branch === 'string' ? branch : (branch as { name: string }).name}
-            <option value={branchName}>{branchName}</option>
-          {/each}
-        </select>
-      {/if}
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <select bind:value={currentBranch} onchange={handleBranchChange} class="branch-select" disabled={branches.length === 0 && loading}>
+            {#if branches.length === 0}
+              <!-- Show current branch even if branches haven't loaded yet -->
+              <option value={currentBranch}>{currentBranch}{loading ? ' (loading...)' : ''}</option>
+            {:else}
+              {#each branches as branch}
+                {@const branchName = typeof branch === 'string' ? branch : (branch as { name: string }).name}
+                <option value={branchName}>{branchName}</option>
+              {/each}
+            {/if}
+          </select>
+          {#if isMaintainer && branches.length > 0 && currentBranch && branches.length > 1}
+            {@const canDelete = defaultBranch !== null && currentBranch !== defaultBranch}
+            {#if canDelete && currentBranch}
+              <button 
+                onclick={() => currentBranch && deleteBranch(currentBranch)} 
+                class="delete-branch-button"
+                disabled={saving}
+                title="Delete current branch"
+                style="padding: 0.25rem 0.5rem; font-size: 0.875rem; background: var(--danger, #dc2626); color: white; border: none; border-radius: 0.25rem; cursor: pointer;"
+              >×</button>
+            {/if}
+          {/if}
+        </div>
       {#if verificationStatus}
         <span class="verification-status" class:verified={verificationStatus.verified} class:unverified={!verificationStatus.verified}>
           {#if verificationStatus.verified}

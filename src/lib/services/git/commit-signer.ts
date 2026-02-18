@@ -160,14 +160,19 @@ export async function createGitCommitSignature(
     useNIP07?: boolean;
     nip98Event?: NostrEvent;
     nsecKey?: string;
+    commitSignatureEvent?: NostrEvent; // Pre-signed event from client (NIP-07)
     timestamp?: number;
   } = {}
 ): Promise<{ signedMessage: string; signatureEvent: NostrEvent }> {
   const timestamp = options.timestamp || Math.floor(Date.now() / 1000);
   let signedEvent: NostrEvent;
 
-  // Method 1: Use NIP-07 browser extension (client-side)
-  if (options.useNIP07) {
+  // Method 1: Use pre-signed commit signature event from client (NIP-07)
+  if (options.commitSignatureEvent && options.commitSignatureEvent.sig && options.commitSignatureEvent.id) {
+    signedEvent = options.commitSignatureEvent;
+  }
+  // Method 2: Use NIP-07 browser extension (client-side) - DEPRECATED: use commitSignatureEvent instead
+  else if (options.useNIP07) {
     // NIP-07 will add pubkey automatically, so we don't need it in the template
     const eventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
       kind: KIND.COMMIT_SIGNATURE,
@@ -238,7 +243,7 @@ export async function createGitCommitSignature(
 
     signedEvent = finalizeEvent(eventTemplate, keyBytes);
   } else {
-    throw new Error('No signing method provided. Use useNIP07, nip98Event, or nsecKey.');
+    throw new Error('No signing method provided. Use commitSignatureEvent (pre-signed from client), useNIP07, nip98Event, or nsecKey.');
   }
 
   // Create a signature trailer that git can recognize

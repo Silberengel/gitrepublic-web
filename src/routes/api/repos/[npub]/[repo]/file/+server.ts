@@ -19,17 +19,33 @@ import { KIND } from '$lib/types/nostr.js';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
+import { extractRequestContext } from '$lib/utils/api-context.js';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
   : '/repos';
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
 
-export const GET: RequestHandler = async ({ params, url, request }: { params: { npub?: string; repo?: string }; url: URL; request: Request }) => {
+export const GET: RequestHandler = async (event) => {
+  const { params, url, request } = event;
   const { npub, repo } = params;
   const filePath = url.searchParams.get('path');
   let ref = url.searchParams.get('ref') || 'HEAD';
-  const userPubkey = url.searchParams.get('userPubkey') || request.headers.get('x-user-pubkey');
+  
+  // Extract user pubkey using the same method as other endpoints
+  const requestContext = extractRequestContext(event);
+  const userPubkey = requestContext.userPubkey;
+  const userPubkeyHex = requestContext.userPubkeyHex;
+  
+  // Debug logging for file endpoint
+  logger.debug({ 
+    hasUserPubkey: !!userPubkey, 
+    hasUserPubkeyHex: !!userPubkeyHex,
+    userPubkeyHex: userPubkeyHex ? userPubkeyHex.substring(0, 16) + '...' : null,
+    npub, 
+    repo, 
+    filePath 
+  }, 'File endpoint - extracted user context');
 
   if (!npub || !repo || !filePath) {
     return error(400, 'Missing npub, repo, or path parameter');
@@ -61,11 +77,16 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
 
         if (events.length > 0) {
           // Try API-based fetching first (no cloning)
-          const { tryApiFetchFile } = await import('$lib/utils/api-repo-helper.js');
-          const fileContent = await tryApiFetchFile(events[0], npub, repo, filePath, ref);
-          
-          if (fileContent) {
-            return json(fileContent);
+          try {
+            const { tryApiFetchFile } = await import('$lib/utils/api-repo-helper.js');
+            const fileContent = await tryApiFetchFile(events[0], npub, repo, filePath, ref);
+            
+            if (fileContent && fileContent.content) {
+              return json(fileContent);
+            }
+          } catch (apiErr) {
+            // Log the error but don't throw - we'll return a helpful error message below
+            logger.debug({ error: apiErr, npub, repo, filePath, ref }, 'API file fetch failed, will return 404');
           }
           
           // API fetch failed - repo is not cloned and API fetch didn't work
@@ -74,6 +95,7 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
           return error(404, 'Repository announcement not found in Nostr');
         }
       } catch (err) {
+        logger.error({ error: err, npub, repo, filePath }, 'Error in on-demand file fetch');
         // Check if repo was created by another concurrent request
         if (existsSync(repoPath)) {
           // Repo exists now, clear cache and continue with normal flow
@@ -103,22 +125,43 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
       try {
         const branches = await fileManager.getBranches(npub, repo);
         if (!branches.includes(ref)) {
-          // Branch doesn't exist, use default branch
-          ref = await fileManager.getDefaultBranch(npub, repo);
+          // Branch doesn't exist, try to get default branch
+          try {
+            ref = await fileManager.getDefaultBranch(npub, repo);
+            logger.debug({ npub, repo, originalRef: url.searchParams.get('ref'), newRef: ref }, 'Branch not found, using default branch');
+          } catch (defaultBranchErr) {
+            // If we can't get default branch, fall back to HEAD
+            logger.warn({ error: defaultBranchErr, npub, repo, ref }, 'Could not get default branch, falling back to HEAD');
+            ref = 'HEAD';
+          }
         }
-      } catch {
+      } catch (branchErr) {
         // If we can't get branches, fall back to HEAD
+        logger.warn({ error: branchErr, npub, repo, ref }, 'Could not get branches, falling back to HEAD');
         ref = 'HEAD';
       }
     }
 
     // Check repository privacy (repoOwnerPubkey already declared above)
-    const canView = await maintainerService.canView(userPubkey || null, repoOwnerPubkey, repo);
+    logger.debug({ 
+      userPubkeyHex: userPubkeyHex ? userPubkeyHex.substring(0, 16) + '...' : null,
+      repoOwnerPubkey: repoOwnerPubkey.substring(0, 16) + '...',
+      repo 
+    }, 'File endpoint - checking canView before access check');
+    
+    const canView = await maintainerService.canView(userPubkeyHex || null, repoOwnerPubkey, repo);
+    
+    logger.debug({ 
+      canView, 
+      userPubkeyHex: userPubkeyHex ? userPubkeyHex.substring(0, 16) + '...' : null,
+      repoOwnerPubkey: repoOwnerPubkey.substring(0, 16) + '...',
+      repo 
+    }, 'File endpoint - canView result');
+    
     if (!canView) {
-      const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
       auditLogger.logFileOperation(
-        userPubkey || null,
-        clientIp,
+        userPubkeyHex || null,
+        requestContext.clientIp,
         'read',
         `${npub}/${repo}`,
         filePath,
@@ -127,13 +170,38 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
       );
       return error(403, 'This repository is private. Only owners and maintainers can view it.');
     }
-
-    const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
     try {
-      const fileContent = await fileManager.getFileContent(npub, repo, filePath, ref);
+      // Log what we're trying to do
+      logger.debug({ npub, repo, filePath, ref }, 'Attempting to read file from cloned repository');
+      
+      let fileContent;
+      try {
+        fileContent = await fileManager.getFileContent(npub, repo, filePath, ref);
+      } catch (firstErr) {
+        // If the first attempt fails and ref is not HEAD, try with HEAD as fallback
+        if (ref !== 'HEAD' && !ref.startsWith('refs/')) {
+          logger.warn({ 
+            error: firstErr, 
+            npub, 
+            repo, 
+            filePath, 
+            originalRef: ref 
+          }, 'Failed to read file with specified ref, trying HEAD as fallback');
+          try {
+            fileContent = await fileManager.getFileContent(npub, repo, filePath, 'HEAD');
+            ref = 'HEAD'; // Update ref for logging
+          } catch (headErr) {
+            // If HEAD also fails, throw the original error
+            throw firstErr;
+          }
+        } else {
+          throw firstErr;
+        }
+      }
+      
       auditLogger.logFileOperation(
-        userPubkey || null,
-        clientIp,
+        userPubkeyHex || null,
+        requestContext.clientIp,
         'read',
         `${npub}/${repo}`,
         filePath,
@@ -141,18 +209,75 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
       );
       return json(fileContent);
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorLower = errorMessage.toLowerCase();
+      const errorStack = err instanceof Error ? err.stack : undefined;
+      
+      logger.error({ 
+        error: err, 
+        errorStack,
+        npub, 
+        repo, 
+        filePath, 
+        ref,
+        repoExists: existsSync(repoPath),
+        errorMessage
+      }, 'Error reading file from cloned repository');
       auditLogger.logFileOperation(
-        userPubkey || null,
-        clientIp,
+        userPubkeyHex || null,
+        requestContext.clientIp,
         'read',
         `${npub}/${repo}`,
         filePath,
         'failure',
-        err instanceof Error ? err.message : String(err)
+        errorMessage
       );
-      throw err;
+      // If file not found or path doesn't exist, return 404 instead of 500
+      if (errorLower.includes('not found') || 
+          errorLower.includes('no such file') || 
+          errorLower.includes('does not exist') ||
+          errorLower.includes('fatal:') ||
+          errorMessage.includes('pathspec')) {
+        return error(404, `File not found: ${filePath} at ref ${ref}`);
+      }
+      // For other errors, return 500 with a more helpful message
+      return error(500, `Failed to read file: ${errorMessage}`);
     }
   } catch (err) {
+    // This catch block handles errors that occur outside the file reading try-catch
+    // (e.g., in branch validation, access checks, etc.)
+    
+    // If it's already a Response (from error handlers), return it
+    if (err instanceof Response) {
+      return err;
+    }
+    
+    // If it's a SvelteKit HttpError (from error() function), re-throw it
+    // SvelteKit errors have a status property and body property
+    if (err && typeof err === 'object' && 'status' in err && 'body' in err) {
+      throw err;
+    }
+    
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorStack = err instanceof Error ? err.stack : undefined;
+    
+    logger.error({ 
+      error: err, 
+      errorStack,
+      npub, 
+      repo, 
+      filePath,
+      ref: url.searchParams.get('ref'),
+      errorMessage
+    }, 'Unexpected error in file endpoint (outside file reading block)');
+    
+    // Check if it's a "not found" type error
+    const errorLower = errorMessage.toLowerCase();
+    if (errorLower.includes('not found') || 
+        errorLower.includes('repository not found')) {
+      return error(404, errorMessage);
+    }
+    
     return handleApiError(err, { operation: 'readFile', npub, repo, filePath }, 'Failed to read file');
   }
 };
@@ -168,7 +293,7 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
   try {
     const body = await request.json();
     path = body.path;
-    const { content, commitMessage, authorName, authorEmail, branch, action, userPubkey, useNIP07, nsecKey } = body;
+    const { content, commitMessage, authorName, authorEmail, branch, action, userPubkey, useNIP07, nsecKey, commitSignatureEvent } = body;
     
     // Check for NIP-98 authentication (for git operations)
     const authHeader = request.headers.get('Authorization');
@@ -242,13 +367,16 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
       useNIP07?: boolean;
       nip98Event?: NostrEvent;
       nsecKey?: string;
+      commitSignatureEvent?: NostrEvent;
     } = {};
     
-    if (useNIP07) {
-      signingOptions.useNIP07 = true;
+    // If client sent a pre-signed commit signature event (from NIP-07), use it
+    if (commitSignatureEvent && commitSignatureEvent.sig && commitSignatureEvent.id) {
+      signingOptions.commitSignatureEvent = commitSignatureEvent;
     } else if (nip98Event) {
       signingOptions.nip98Event = nip98Event;
     }
+    // Note: useNIP07 is no longer used since signing happens client-side
     // Explicitly ignore nsecKey from client requests - it's a security risk
     // Server-side signing should use NOSTRGIT_SECRET_KEY environment variable instead
     if (nsecKey) {
@@ -270,6 +398,9 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
     
     if (action === 'delete') {
       try {
+        // Get default branch if not provided
+        const targetBranch = branch || await fileManager.getDefaultBranch(npub, repo);
+        
         await fileManager.deleteFile(
           npub,
           repo,
@@ -277,7 +408,7 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
           commitMessage,
           authorName,
           authorEmail,
-          branch || 'main',
+          targetBranch,
           Object.keys(signingOptions).length > 0 ? signingOptions : undefined
         );
         auditLogger.logFileOperation(
@@ -306,6 +437,9 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
         return error(400, 'Content is required for create/update operations');
       }
       try {
+        // Get default branch if not provided
+        const targetBranch = branch || await fileManager.getDefaultBranch(npub, repo);
+        
         await fileManager.writeFile(
           npub,
           repo,
@@ -314,7 +448,7 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
           commitMessage,
           authorName,
           authorEmail,
-          branch || 'main',
+          targetBranch,
           Object.keys(signingOptions).length > 0 ? signingOptions : undefined
         );
         auditLogger.logFileOperation(
