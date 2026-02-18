@@ -10,6 +10,7 @@ See [ARCHITECTURE_FAQ.md](./docs/ARCHITECTURE_FAQ.md) for answers to common arch
 - **NIP-34 Repo Announcements**: Create and manage repository announcements on Nostr
 - **NIP-07 Authentication**: Web UI authentication via browser extensions (e.g., Alby, nos2x)
 - **NIP-98 HTTP Authentication**: Git operations (clone, push, pull) authenticated using ephemeral Nostr events
+- **SSH Key Attestation**: Link SSH keys to Nostr identity for git operations over SSH (see [docs/SSH_KEY_ATTESTATION.md](./docs/SSH_KEY_ATTESTATION.md))
 - **Auto-provisioning**: Automatically creates git repositories from NIP-34 announcements
 - **Multi-remote Sync**: Automatically syncs repositories to multiple remotes listed in announcements
 - **Repository Size Limits**: Enforces 2 GB maximum repository size
@@ -94,6 +95,12 @@ These are not part of any NIP but are used by this application:
   - Non-replaceable to maintain immutable chain of ownership
   - Tags: `a` (repo identifier), `p` (new owner), `d` (repo name), `t` (self-transfer marker, optional)
   - See [docs/NIP_COMPLIANCE.md](./docs/NIP_COMPLIANCE.md#1641---ownership_transfer) for complete example
+
+- **30001** (`SSH_KEY_ATTESTATION`): SSH key attestation (server-side only, not published to relays)
+  - Links SSH public keys to Nostr identity for git operations over SSH
+  - Content contains the SSH public key
+  - Tags: `revoke` (optional, set to 'true' to revoke an attestation)
+  - See [docs/SSH_KEY_ATTESTATION.md](./docs/SSH_KEY_ATTESTATION.md) for complete documentation
 
 - **30620** (`BRANCH_PROTECTION`): Branch protection rules (replaceable)
   - Allows requiring pull requests, reviewers, status checks for protected branches
@@ -348,6 +355,7 @@ See `docs/SECURITY.md` and `docs/SECURITY_IMPLEMENTATION.md` for detailed inform
 - `GIT_REPO_ROOT`: Path to store git repositories (default: `/repos`)
 - `GIT_DOMAIN`: Domain for git repositories (default: `localhost:6543`)
 - `NOSTR_RELAYS`: Comma-separated list of Nostr relays (default: `wss://theforest.nostr1.com`)
+- `SSH_ATTESTATION_LOOKUP_SECRET`: Secret key for HMAC-based SSH key fingerprint lookup (default: `change-me-in-production`). **Important**: Set this to a secure random value in production!
 - `TOR_SOCKS_PROXY`: Tor SOCKS proxy address (format: `host:port`, default: `127.0.0.1:9050`). Set to empty string to disable Tor support. When configured, the server will automatically route `.onion` addresses through Tor for both Nostr relay connections and git operations.
 - `TOR_ONION_ADDRESS`: Tor hidden service .onion address (optional). If not set, the server will attempt to read it from Tor's hostname file. When configured, every repository will automatically get a `.onion` clone URL in addition to the regular domain URL, making repositories accessible via Tor even if the server is only running on localhost.
 
