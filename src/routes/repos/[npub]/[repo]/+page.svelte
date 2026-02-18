@@ -51,7 +51,7 @@
   let editedContent = $state('');
   let hasChanges = $state(false);
   let saving = $state(false);
-  let branches = $state<string[]>([]);
+  let branches = $state<Array<string | { name: string; commit?: any }>>([]);
   let currentBranch = $state('main');
   let commitMessage = $state('');
   let userPubkey = $state<string | null>(null);
@@ -2353,7 +2353,8 @@
       {#if branches.length > 0}
         <select bind:value={currentBranch} onchange={handleBranchChange} class="branch-select">
           {#each branches as branch}
-            <option value={branch}>{branch}</option>
+            {@const branchName = typeof branch === 'string' ? branch : (branch as { name: string }).name}
+            <option value={branchName}>{branchName}</option>
           {/each}
         </select>
       {/if}
@@ -3176,7 +3177,8 @@
           From Branch:
           <select bind:value={newBranchFrom}>
             {#each branches as branch}
-              <option value={branch}>{branch}</option>
+              {@const branchName = typeof branch === 'string' ? branch : (branch as { name: string }).name}
+              <option value={branchName}>{branchName}</option>
             {/each}
           </select>
         </label>
