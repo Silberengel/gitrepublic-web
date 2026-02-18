@@ -107,8 +107,8 @@ const GIT_PLATFORM_CONFIGS: Record<string, Omit<GitPlatformConfig, 'baseUrl'>> =
     usesSourceTargetBranch: false
   },
   onedev: {
-    issuesPath: '/api/projects/{owner}/{repo}/issues',
-    pullsPath: '/api/projects/{owner}/{repo}/pull-requests',
+    issuesPath: '/{owner}/{repo}/issues', // Path relative to /api/projects/ (added in buildGitPlatformUrl)
+    pullsPath: '/{owner}/{repo}/pull-requests', // Path relative to /api/projects/ (added in buildGitPlatformUrl)
     authHeader: 'Bearer',
     usesDescription: true,
     usesSourceTargetBranch: true
@@ -200,8 +200,30 @@ function getGitPlatformConfig(
     };
   }
 
-  if (customApiUrl) {
-    // Custom platform - assume Gitea-compatible format
+  // Gitea and Forgejo are self-hosted - require apiUrl if not using Codeberg/Forgejo.org defaults
+  if (platform === 'gitea' || platform === 'forgejo') {
+    const config = GIT_PLATFORM_CONFIGS[platform];
+    if (!config) {
+      throw new Error(`Unsupported Git platform: ${platform}`);
+    }
+    
+    // Use custom API URL if provided, otherwise use default hosted instance
+    const baseUrls: Record<string, string> = {
+      gitea: customApiUrl || 'https://codeberg.org/api/v1', // Codeberg uses Gitea
+      forgejo: customApiUrl || 'https://forgejo.org/api/v1' // Forgejo.org hosted instance
+    };
+    
+    return {
+      ...config,
+      baseUrl: baseUrls[platform]
+    };
+  }
+
+  // Custom platform - assume Gitea-compatible format
+  if (platform === 'custom') {
+    if (!customApiUrl) {
+      throw new Error('Custom platform requires apiUrl to be provided');
+    }
     return {
       baseUrl: customApiUrl,
       issuesPath: '/repos/{owner}/{repo}/issues',
@@ -209,6 +231,18 @@ function getGitPlatformConfig(
       authHeader: 'Bearer',
       usesDescription: false,
       usesSourceTargetBranch: false
+    };
+  }
+
+  // If customApiUrl is provided for other platforms, use it but keep platform config
+  if (customApiUrl) {
+    const config = GIT_PLATFORM_CONFIGS[platform];
+    if (!config) {
+      throw new Error(`Unsupported Git platform: ${platform}`);
+    }
+    return {
+      ...config,
+      baseUrl: customApiUrl
     };
   }
 
@@ -221,9 +255,7 @@ function getGitPlatformConfig(
   const baseUrls: Record<string, string> = {
     github: 'https://api.github.com',
     gitlab: 'https://gitlab.com/api/v4',
-    gitea: 'https://codeberg.org/api/v1',
-    codeberg: 'https://codeberg.org/api/v1',
-    forgejo: 'https://forgejo.org/api/v1'
+    codeberg: 'https://codeberg.org/api/v1'
   };
 
   return {
@@ -239,14 +271,18 @@ function buildGitPlatformUrl(
   pathType: 'issues' | 'pulls',
   platform: GitPlatform
 ): string {
-  const path = pathType === 'issues' ? config.issuesPath : config.pullsPath;
-  
   if (platform === 'onedev') {
+    // OneDev uses project-path format: /api/projects/{project-path}/issues
     const projectPath = repo ? `${owner}/${repo}` : owner;
-    const endpoint = pathType === 'issues' ? 'issues' : 'pull-requests';
-    return `${config.baseUrl}/api/projects/${encodeURIComponent(projectPath)}/${endpoint}`;
+    const path = pathType === 'issues' ? config.issuesPath : config.pullsPath;
+    // Path already contains {owner}/{repo}, just replace them
+    const urlPath = path
+      .replace('{owner}', encodeURIComponent(owner))
+      .replace('{repo}', encodeURIComponent(repo));
+    return `${config.baseUrl}/api/projects${urlPath}`;
   }
 
+  const path = pathType === 'issues' ? config.issuesPath : config.pullsPath;
   const urlPath = path
     .replace('{owner}', encodeURIComponent(owner))
     .replace('{repo}', encodeURIComponent(repo));
@@ -596,8 +632,13 @@ export async function forwardEventIfEnabled(
           continue;
         }
         
+        // Validate self-hosted platforms that require apiUrl
         if (gitPlatform.platform === 'onedev' && !gitPlatform.apiUrl) {
           logger.warn({ platform: 'onedev' }, 'OneDev requires apiUrl to be provided');
+          continue;
+        }
+        if (gitPlatform.platform === 'custom' && !gitPlatform.apiUrl) {
+          logger.warn({ platform: 'custom' }, 'Custom platform requires apiUrl to be provided');
           continue;
         }
         

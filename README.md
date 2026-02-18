@@ -44,6 +44,7 @@ See [ARCHITECTURE_FAQ.md](./docs/ARCHITECTURE_FAQ.md) for answers to common arch
 - **Raw File View**: Direct access to raw file content
 - **Download Repository**: Download repositories as ZIP archives
 - **OpenGraph Metadata**: Rich social media previews with repository images and banners
+- **Universal Git Dashboard**: Aggregate and view issues and pull requests from all configured git platforms (GitHub, GitLab, Gitea, etc.) in one place
 
 ### Security & Validation
 - **Path Traversal Protection**: Validates and sanitizes file paths

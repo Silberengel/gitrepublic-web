@@ -272,6 +272,9 @@
     </div>
     {#if getForwardingPubkey()}
       <ForwardingConfig userPubkeyHex={getForwardingPubkey()!} />
+      <div class="dashboard-link">
+        <a href="/dashboard" class="dashboard-button">📊 View Universal Git Dashboard</a>
+      </div>
     {/if}
   </header>
 
@@ -684,5 +687,25 @@
   .send-button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  .dashboard-link {
+    margin-top: 1rem;
+  }
+
+  .dashboard-button {
+    display: inline-block;
+    padding: 0.75rem 1.5rem;
+    background: var(--accent);
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    font-weight: 500;
+    transition: background 0.2s;
+  }
+
+  .dashboard-button:hover {
+    background: var(--accent-dark);
   }
 </style>

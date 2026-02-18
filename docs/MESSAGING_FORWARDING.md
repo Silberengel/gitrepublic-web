@@ -324,12 +324,12 @@ EMAIL_ENABLED=true
 ### Supported Platforms
 
 - **GitHub** (`github`) - github.com
-- **GitLab** (`gitlab`) - gitlab.com (also supports self-hosted)
-- **Gitea** (`gitea`) - Self-hosted instances
-- **Codeberg** (`codeberg`) - codeberg.org
-- **Forgejo** (`forgejo`) - Self-hosted instances
+- **GitLab** (`gitlab`) - gitlab.com (also supports self-hosted with apiUrl)
+- **Gitea** (`gitea`) - Self-hosted instances (defaults to codeberg.org if apiUrl not provided)
+- **Codeberg** (`codeberg`) - codeberg.org (uses Gitea API)
+- **Forgejo** (`forgejo`) - Self-hosted instances (defaults to forgejo.org if apiUrl not provided)
 - **OneDev** (`onedev`) - Self-hosted instances (requires apiUrl)
-- **Custom** (`custom`) - Any Gitea-compatible API with custom URL
+- **Custom** (`custom`) - Any Gitea-compatible API with custom URL (requires apiUrl)
 
 ### Creating Personal Access Tokens
 
@@ -363,7 +363,11 @@ Users provide:
 - **Owner**: Username or organization name (project path for OneDev)
 - **Repo**: Repository name (project name for OneDev)
 - **Token**: Personal access token (stored encrypted)
-- **API URL** (required for OneDev, optional for custom/self-hosted): Base URL of the instance (e.g., `https://your-onedev-instance.com`)
+- **API URL**:
+  - **Required** for: `onedev`, `custom`
+  - **Optional** for: `gitea`, `forgejo`, `gitlab` (use for self-hosted instances)
+  - **Not used** for: `github`, `codeberg` (always use hosted instances)
+  - Format: Base URL of the instance (e.g., `https://your-gitea-instance.com/api/v1` or `https://your-onedev-instance.com`)
 
 ### Event Mapping
 
@@ -373,11 +377,13 @@ Users provide:
 
 ### Platform-Specific Notes
 
-- **GitLab**: Uses `description` field instead of `body`, and `source_branch`/`target_branch` for PRs
-- **OneDev**: Uses `description` field and `source_branch`/`target_branch` for PRs. Requires `apiUrl` (self-hosted). API endpoints: `/api/projects/{owner}/{repo}/issues` and `/api/projects/{owner}/{repo}/pull-requests`
-- **GitHub**: Uses `body` field and `head`/`base` for PRs
-- **Gitea/Codeberg/Forgejo**: Compatible with GitHub API format
-- **Custom**: Must provide `apiUrl` pointing to Gitea-compatible API
+- **GitHub**: Uses `body` field and `head`/`base` for PRs. Always uses `https://api.github.com`
+- **GitLab**: Uses `description` field instead of `body`, and `source_branch`/`target_branch` for PRs. Defaults to `https://gitlab.com/api/v4`, but supports self-hosted with `apiUrl`
+- **Gitea**: Compatible with GitHub API format. Defaults to `https://codeberg.org/api/v1` (Codeberg), but supports self-hosted instances with `apiUrl` (e.g., `https://your-gitea-instance.com/api/v1`)
+- **Codeberg**: Uses Gitea API format. Always uses `https://codeberg.org/api/v1`
+- **Forgejo**: Compatible with GitHub API format. Defaults to `https://forgejo.org/api/v1`, but supports self-hosted instances with `apiUrl` (e.g., `https://your-forgejo-instance.com/api/v1`)
+- **OneDev**: Uses `description` field and `source_branch`/`target_branch` for PRs. **Requires** `apiUrl` (self-hosted only). API endpoints: `/api/projects/{owner}/{repo}/issues` and `/api/projects/{owner}/{repo}/pull-requests`
+- **Custom**: Must provide `apiUrl` pointing to Gitea-compatible API (assumes GitHub/Gitea API format)
 
 ### Security Note
 
