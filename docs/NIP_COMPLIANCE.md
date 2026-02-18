@@ -10,7 +10,6 @@ GitRepublic implements the following standard NIPs:
 
 - **[NIP-01: Basic Protocol Flow](01.md)** - Event structure, signatures, and client-relay communication
   - Foundation for all Nostr events
-  - Used for relay write proof fallback (kind 1)
 
 ### Authentication & Identity
 

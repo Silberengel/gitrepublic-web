@@ -53,7 +53,7 @@ Git commit signature events are used to cryptographically sign git commits using
 
 ### Rationale
 
-Using a dedicated kind (1640) instead of kind 1 (text note) prevents spamming the user's feed with commit signatures. It also provides a clear, searchable way to find all commits signed by a specific user.
+Using a dedicated kind (1640) prevents spamming the user's feed with commit signatures. It also provides a clear, searchable way to find all commits signed by a specific user.
 
 **Implementation**: `src/lib/services/git/commit-signer.ts`
 

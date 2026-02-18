@@ -27,9 +27,11 @@ export interface RelayWriteProof {
  * 
  * Accepts:
  * - NIP-98 events (kind 27235) - preferred, since they're already used for HTTP auth
- * - Kind 1 (text note) events - for backward compatibility
+ * - Kind 24 (public message) events - for relay write proof
+ *   - Must be addressed to the user themselves (their pubkey in the p tag)
+ *   - User writes a public message to themselves on default relays to prove write access
  * 
- * The proof should be a recent event (within 60 seconds for NIP-98, 5 minutes for kind 1)
+ * The proof should be a recent event (within 60 seconds for NIP-98, 5 minutes for kind 24)
  * published to a default relay.
  */
 export async function verifyRelayWriteProof(
@@ -49,7 +51,7 @@ export async function verifyRelayWriteProof(
 
   // Determine time window based on event kind
   // NIP-98 events (27235) should be within 60 seconds per spec
-  // Other events (like kind 1) can be within 5 minutes
+  // Other events (like kind 24) can be within 5 minutes
   const isNIP98Event = proofEvent.kind === KIND.NIP98_AUTH;
   const maxAge = isNIP98Event ? 60 : 300; // 60 seconds for NIP-98, 5 minutes for others
 
@@ -81,6 +83,14 @@ export async function verifyRelayWriteProof(
     // Content should be empty for NIP-98
     if (proofEvent.content && proofEvent.content.trim() !== '') {
       return { valid: false, error: 'NIP-98 event content should be empty' };
+    }
+  }
+
+  // For kind 24 (public message) events, validate they are addressed to the user themselves
+  if (proofEvent.kind === KIND.PUBLIC_MESSAGE) {
+    const pTag = proofEvent.tags.find(t => t[0] === 'p' && t[1]);
+    if (!pTag || pTag[1] !== userPubkey) {
+      return { valid: false, error: 'Public message proof must be addressed to the user themselves (p tag must contain user pubkey)' };
     }
   }
 
@@ -128,15 +138,19 @@ export async function verifyRelayWriteProof(
  * For new implementations, prefer using NIP-98 events (kind 27235) as they
  * serve dual purpose: HTTP authentication and relay write proof.
  * 
- * This function creates a simple kind 1 event for backward compatibility.
+ * This function creates a kind 24 (public message) event addressed to the user
+ * themselves (their own pubkey in the p tag) to prove they can write to default relays.
  */
 export function createProofEvent(userPubkey: string, content: string = 'gitrepublic-write-proof'): Omit<NostrEvent, 'sig' | 'id'> {
   return {
-    kind: KIND.TEXT_NOTE,
+    kind: KIND.PUBLIC_MESSAGE,
     pubkey: userPubkey,
     created_at: Math.floor(Date.now() / 1000),
     content: content,
-    tags: [['t', 'gitrepublic-proof']]
+    tags: [
+      ['p', userPubkey], // Send to self to prove write access
+      ['t', 'gitrepublic-proof']
+    ]
   };
 }
 

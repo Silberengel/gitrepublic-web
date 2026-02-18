@@ -122,14 +122,100 @@ export class PublicMessagesService {
   }
 
   /**
+   * Get the referenced message ID from a public message's q tag (NIP-18)
+   * Returns the event ID if the message is replying to another message
+   */
+  getQuotedMessageId(message: PublicMessage): string | null {
+    const qTag = message.tags.find(tag => tag[0] === 'q' && tag[1]);
+    return qTag?.[1] || null;
+  }
+
+  /**
+   * Fetch a public message by ID (for displaying reply context)
+   */
+  async getMessageById(
+    messageId: string,
+    relayHint?: string
+  ): Promise<PublicMessage | null> {
+    try {
+      const filters: any[] = [
+        {
+          kinds: [KIND.PUBLIC_MESSAGE],
+          ids: [messageId],
+          limit: 1
+        }
+      ];
+
+      // If relay hint is provided, try that relay first
+      if (relayHint) {
+        const hintClient = new NostrClient([relayHint]);
+        const events = await hintClient.fetchEvents(filters);
+        if (events.length > 0 && events[0].kind === KIND.PUBLIC_MESSAGE && verifyEvent(events[0])) {
+          return events[0] as PublicMessage;
+        }
+      }
+
+      // Fallback to default relays
+      const events = await this.nostrClient.fetchEvents(filters);
+      if (events.length > 0 && events[0].kind === KIND.PUBLIC_MESSAGE && verifyEvent(events[0])) {
+        return events[0] as PublicMessage;
+      }
+
+      return null;
+    } catch (error) {
+      logger.error({ error, messageId: messageId.slice(0, 16) + '...' }, 'Failed to fetch message by ID');
+      return null;
+    }
+  }
+
+  /**
+   * Fetch messages that quote/reference a specific message (using q tags, NIP-18)
+   */
+  async getMessagesQuotingMessage(
+    quotedMessageId: string,
+    limit: number = 50
+  ): Promise<PublicMessage[]> {
+    try {
+      const events = await this.nostrClient.fetchEvents([
+        {
+          kinds: [KIND.PUBLIC_MESSAGE],
+          '#q': [quotedMessageId], // Messages that quote this message (NIP-18)
+          limit
+        }
+      ]);
+
+      // Verify events
+      const validMessages = events
+        .filter((e): e is PublicMessage => {
+          if (e.kind !== KIND.PUBLIC_MESSAGE) return false;
+          if (!verifyEvent(e)) {
+            logger.warn({ eventId: e.id.slice(0, 16) + '...' }, 'Invalid signature in public message');
+            return false;
+          }
+          return true;
+        })
+        .sort((a, b) => b.created_at - a.created_at); // Newest first
+
+      return validMessages;
+    } catch (error) {
+      logger.error({ error, quotedMessageId: quotedMessageId.slice(0, 16) + '...' }, 'Failed to fetch messages quoting message');
+      throw error;
+    }
+  }
+
+  /**
    * Create and publish a public message
    * Messages are sent to inbox relays of recipients and outbox relay of sender
+   * @param quotedMessageId - Optional: ID of message being replied to (adds q tag for context, NIP-18)
+   * @param quotedMessageRelay - Optional: Relay hint for fetching the quoted message
    */
   async sendPublicMessage(
     senderPubkey: string,
     content: string,
     recipients: Array<{ pubkey: string; relay?: string }>,
-    senderRelays?: string[]
+    senderRelays?: string[],
+    quotedMessageId?: string,
+    quotedMessageRelay?: string
   ): Promise<PublicMessage> {
     if (!content.trim()) {
       throw new Error('Message content cannot be empty');
@@ -148,12 +234,22 @@ export class PublicMessagesService {
       return tag;
     });
 
+    // Add q tag if replying to another message (NIP-18)
+    const tags: string[][] = [...pTags];
+    if (quotedMessageId) {
+      const qTag: string[] = ['q', quotedMessageId];
+      if (quotedMessageRelay) {
+        qTag.push(quotedMessageRelay);
+      }
+      tags.push(qTag);
+    }
+
     // Create the event (will be signed by client)
     const messageEvent: Omit<PublicMessage, 'id' | 'sig'> = {
       pubkey: senderPubkey,
       kind: KIND.PUBLIC_MESSAGE,
       created_at: Math.floor(Date.now() / 1000),
-      tags: pTags,
+      tags,
       content: content.trim()
     };
 

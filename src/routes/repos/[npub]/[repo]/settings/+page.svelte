@@ -16,6 +16,7 @@
   let description = $state('');
   let cloneUrls = $state<string[]>(['']);
   let maintainers = $state<string[]>(['']);
+  let chatRelays = $state<string[]>(['']);
   let isPrivate = $state(false);
 
   onMount(async () => {
@@ -45,6 +46,7 @@
         description = data.description || '';
         cloneUrls = data.cloneUrls?.length > 0 ? data.cloneUrls : [''];
         maintainers = data.maintainers?.length > 0 ? data.maintainers : [''];
+        chatRelays = data.chatRelays?.length > 0 ? data.chatRelays : [''];
         isPrivate = data.isPrivate || false;
       } else {
         const data = await response.json();
@@ -79,6 +81,7 @@
           description,
           cloneUrls: cloneUrls.filter(url => url.trim()),
           maintainers: maintainers.filter(m => m.trim()),
+          chatRelays: chatRelays.filter(url => url.trim()),
           isPrivate
         })
       });
@@ -111,6 +114,14 @@
 
   function removeMaintainer(index: number) {
     maintainers = maintainers.filter((_, i) => i !== index);
+  }
+
+  function addChatRelay() {
+    chatRelays = [...chatRelays, ''];
+  }
+
+  function removeChatRelay(index: number) {
+    chatRelays = chatRelays.filter((_, i) => i !== index);
   }
 </script>
 
@@ -174,6 +185,20 @@
             </div>
           {/each}
           <button type="button" onclick={addMaintainer} class="add-button">+ Add Maintainer</button>
+        </div>
+
+        <div class="form-section">
+          <h2>Chat Relays</h2>
+          <p class="help-text">WebSocket relays for kind 11 discussion threads (e.g., wss://myprojechat.com, ws://localhost:2937)</p>
+          {#each chatRelays as relay, index}
+            <div class="array-input">
+              <input type="text" bind:value={chatRelays[index]} placeholder="wss://example.com" />
+              {#if chatRelays.length > 1}
+                <button type="button" onclick={() => removeChatRelay(index)} class="remove-button">Remove</button>
+              {/if}
+            </div>
+          {/each}
+          <button type="button" onclick={addChatRelay} class="add-button">+ Add Chat Relay</button>
         </div>
 
         {#if error}

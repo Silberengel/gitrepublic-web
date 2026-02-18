@@ -16,10 +16,17 @@ export interface NostrFilter {
   ids?: string[];
   authors?: string[];
   kinds?: number[];
-  '#e'?: string[];
-  '#p'?: string[];
+  '#e'?: string[]; // Lowercase: event references (parent in NIP-22)
+  '#p'?: string[]; // Lowercase: pubkey references (parent in NIP-22)
   '#d'?: string[];
-  '#a'?: string[];
+  '#a'?: string[]; // Lowercase: address references (parent in NIP-22)
+  '#E'?: string[]; // Uppercase: root event references (NIP-22)
+  '#K'?: string[]; // Uppercase: root kind references (NIP-22)
+  '#P'?: string[]; // Uppercase: root pubkey references (NIP-22)
+  '#A'?: string[]; // Uppercase: root address references (NIP-22)
+  '#I'?: string[]; // Uppercase: root I-tag references (NIP-22)
+  '#i'?: string[]; // Lowercase: parent I-tag references (NIP-22)
+  '#q'?: string[]; // Quoted event references (NIP-18, NIP-21, NIP-22, NIP-24)
   since?: number;
   until?: number;
   limit?: number;
@@ -27,7 +34,6 @@ export interface NostrFilter {
 }
 
 export const KIND = {
-  TEXT_NOTE: 1, // NIP-01: Text note (used for relay write proof fallback)
   CONTACT_LIST: 3, // NIP-02: Contact list - See /docs for GitRepublic usage documentation
   DELETION_REQUEST: 5, // NIP-09: Event deletion request
   REPO_ANNOUNCEMENT: 30617, // NIP-34: Repository announcement
@@ -43,6 +49,7 @@ export const KIND = {
   COMMIT_SIGNATURE: 1640, // Custom: Git commit signature event
   OWNERSHIP_TRANSFER: 1641, // Custom: Repository ownership transfer event (non-replaceable for chain integrity)
   COMMENT: 1111, // NIP-22: Comment event
+  THREAD: 11, // NIP-7D: Discussion thread
   BRANCH_PROTECTION: 30620, // Custom: Branch protection rules
   RELAY_LIST: 10002, // NIP-65: Relay list metadata
   NIP98_AUTH: 27235, // NIP-98: HTTP authentication event

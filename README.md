@@ -78,7 +78,7 @@ This project uses the following Nostr event kinds. For complete JSON examples an
 - **27235** (`NIP98_AUTH`): NIP-98 HTTP authentication events
 - **3**: Contact list (NIP-02, for relay discovery)
 - **10002**: Relay list metadata (NIP-65, for relay discovery)
-- **1**: Text note (NIP-01, for relay write proof, fallback)
+- **24**: Public message (NIP-24, for relay write proof)
 - **5**: Event deletion request (NIP-09)
 
 ### Custom Event Kinds
@@ -227,7 +227,7 @@ Instead of traditional rate limiting, users must prove they can write to at leas
    - User publishes a NIP-98 event (kind 27235) to a default relay
    - Event must be within 60 seconds (per NIP-98 spec)
    - Server verifies event exists on relay
-   - Alternative: User publishes kind 1 text note (5-minute window)
+   - Alternative: User publishes kind 24 public message (5-minute window)
 
 2. **Verification**:
    - Server queries relay for the proof event

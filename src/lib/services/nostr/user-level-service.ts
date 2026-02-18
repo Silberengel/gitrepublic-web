@@ -36,7 +36,7 @@ export async function checkRelayWriteAccess(
   }
 
   try {
-    // Create a proof event (kind 1 text note)
+    // Create a proof event (kind 24 public message)
     const proofEventTemplate = createProofEvent(
       userPubkeyHex,
       `gitrepublic-write-proof-${Date.now()}`

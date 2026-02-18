@@ -50,7 +50,7 @@
   let commitMessage = $state('');
   let userPubkey = $state<string | null>(null);
   let showCommitDialog = $state(false);
-  let activeTab = $state<'files' | 'history' | 'tags' | 'issues' | 'prs' | 'docs'>('files');
+  let activeTab = $state<'files' | 'history' | 'tags' | 'issues' | 'prs' | 'docs' | 'discussions'>('discussions');
 
   // Navigation stack for directories
   let pathStack = $state<string[]>([]);
@@ -110,6 +110,10 @@
   let documentationContent = $state<string | null>(null);
   let documentationHtml = $state<string | null>(null);
   let loadingDocs = $state(false);
+
+  // Discussions
+  let discussions = $state<Array<{ type: 'thread' | 'comments'; id: string; title: string; content: string; author: string; createdAt: number; comments?: Array<{ id: string; content: string; author: string; createdAt: number }> }>>([]);
+  let loadingDiscussions = $state(false);
 
   // README
   let readmeContent = $state<string | null>(null);
@@ -476,6 +480,86 @@
       alert(`✗ Fork failed!\n\n${errorMessage}`);
     } finally {
       forking = false;
+    }
+  }
+
+  async function loadDiscussions() {
+    if (repoNotFound) return;
+    loadingDiscussions = true;
+    error = null;
+    try {
+      const decoded = nip19.decode(npub);
+      if (decoded.type !== 'npub') {
+        throw new Error('Invalid npub format');
+      }
+      const repoOwnerPubkey = decoded.data as string;
+
+      // Fetch repo announcement to get chat-relay tags and announcement ID
+      const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
+      const events = await client.fetchEvents([
+        {
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          authors: [repoOwnerPubkey],
+          '#d': [repo],
+          limit: 1
+        }
+      ]);
+
+      if (events.length === 0) {
+        discussions = [];
+        return;
+      }
+
+      const announcement = events[0];
+      const chatRelays = announcement.tags
+        .filter(t => t[0] === 'chat-relay')
+        .flatMap(t => t.slice(1))
+        .filter(url => url && typeof url === 'string') as string[];
+
+      // Get default relays
+      const { getGitUrl } = await import('$lib/config.js');
+      const { DiscussionsService } = await import('$lib/services/nostr/discussions-service.js');
+      
+      // Get user's relays if available
+      let combinedRelays = DEFAULT_NOSTR_RELAYS;
+      if (userPubkey) {
+        try {
+          const { outbox } = await getUserRelays(userPubkey, client);
+          combinedRelays = combineRelays(outbox);
+        } catch (err) {
+          console.warn('Failed to get user relays, using defaults:', err);
+        }
+      }
+
+      const discussionsService = new DiscussionsService(combinedRelays);
+      const discussionEntries = await discussionsService.getDiscussions(
+        repoOwnerPubkey,
+        repo,
+        announcement.id,
+        announcement.pubkey,
+        chatRelays,
+        combinedRelays
+      );
+
+      discussions = discussionEntries.map(entry => ({
+        type: entry.type,
+        id: entry.id,
+        title: entry.title,
+        content: entry.content,
+        author: entry.author,
+        createdAt: entry.createdAt,
+        comments: entry.comments?.map(c => ({
+          id: c.id,
+          content: c.content,
+          author: c.pubkey,
+          createdAt: c.created_at
+        }))
+      }));
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to load discussions';
+      console.error('Error loading discussions:', err);
+    } finally {
+      loadingDiscussions = false;
     }
   }
 
@@ -1323,6 +1407,8 @@
         loadPRs();
       } else if (activeTab === 'docs') {
         loadDocumentation();
+      } else if (activeTab === 'discussions') {
+        loadDiscussions();
       }
     }
   });
@@ -1515,6 +1601,13 @@
 
     <!-- Tabs -->
     <div class="tabs">
+      <button 
+        class="tab-button" 
+        class:active={activeTab === 'discussions'}
+        onclick={() => activeTab = 'discussions'}
+      >
+        Discussions
+      </button>
       <button 
         class="tab-button" 
         class:active={activeTab === 'files'}
@@ -1936,6 +2029,55 @@
                   <div class="pr-body">
                     {@html pr.content.replace(/\n/g, '<br>')}
                   </div>
+                </div>
+              {/each}
+            {/if}
+          </div>
+        {/if}
+
+        {#if activeTab === 'discussions'}
+          <div class="discussions-content">
+            {#if loadingDiscussions}
+              <div class="loading">Loading discussions...</div>
+            {:else if discussions.length === 0}
+              <div class="empty-state">
+                <p>No discussions found. Check your repository settings to configure chat relays for kind 11 threads.</p>
+              </div>
+            {:else}
+              {#each discussions as discussion}
+                <div class="discussion-item">
+                  <div class="discussion-header">
+                    <h3>{discussion.title}</h3>
+                    <div class="discussion-meta">
+                      {#if discussion.type === 'thread'}
+                        <span class="discussion-type">Thread</span>
+                      {:else}
+                        <span class="discussion-type">Comments</span>
+                      {/if}
+                      <span>Created {new Date(discussion.createdAt * 1000).toLocaleString()}</span>
+                    </div>
+                  </div>
+                  {#if discussion.content}
+                    <div class="discussion-body">
+                      <p>{discussion.content}</p>
+                    </div>
+                  {/if}
+                  {#if discussion.comments && discussion.comments.length > 0}
+                    <div class="comments-section">
+                      <h4>Comments ({discussion.comments.length})</h4>
+                      {#each discussion.comments as comment}
+                        <div class="comment-item">
+                          <div class="comment-meta">
+                            <UserBadge pubkey={comment.author} />
+                            <span>{new Date(comment.createdAt * 1000).toLocaleString()}</span>
+                          </div>
+                          <div class="comment-content">
+                            <p>{comment.content}</p>
+                          </div>
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
                 </div>
               {/each}
             {/if}

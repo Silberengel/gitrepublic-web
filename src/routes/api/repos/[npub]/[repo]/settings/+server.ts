@@ -53,6 +53,10 @@ export const GET: RequestHandler = createRepoGetHandler(
       .filter(t => t[0] === 'maintainers')
       .flatMap(t => t.slice(1))
       .filter(m => m && typeof m === 'string') as string[];
+    const chatRelays = announcement.tags
+      .filter(t => t[0] === 'chat-relay')
+      .flatMap(t => t.slice(1))
+      .filter(url => url && typeof url === 'string') as string[];
     const privacyInfo = await maintainerService.getPrivacyInfo(currentOwner, context.repo);
     const isPrivate = privacyInfo.isPrivate;
 
@@ -61,6 +65,7 @@ export const GET: RequestHandler = createRepoGetHandler(
       description,
       cloneUrls,
       maintainers,
+      chatRelays,
       isPrivate,
       owner: currentOwner,
       npub: context.npub
@@ -79,7 +84,7 @@ export const POST: RequestHandler = withRepoValidation(
     }
 
     const body = await event.request.json();
-    const { name, description, cloneUrls, maintainers, isPrivate } = body;
+    const { name, description, cloneUrls, maintainers, chatRelays, isPrivate } = body;
 
     // Check if user is owner
     const currentOwner = await ownershipTransferService.getCurrentOwner(repoContext.repoOwnerPubkey, repoContext.repo);
@@ -150,7 +155,8 @@ export const POST: RequestHandler = withRepoValidation(
       ['clone', ...cloneUrlList],
       ['relays', ...DEFAULT_NOSTR_RELAYS],
       ...(isPrivate ? [['private', 'true']] : []),
-      ...(maintainers || []).map((m: string) => ['maintainers', m])
+      ...(maintainers || []).map((m: string) => ['maintainers', m]),
+      ...(chatRelays && chatRelays.length > 0 ? [['chat-relay', ...chatRelays]] : [])
     ];
 
     // Preserve other tags from original announcement
