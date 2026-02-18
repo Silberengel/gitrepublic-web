@@ -34,13 +34,22 @@
       try {
         userPubkey = await getPublicKeyWithNIP07();
         // Convert npub to hex for API calls
-        try {
-          const decoded = nip19.decode(userPubkey);
-          if (decoded.type === 'npub') {
-            userPubkeyHex = decoded.data as string;
+        // NIP-07 may return either npub or hex
+        if (/^[0-9a-f]{64}$/i.test(userPubkey)) {
+          // Already hex format
+          userPubkeyHex = userPubkey.toLowerCase();
+        } else {
+          // Try to decode as npub
+          try {
+            const decoded = nip19.decode(userPubkey);
+            if (decoded.type === 'npub') {
+              userPubkeyHex = decoded.data as string;
+            } else {
+              userPubkeyHex = userPubkey; // Unknown type, use as-is
+            }
+          } catch {
+            userPubkeyHex = userPubkey; // Assume it's already hex or use as-is
           }
-        } catch {
-          userPubkeyHex = userPubkey; // Assume it's already hex
         }
       } catch (err) {
         console.warn('Failed to load user pubkey:', err);

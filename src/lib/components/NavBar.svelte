@@ -12,8 +12,10 @@
   let userPubkey = $state<string | null>(null);
   let mobileMenuOpen = $state(false);
 
-  onMount(async () => {
-    await checkAuth();
+  onMount(() => {
+    // Check auth asynchronously (don't await in onMount cleanup)
+    checkAuth();
+    
     // Update activity on mount
     updateActivity();
     
@@ -41,6 +43,13 @@
   }
 
   async function checkAuth() {
+    // Don't check auth if user store indicates user is logged out
+    const currentState = $userStore;
+    if (!currentState.userPubkey) {
+      userPubkey = null;
+      return;
+    }
+    
     try {
       if (isNIP07Available()) {
         userPubkey = await getPublicKeyWithNIP07();
@@ -63,14 +72,15 @@
     }
   }
 
-  function logout() {
+  async function logout() {
     userPubkey = null;
     // Reset user store
     userStore.reset();
     // Clear activity tracking
     clearActivity();
     // Navigate to home page to reset all component state to anonymous
-    goto('/');
+    // Use replace to prevent back button from going back to logged-in state
+    await goto('/', { replaceState: true, invalidateAll: true });
   }
 
   function isActive(path: string): boolean {

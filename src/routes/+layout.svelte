@@ -21,6 +21,9 @@
   let checkingUserLevel = $state(false);
 
   onMount(() => {
+    // Only run client-side code
+    if (typeof window === 'undefined') return;
+    
     // Check for saved theme preference or default to dark
     const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | null;
     if (savedTheme === 'light' || savedTheme === 'dark') {
@@ -32,14 +35,12 @@
     applyTheme();
 
     // Watch for system theme changes (only if user hasn't set a preference)
-    if (typeof window !== 'undefined') {
-      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-        if (!localStorage.getItem('theme')) {
-          theme = e.matches ? 'dark' : 'light';
-          applyTheme();
-        }
-      });
-    }
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+      if (!localStorage.getItem('theme')) {
+        theme = e.matches ? 'dark' : 'light';
+        applyTheme();
+      }
+    });
     
     // Check for session expiry (24 hours)
     if (isSessionExpired()) {
@@ -81,6 +82,9 @@
   });
   
   async function checkUserLevel() {
+    // Only run client-side
+    if (typeof window === 'undefined') return;
+    
     // Skip if already checking or if user store is already set
     const currentState = $userStore;
     if (checkingUserLevel || (currentState.userPubkey && currentState.userLevel !== 'strictly_rate_limited')) {

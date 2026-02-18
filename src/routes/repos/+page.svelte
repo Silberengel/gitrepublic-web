@@ -48,45 +48,56 @@
       if (!userPubkey) return;
       
       // Convert npub to hex for API calls
-      try {
-        const decoded = nip19.decode(userPubkey);
-        if (decoded.type === 'npub') {
-          userPubkeyHex = decoded.data as string;
-          contactPubkeys.add(userPubkeyHex); // Include user's own repos
-
-          // Fetch user's kind 3 contact list
-          const contactEvents = await nostrClient.fetchEvents([
-            {
-              kinds: [KIND.CONTACT_LIST],
-              authors: [userPubkeyHex],
-              limit: 1
-            }
-          ]);
-          
-          if (contactEvents.length > 0) {
-            const contactEvent = contactEvents[0];
-            // Extract pubkeys from 'p' tags
-            for (const tag of contactEvent.tags) {
-              if (tag[0] === 'p' && tag[1]) {
-                let pubkey = tag[1];
-                // Try to decode if it's an npub
-                try {
-                  const decoded = nip19.decode(pubkey);
-                  if (decoded.type === 'npub') {
-                    pubkey = decoded.data as string;
-                  }
-                } catch {
-                  // Assume it's already a hex pubkey
+      // NIP-07 may return either npub or hex, so check format first
+      if (/^[0-9a-f]{64}$/i.test(userPubkey)) {
+        // Already hex format
+        userPubkeyHex = userPubkey.toLowerCase();
+        contactPubkeys.add(userPubkeyHex); // Include user's own repos
+      } else {
+        // Try to decode as npub
+        try {
+          const decoded = nip19.decode(userPubkey);
+          if (decoded.type === 'npub') {
+            userPubkeyHex = decoded.data as string;
+            contactPubkeys.add(userPubkeyHex); // Include user's own repos
+          }
+        } catch (err) {
+          // If decode fails, might still be hex or invalid - skip
+          console.warn('Failed to decode user pubkey:', err);
+        }
+      }
+      
+      if (userPubkeyHex) {
+        // Fetch user's kind 3 contact list
+        const contactEvents = await nostrClient.fetchEvents([
+          {
+            kinds: [KIND.CONTACT_LIST],
+            authors: [userPubkeyHex],
+            limit: 1
+          }
+        ]);
+        
+        if (contactEvents.length > 0) {
+          const contactEvent = contactEvents[0];
+          // Extract pubkeys from 'p' tags
+          for (const tag of contactEvent.tags) {
+            if (tag[0] === 'p' && tag[1]) {
+              let pubkey = tag[1];
+              // Try to decode if it's an npub
+              try {
+                const decoded = nip19.decode(pubkey);
+                if (decoded.type === 'npub') {
+                  pubkey = decoded.data as string;
                 }
-                if (pubkey) {
-                  contactPubkeys.add(pubkey);
-                }
+              } catch {
+                // Assume it's already a hex pubkey
+              }
+              if (pubkey) {
+                contactPubkeys.add(pubkey);
               }
             }
           }
         }
-      } catch (err) {
-        console.warn('Failed to decode user pubkey:', err);
       }
     } catch (err) {
       console.warn('Failed to load user or contacts:', err);

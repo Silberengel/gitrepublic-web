@@ -118,15 +118,25 @@ export async function determineUserLevel(
 
 /**
  * Helper to decode npub to hex if needed
+ * Handles both npub (bech32) and hex formats
  */
 export function decodePubkey(pubkey: string): string | null {
+  if (!pubkey) return null;
+  
+  // Check if it's already hex (64 characters, hex format)
+  if (/^[0-9a-f]{64}$/i.test(pubkey)) {
+    return pubkey.toLowerCase();
+  }
+  
+  // Try to decode as npub (bech32)
   try {
     const decoded = nip19.decode(pubkey);
     if (decoded.type === 'npub') {
       return decoded.data as string;
     }
-    return pubkey; // Assume it's already hex
+    return pubkey; // Unknown type, return as-is
   } catch {
-    return pubkey; // Assume it's already hex
+    // Not a valid npub, assume it's already hex or return as-is
+    return pubkey;
   }
 }
