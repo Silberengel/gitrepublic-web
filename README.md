@@ -351,7 +351,7 @@ See `docs/SECURITY.md` and `docs/SECURITY_IMPLEMENTATION.md` for detailed inform
 
 ## Environment Variables
 
-- `NOSTRGIT_SECRET_KEY`: User's nsec (bech32 or hex) for client-side git operations via credential helper (optional)
+- `NOSTRGIT_SECRET_KEY`: User's Nostr private key (nsec bech32 or hex) for git command-line operations via credential helper. Required for `git clone`, `git push`, and `git pull` operations from the command line. See [Git Command Line Setup](#git-command-line-setup) above.
 - `GIT_REPO_ROOT`: Path to store git repositories (default: `/repos`)
 - `GIT_DOMAIN`: Domain for git repositories (default: `localhost:6543`)
 - `NOSTR_RELAYS`: Comma-separated list of Nostr relays (default: `wss://theforest.nostr1.com`)
@@ -446,22 +446,61 @@ The server will automatically locate `git-http-backend` in common locations.
 
 The server will automatically provision the repository.
 
+### Git Command Line Setup
+
+To use git from the command line with GitRepublic, you need to configure the credential helper. This enables automatic NIP-98 authentication for all git operations (clone, push, pull).
+
+**Quick Setup:**
+
+1. **Set your Nostr private key**:
+   ```bash
+   export NOSTRGIT_SECRET_KEY="nsec1..."
+   # Or add to ~/.bashrc or ~/.zshrc for persistence
+   echo 'export NOSTRGIT_SECRET_KEY="nsec1..."' >> ~/.bashrc
+   ```
+
+2. **Configure git credential helper**:
+   ```bash
+   # For a specific domain (recommended)
+   git config --global credential.https://your-domain.com.helper '!node /absolute/path/to/gitrepublic-web/scripts/git-credential-nostr.js'
+   
+   # For localhost development
+   git config --global credential.http://localhost:5173.helper '!node /absolute/path/to/gitrepublic-web/scripts/git-credential-nostr.js'
+   ```
+
+3. **Make the script executable**:
+   ```bash
+   chmod +x /absolute/path/to/gitrepublic-web/scripts/git-credential-nostr.js
+   ```
+
+**Important Notes:**
+- The `NOSTRGIT_SECRET_KEY` must match the repository owner or you must have maintainer permissions
+- The credential helper generates fresh NIP-98 tokens for each request (per-request authentication)
+- Never commit your private key to version control
+
+For complete setup instructions and troubleshooting, see [docs/GIT_CREDENTIAL_HELPER.md](./docs/GIT_CREDENTIAL_HELPER.md).
+
 ### Cloning a Repository
 
 ```bash
+# Public repository
+git clone https://{domain}/{npub}/{repo-name}.git
+
+# Private repository (requires credential helper setup)
 git clone https://{domain}/{npub}/{repo-name}.git
 ```
-
-For private repositories, configure git with NIP-98 authentication.
 
 ### Pushing to a Repository
 
 ```bash
+# Add remote
 git remote add origin https://{domain}/{npub}/{repo-name}.git
+
+# Push (requires credential helper setup)
 git push origin main
 ```
 
-Requires NIP-98 authentication. Your git client needs to support NIP-98 or you can use a custom credential helper.
+The credential helper will automatically generate NIP-98 authentication tokens for push operations.
 
 ### Viewing Repositories
 

@@ -3,7 +3,7 @@
  * Handles git clone, push, pull operations via git-http-backend
  */
 
-import { error } from '@sveltejs/kit';
+import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { RepoManager } from '$lib/services/git/repo-manager.js';
 import { requireNpubHex } from '$lib/utils/npub-utils.js';
@@ -22,7 +22,9 @@ import logger from '$lib/services/logger.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 import { isValidBranchName, sanitizeError } from '$lib/utils/security.js';
 
-const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
+// Resolve GIT_REPO_ROOT to absolute path (handles both relative and absolute paths)
+const repoRootEnv = process.env.GIT_REPO_ROOT || '/repos';
+const repoRoot = resolve(repoRootEnv);
 const repoManager = new RepoManager(repoRoot);
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
@@ -145,6 +147,56 @@ function extractCloneUrls(event: NostrEvent): string[] {
   return urls;
 }
 
+/**
+ * Normalize Authorization header from git credential helper format
+ * Git credential helper outputs username=nostr and password=<base64-event>
+ * Git HTTP backend converts this to Authorization: Basic <base64(username:password)>
+ * This function converts it back to Authorization: Nostr <base64-event> format
+ */
+function normalizeAuthHeader(authHeader: string | null): string | null {
+  if (!authHeader) {
+    return null;
+  }
+
+  // If already in Nostr format, return as-is
+  if (authHeader.startsWith('Nostr ')) {
+    return authHeader;
+  }
+
+  // If it's Basic auth, try to extract the NIP-98 event
+  if (authHeader.startsWith('Basic ')) {
+    try {
+      const base64Credentials = authHeader.slice(6); // Remove "Basic " prefix
+      const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
+      const [username, ...passwordParts] = credentials.split(':');
+      const password = passwordParts.join(':'); // Rejoin in case password contains colons
+      
+      // If username is "nostr", the password is the base64-encoded NIP-98 event
+      if (username === 'nostr' && password) {
+        // Trim whitespace and control characters that might be added during encoding
+        const trimmedPassword = password.trim().replace(/[\r\n\t\0]/g, '');
+        
+        // Validate the password is valid base64-encoded JSON before using it
+        try {
+          const testDecode = Buffer.from(trimmedPassword, 'base64').toString('utf-8');
+          JSON.parse(testDecode); // Verify it's valid JSON
+          return `Nostr ${trimmedPassword}`;
+        } catch (err) {
+          logger.warn({ error: err instanceof Error ? err.message : String(err) }, 
+            'Invalid base64-encoded NIP-98 event in Basic auth password');
+          return authHeader; // Return original header if invalid
+        }
+      }
+    } catch (err) {
+      // If decoding fails, return original header
+      logger.debug({ error: err }, 'Failed to decode Basic auth header');
+    }
+  }
+
+  // Return original header if we can't convert it
+  return authHeader;
+}
+
 export const GET: RequestHandler = async ({ params, url, request }) => {
   const path = params.path || '';
   
@@ -181,7 +233,34 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     return error(403, 'Invalid repository path');
   }
   if (!repoManager.repoExists(repoPath)) {
-    return error(404, 'Repository not found');
+    logger.warn({ repoPath, resolvedPath, repoRoot, resolvedRoot }, 'Repository not found at expected path');
+    return error(404, `Repository not found at ${resolvedPath}. Please check GIT_REPO_ROOT environment variable (currently: ${repoRoot})`);
+  }
+  
+  // Verify it's a valid git repository
+  const gitDir = join(resolvedPath, 'objects');
+  if (!existsSync(gitDir)) {
+    logger.warn({ repoPath: resolvedPath }, 'Repository path exists but is not a valid git repository');
+    return error(500, `Repository at ${resolvedPath} is not a valid git repository`);
+  }
+  
+  // Ensure http.receivepack is enabled for push operations
+  // This is required for git-http-backend to allow receive-pack service
+  // Even with GIT_HTTP_EXPORT_ALL=1, the repository config must allow it
+  if (service === 'git-receive-pack') {
+    try {
+      const { execSync } = await import('child_process');
+      // Set http.receivepack to true if not already set
+      execSync('git config http.receivepack true', { 
+        cwd: resolvedPath,
+        stdio: 'ignore',
+        timeout: 5000
+      });
+      logger.debug({ repoPath: resolvedPath }, 'Enabled http.receivepack for repository');
+    } catch (err) {
+      // Log but don't fail - git-http-backend might still work
+      logger.debug({ error: err, repoPath: resolvedPath }, 'Failed to set http.receivepack (may already be set)');
+    }
   }
 
   // Check repository privacy for clone/fetch operations
@@ -197,7 +276,9 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   const privacyInfo = await maintainerService.getPrivacyInfo(originalOwnerPubkey, repoName);
   if (privacyInfo.isPrivate) {
     // Private repos require authentication for clone/fetch
-    const authHeader = request.headers.get('Authorization');
+    const rawAuthHeader = request.headers.get('Authorization');
+    // Normalize auth header (convert Basic auth from git credential helper to Nostr format)
+    const authHeader = normalizeAuthHeader(rawAuthHeader);
     if (!authHeader || !authHeader.startsWith('Nostr ')) {
       return error(401, 'This repository is private. Authentication required.');
     }
@@ -241,12 +322,26 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     return error(500, 'git-http-backend not found. Please install git.');
   }
 
-  // Build PATH_INFO
-  // Security: Since we're setting GIT_PROJECT_ROOT to the specific repo path,
-  // PATH_INFO should be relative to that repo (just the git operation path)
-  // For info/refs: /info/refs
-  // For other operations: /{git-path}
-  const pathInfo = gitPath ? `/${gitPath}` : `/info/refs`;
+  // Build PATH_INFO using repository-per-directory mode
+  // GIT_PROJECT_ROOT points to the parent directory containing repositories
+  // PATH_INFO includes the repository name: /repo.git/info/refs
+  const repoParentDir = resolve(join(repoRoot, npub));
+  const repoRelativePath = `${repoName}.git`;
+  const gitOperationPath = gitPath ? `/${gitPath}` : `/info/refs`;
+  const pathInfo = `/${repoRelativePath}${gitOperationPath}`;
+  
+  // Debug logging for git operations
+  logger.debug({ 
+    npub, 
+    repoName, 
+    resolvedPath,
+    repoParentDir,
+    repoRelativePath,
+    pathInfo, 
+    service, 
+    gitHttpBackend,
+    method: request.method 
+  }, 'Processing git HTTP request');
 
   // Set up environment variables for git-http-backend
   // Security: Whitelist only necessary environment variables
@@ -257,7 +352,7 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     USER: process.env.USER || 'git',
     LANG: process.env.LANG || 'C.UTF-8',
     LC_ALL: process.env.LC_ALL || 'C.UTF-8',
-    GIT_PROJECT_ROOT: resolve(repoPath), // Use specific repo path, not repoRoot
+    GIT_PROJECT_ROOT: repoParentDir, // Parent directory containing repositories
     GIT_HTTP_EXPORT_ALL: '1',
     REQUEST_METHOD: request.method,
     PATH_INFO: pathInfo,
@@ -266,6 +361,14 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     CONTENT_LENGTH: request.headers.get('Content-Length') || '0',
     HTTP_USER_AGENT: request.headers.get('User-Agent') || '',
   };
+  
+  // Debug: Log environment variables (sanitized)
+  logger.debug({ 
+    GIT_PROJECT_ROOT: repoParentDir,
+    PATH_INFO: pathInfo,
+    QUERY_STRING: url.searchParams.toString(),
+    REQUEST_METHOD: request.method
+  }, 'git-http-backend environment');
   
   // Add TZ if set (for consistent timestamps)
   if (process.env.TZ) {
@@ -349,30 +452,98 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
         );
       }
       
+      // Debug: Log git-http-backend output
+      let body = Buffer.concat(chunks);
+      logger.debug({ 
+        code, 
+        bodyLength: body.length, 
+        bodyPreview: body.slice(0, 200).toString('utf-8'),
+        errorOutput: errorOutput.slice(0, 500),
+        pathInfo,
+        service
+      }, 'git-http-backend response');
+      
       if (code !== 0 && chunks.length === 0) {
         const sanitizedError = sanitizeError(errorOutput || 'Unknown error');
         resolve(error(500, `git-http-backend error: ${sanitizedError}`));
         return;
       }
-
-      const body = Buffer.concat(chunks);
       
-      // Determine content type based on service
-      let contentType = 'application/x-git-upload-pack-result';
-      if (service === 'git-receive-pack' || gitPath === 'git-receive-pack') {
+      // For info/refs requests, git-http-backend includes HTTP headers in the body
+      // We need to strip them and only send the git protocol data
+      // The format is: HTTP headers + blank line (\r\n\r\n) + git protocol data
+      if (pathInfo.includes('info/refs')) {
+        const bodyStr = body.toString('binary');
+        const headerEnd = bodyStr.indexOf('\r\n\r\n');
+        if (headerEnd !== -1) {
+          // Extract only the git protocol data (after the blank line)
+          body = Buffer.from(bodyStr.slice(headerEnd + 4), 'binary');
+          logger.debug({ 
+            originalLength: Buffer.concat(chunks).length,
+            protocolDataLength: body.length,
+            headerEnd
+          }, 'Stripped HTTP headers from info/refs response');
+        }
+      }
+      
+      // Determine content type based on request type
+      // For info/refs requests with service parameter, use the appropriate advertisement content type
+      let contentType = 'text/plain; charset=utf-8';
+      if (pathInfo.includes('info/refs')) {
+        if (service === 'git-receive-pack') {
+          // info/refs?service=git-receive-pack returns application/x-git-receive-pack-advertisement
+          contentType = 'application/x-git-receive-pack-advertisement';
+        } else if (service === 'git-upload-pack') {
+          // info/refs?service=git-upload-pack returns application/x-git-upload-pack-advertisement
+          contentType = 'application/x-git-upload-pack-advertisement';
+        } else {
+          // info/refs without service parameter is text/plain
+          contentType = 'text/plain; charset=utf-8';
+        }
+      } else if (service === 'git-receive-pack' || gitPath === 'git-receive-pack') {
+        // POST requests to git-receive-pack (push)
         contentType = 'application/x-git-receive-pack-result';
       } else if (service === 'git-upload-pack' || gitPath === 'git-upload-pack') {
+        // POST requests to git-upload-pack (fetch)
         contentType = 'application/x-git-upload-pack-result';
-      } else if (pathInfo.includes('info/refs')) {
-        contentType = 'text/plain; charset=utf-8';
       }
 
-      resolve(new Response(body, {
+      // Debug: Log response details
+      logger.debug({ 
         status: code === 0 ? 200 : 500,
+        contentType,
+        bodyLength: body.length,
+        bodyHex: body.slice(0, 100).toString('hex'),
         headers: {
           'Content-Type': contentType,
           'Content-Length': body.length.toString(),
         }
+      }, 'Sending git HTTP response');
+      
+      // Build response headers
+      // Git expects specific headers for info/refs responses
+      const headers: HeadersInit = {
+        'Content-Type': contentType,
+        'Content-Length': body.length.toString(),
+      };
+      
+      // For info/refs with service parameter, add Cache-Control header
+      if (pathInfo.includes('info/refs') && service) {
+        headers['Cache-Control'] = 'no-cache';
+      }
+      
+      // Debug: Log response details
+      logger.debug({ 
+        status: code === 0 ? 200 : 500,
+        contentType,
+        bodyLength: body.length,
+        bodyPreview: body.slice(0, 200).toString('utf-8'),
+        headers
+      }, 'Sending git HTTP response');
+      
+      resolve(new Response(body, {
+        status: code === 0 ? 200 : 500,
+        headers
       }));
     });
 
@@ -423,7 +594,34 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     return error(403, 'Invalid repository path');
   }
   if (!repoManager.repoExists(repoPath)) {
-    return error(404, 'Repository not found');
+    logger.warn({ repoPath, resolvedPath, repoRoot, resolvedRoot }, 'Repository not found at expected path');
+    return error(404, `Repository not found at ${resolvedPath}. Please check GIT_REPO_ROOT environment variable (currently: ${repoRoot})`);
+  }
+  
+  // Verify it's a valid git repository
+  const gitDir = join(resolvedPath, 'objects');
+  if (!existsSync(gitDir)) {
+    logger.warn({ repoPath: resolvedPath }, 'Repository path exists but is not a valid git repository');
+    return error(500, `Repository at ${resolvedPath} is not a valid git repository`);
+  }
+  
+  // Ensure http.receivepack is enabled for push operations
+  // This is required for git-http-backend to allow receive-pack service
+  // Even with GIT_HTTP_EXPORT_ALL=1, the repository config must allow it
+  if (gitPath === 'git-receive-pack' || path.includes('git-receive-pack')) {
+    try {
+      const { execSync } = await import('child_process');
+      // Set http.receivepack to true if not already set
+      execSync('git config http.receivepack true', { 
+        cwd: resolvedPath,
+        stdio: 'ignore',
+        timeout: 5000
+      });
+      logger.debug({ repoPath: resolvedPath }, 'Enabled http.receivepack for repository');
+    } catch (err) {
+      // Log but don't fail - git-http-backend might still work
+      logger.debug({ error: err, repoPath: resolvedPath }, 'Failed to set http.receivepack (may already be set)');
+    }
   }
 
   // Get current owner (may be different if ownership was transferred)
@@ -440,17 +638,58 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
 
   // For push operations (git-receive-pack), require NIP-98 authentication
   if (gitPath === 'git-receive-pack' || path.includes('git-receive-pack')) {
+    const rawAuthHeader = request.headers.get('Authorization');
+    
+    // Always return 401 with WWW-Authenticate if no Authorization header
+    // This ensures git calls the credential helper proactively
+    // Git requires WWW-Authenticate header on ALL 401 responses, otherwise it won't retry
+    if (!rawAuthHeader) {
+      return new Response('Authentication required. Please configure the git credential helper. See docs/GIT_CREDENTIAL_HELPER.md for setup instructions.', {
+        status: 401,
+        headers: {
+          'WWW-Authenticate': 'Basic realm="GitRepublic"',
+          'Content-Type': 'text/plain'
+        }
+      });
+    }
+    
+    // Normalize auth header (convert Basic auth from git credential helper to Nostr format)
+    const authHeader = normalizeAuthHeader(rawAuthHeader);
+    
     // Verify NIP-98 authentication
     const authResult = verifyNIP98Auth(
-      request.headers.get('Authorization'),
+      authHeader,
       requestUrl,
       request.method,
       bodyBuffer.length > 0 ? bodyBuffer : undefined
     );
 
     if (!authResult.valid) {
-      return error(401, authResult.error || 'Authentication required');
+      logger.warn({ 
+        error: authResult.error,
+        requestUrl,
+        requestMethod: request.method
+      }, 'NIP-98 authentication failed for push');
+      
+      // Always return 401 with WWW-Authenticate header, even if Authorization was present
+      // This ensures git retries with the credential helper
+      // Git requires WWW-Authenticate on ALL 401 responses, otherwise it won't retry
+      const errorMessage = authResult.error || 'Authentication required';
+      
+      return new Response(errorMessage, {
+        status: 401,
+        headers: {
+          'WWW-Authenticate': 'Basic realm="GitRepublic"',
+          'Content-Type': 'text/plain'
+        }
+      });
     }
+    
+    logger.debug({ 
+      pubkey: authResult.pubkey,
+      requestUrl,
+      requestMethod: request.method
+    }, 'NIP-98 authentication successful for push');
 
     // Verify pubkey is current repo owner or maintainer
     const isMaintainer = await maintainerService.isMaintainer(
@@ -504,10 +743,11 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     return error(500, 'git-http-backend not found. Please install git.');
   }
 
-  // Build PATH_INFO
-  // Security: Since we're setting GIT_PROJECT_ROOT to the specific repo path,
-  // PATH_INFO should be relative to that repo (just the git operation path)
-  const pathInfo = gitPath ? `/${gitPath}` : `/`;
+  // Build PATH_INFO using repository-per-directory mode (same as GET handler)
+  const repoParentDir = resolve(join(repoRoot, npub));
+  const repoRelativePath = `${repoName}.git`;
+  const gitOperationPath = gitPath ? `/${gitPath}` : `/`;
+  const pathInfo = `/${repoRelativePath}${gitOperationPath}`;
 
   // Set up environment variables for git-http-backend
   // Security: Whitelist only necessary environment variables
@@ -518,7 +758,7 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     USER: process.env.USER || 'git',
     LANG: process.env.LANG || 'C.UTF-8',
     LC_ALL: process.env.LC_ALL || 'C.UTF-8',
-    GIT_PROJECT_ROOT: resolve(repoPath), // Use specific repo path, not repoRoot
+    GIT_PROJECT_ROOT: repoParentDir, // Parent directory containing repositories
     GIT_HTTP_EXPORT_ALL: '1',
     REQUEST_METHOD: request.method,
     PATH_INFO: pathInfo,
@@ -527,6 +767,21 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     CONTENT_LENGTH: bodyBuffer.length.toString(),
     HTTP_USER_AGENT: request.headers.get('User-Agent') || '',
   };
+  
+  // Pass Authorization header to git-http-backend (if present)
+  // Git-http-backend uses HTTP_AUTHORIZATION environment variable
+  const authHeader = request.headers.get('Authorization');
+  if (authHeader) {
+    envVars.HTTP_AUTHORIZATION = authHeader;
+  }
+  
+  // Debug: Log environment variables (sanitized)
+  logger.debug({ 
+    GIT_PROJECT_ROOT: repoParentDir,
+    PATH_INFO: pathInfo,
+    QUERY_STRING: url.searchParams.toString(),
+    REQUEST_METHOD: request.method
+  }, 'git-http-backend environment (POST)');
   
   // Add TZ if set (for consistent timestamps)
   if (process.env.TZ) {

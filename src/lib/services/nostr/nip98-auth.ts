@@ -40,7 +40,8 @@ export function verifyNIP98Auth(
 
   try {
     // Decode base64 event
-    const base64Event = authHeader.slice(7); // Remove "Nostr " prefix
+    // "Nostr " is 6 characters (N-o-s-t-r-space), so we slice from index 6
+    const base64Event = authHeader.slice(6).trim(); // Remove "Nostr " prefix and trim whitespace
     const eventJson = Buffer.from(base64Event, 'base64').toString('utf-8');
     const nostrEvent: NostrEvent = JSON.parse(eventJson);
 

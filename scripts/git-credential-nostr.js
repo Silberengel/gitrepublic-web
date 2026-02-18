@@ -19,8 +19,10 @@
  */
 
 import { createHash } from 'crypto';
-import { getEventHash, signEvent, getPublicKey } from 'nostr-tools';
+import { finalizeEvent, getPublicKey } from 'nostr-tools';
 import { decode } from 'nostr-tools/nip19';
+import { readFileSync, existsSync } from 'fs';
+import { join, resolve } from 'path';
 
 // NIP-98 auth event kind
 const KIND_NIP98_AUTH = 27235;
@@ -59,12 +61,101 @@ function readInput() {
 }
 
 /**
+ * Try to extract the git remote URL path from .git/config
+ * This is used as a fallback when git calls us with wwwauth[] but no path
+ */
+function tryGetPathFromGitRemote(host, protocol) {
+  try {
+    // Git sets GIT_DIR environment variable when calling credential helpers
+    // Use it if available, otherwise try to find .git directory
+    let gitDir = process.env.GIT_DIR;
+    let configPath = null;
+    
+    if (gitDir) {
+      // GIT_DIR might point directly to .git directory or to the config file
+      if (existsSync(gitDir) && existsSync(join(gitDir, 'config'))) {
+        configPath = join(gitDir, 'config');
+      } else if (existsSync(gitDir) && gitDir.endsWith('config')) {
+        configPath = gitDir;
+      }
+    }
+    
+    // If GIT_DIR didn't work, try to find .git directory starting from current working directory
+    if (!configPath) {
+      let currentDir = process.cwd();
+      const maxDepth = 10; // Limit search depth
+      let depth = 0;
+      
+      while (depth < maxDepth) {
+        const potentialGitDir = join(currentDir, '.git');
+        if (existsSync(potentialGitDir) && existsSync(join(potentialGitDir, 'config'))) {
+          configPath = join(potentialGitDir, 'config');
+          break;
+        }
+        
+        // Move up one directory
+        const parentDir = resolve(currentDir, '..');
+        if (parentDir === currentDir) {
+          // Reached filesystem root
+          break;
+        }
+        currentDir = parentDir;
+        depth++;
+      }
+    }
+    
+    if (!configPath || !existsSync(configPath)) {
+      return null;
+    }
+    
+    // Read git config
+    const config = readFileSync(configPath, 'utf-8');
+    
+    // Find remotes that match our host
+    // Match: [remote "name"] ... url = http://host/path
+    const remoteRegex = /\[remote\s+"([^"]+)"\][\s\S]*?url\s*=\s*([^\n]+)/g;
+    let match;
+    while ((match = remoteRegex.exec(config)) !== null) {
+      const remoteUrl = match[2].trim();
+      
+      // Check if this remote URL matches our host
+      try {
+        const url = new URL(remoteUrl);
+        const remoteHost = url.hostname + (url.port ? ':' + url.port : '');
+        if (url.host === host || remoteHost === host) {
+          // Extract path from remote URL
+          let path = url.pathname;
+          if (path && path.includes('git-receive-pack')) {
+            // Already has git-receive-pack in path
+            return path;
+          } else if (path && path.endsWith('.git')) {
+            // Add git-receive-pack to path
+            return path + '/git-receive-pack';
+          } else if (path) {
+            // Path exists but doesn't end with .git, try adding /git-receive-pack
+            return path + '/git-receive-pack';
+          }
+        }
+      } catch (e) {
+        // Not a valid URL, skip
+        continue;
+      }
+    }
+  } catch (err) {
+    // If anything fails, return null silently
+  }
+  
+  return null;
+}
+
+/**
  * Normalize URL for NIP-98 (remove trailing slashes, ensure consistent format)
+ * This must match the normalization used by the server in nip98-auth.ts
  */
 function normalizeUrl(url) {
   try {
     const parsed = new URL(url);
-    // Remove trailing slash from pathname
+    // Remove trailing slash from pathname (must match server normalization)
     parsed.pathname = parsed.pathname.replace(/\/$/, '');
     return parsed.toString();
   } catch {
@@ -83,9 +174,13 @@ function calculateBodyHash(body) {
 
 /**
  * Create and sign a NIP-98 authentication event
+ * @param privateKeyBytes - Private key as Uint8Array (32 bytes)
+ * @param url - Request URL
+ * @param method - HTTP method (GET, POST, etc.)
+ * @param bodyHash - Optional SHA256 hash of request body (for POST requests)
  */
-function createNIP98AuthEvent(privateKey, url, method, bodyHash = null) {
-  const pubkey = getPublicKey(privateKey);
+function createNIP98AuthEvent(privateKeyBytes, url, method, bodyHash = null) {
+  const pubkey = getPublicKey(privateKeyBytes);
   const tags = [
     ['u', normalizeUrl(url)],
     ['method', method.toUpperCase()]
@@ -95,7 +190,7 @@ function createNIP98AuthEvent(privateKey, url, method, bodyHash = null) {
     tags.push(['payload', bodyHash]);
   }
   
-  const event = {
+  const eventTemplate = {
     kind: KIND_NIP98_AUTH,
     pubkey,
     created_at: Math.floor(Date.now() / 1000),
@@ -103,11 +198,10 @@ function createNIP98AuthEvent(privateKey, url, method, bodyHash = null) {
     tags
   };
   
-  // Sign the event
-  event.id = getEventHash(event);
-  event.sig = signEvent(event, privateKey);
+  // Sign the event using finalizeEvent (which computes id and sig)
+  const signedEvent = finalizeEvent(eventTemplate, privateKeyBytes);
   
-  return event;
+  return signedEvent;
 }
 
 /**
@@ -133,12 +227,14 @@ async function main() {
       }
       
       // Parse private key (handle both nsec and hex formats)
-      let privateKey;
+      // Convert to Uint8Array for nostr-tools functions
+      let privateKeyBytes;
       if (nsec.startsWith('nsec')) {
         try {
           const decoded = decode(nsec);
           if (decoded.type === 'nsec') {
-            privateKey = decoded.data;
+            // decoded.data is already Uint8Array for nsec
+            privateKeyBytes = decoded.data;
           } else {
             throw new Error('Invalid nsec format - decoded type is not nsec');
           }
@@ -152,33 +248,121 @@ async function main() {
           console.error('Error: Hex private key must be 64 characters (32 bytes)');
           process.exit(1);
         }
-        privateKey = nsec;
+        // Convert hex string to Uint8Array
+        privateKeyBytes = new Uint8Array(32);
+        for (let i = 0; i < 32; i++) {
+          privateKeyBytes[i] = parseInt(nsec.slice(i * 2, i * 2 + 2), 16);
+        }
       }
       
       // Extract URL components from input
-      const protocol = input.protocol || 'https';
-      const host = input.host;
-      const path = input.path || '';
-      
-      if (!host) {
-        console.error('Error: No host specified in credential request');
-        process.exit(1);
+      // Git credential helper protocol passes: protocol, host, path (and sometimes username, password)
+      // Git may provide either individual attributes (protocol, host, path) or a url attribute
+      // If we have a url, use it; otherwise construct from individual attributes
+      let url;
+      if (input.url) {
+        // Git provided a url attribute - use it directly
+        url = input.url;
+      } else {
+        // Construct URL from individual attributes
+        const protocol = input.protocol || 'https';
+        const host = input.host;
+        let path = input.path || '';
+        const wwwauth = input['wwwauth[]'] || input.wwwauth;
+        
+        if (!host) {
+          console.error('Error: No host specified in credential request');
+          process.exit(1);
+        }
+        
+        // If path is missing, try to extract it from git remote URL
+        // This happens when git calls us reactively after a 401 with wwwauth[] but no path
+        if (!path) {
+          if (wwwauth) {
+            // Try to get path from git remote URL
+            const extractedPath = tryGetPathFromGitRemote(host, protocol);
+            if (extractedPath) {
+              path = extractedPath;
+            } else {
+              // Exit without output - git should call us again with the full path when it retries
+              process.exit(0);
+            }
+          } else {
+            // Exit without output - git will call us again with the full path
+            process.exit(0);
+          }
+        }
+        
+        // Build full URL (include query string if present)
+        const query = input.query || '';
+        const fullPath = query ? `${path}?${query}` : path;
+        url = `${protocol}://${host}${fullPath}`;
       }
       
-      // Build full URL
-      const url = `${protocol}://${host}${path}`;
+      // Parse URL to extract components for method detection
+      let urlPath = '';
+      try {
+        const urlObj = new URL(url);
+        urlPath = urlObj.pathname;
+      } catch (err) {
+        // If URL parsing fails, try to extract path from the URL string
+        const match = url.match(/https?:\/\/[^\/]+(\/.*)/);
+        urlPath = match ? match[1] : '';
+      }
       
       // Determine HTTP method based on git operation
       // Git credential helper doesn't know the HTTP method, but we can infer it:
       // - If path contains 'git-receive-pack', it's a push (POST)
-      // - Otherwise, it's likely a fetch/clone (GET)
-      // Note: For initial info/refs requests, git uses GET, so we default to GET
-      // For actual push operations, git will make POST requests to git-receive-pack
-      // The server will validate the method matches, so we need to handle this carefully
-      const method = path.includes('git-receive-pack') ? 'POST' : 'GET';
+      // - If path contains 'git-upload-pack', it's a fetch (GET)
+      // - For info/refs requests, check the service query parameter
+      let method = 'GET';
+      let authUrl = url; // The URL for which we generate credentials
+      
+      // Parse query string from URL if present
+      let query = '';
+      try {
+        const urlObj = new URL(url);
+        query = urlObj.search.slice(1); // Remove leading '?'
+      } catch (err) {
+        // If URL parsing fails, try to extract query from the URL string
+        const match = url.match(/\?(.+)$/);
+        query = match ? match[1] : '';
+      }
+      
+      if (urlPath.includes('git-receive-pack')) {
+        // Direct POST request to git-receive-pack
+        method = 'POST';
+        authUrl = url;
+      } else if (urlPath.includes('git-upload-pack')) {
+        // Direct GET request to git-upload-pack
+        method = 'GET';
+        authUrl = url;
+      } else if (query.includes('service=git-receive-pack')) {
+        // info/refs?service=git-receive-pack - this is a GET request
+        // However, git might not call us again for the POST request
+        // So we need to generate credentials for the POST request that will happen next
+        // Replace info/refs with git-receive-pack in the path
+        try {
+          const urlObj = new URL(url);
+          urlObj.pathname = urlObj.pathname.replace(/\/info\/refs$/, '/git-receive-pack');
+          urlObj.search = ''; // Remove query string for POST request
+          authUrl = urlObj.toString();
+        } catch (err) {
+          // Fallback: string replacement
+          authUrl = url.replace(/\/info\/refs(\?.*)?$/, '/git-receive-pack');
+        }
+        method = 'POST';
+      } else {
+        // Default: GET request (info/refs, etc.)
+        method = 'GET';
+        authUrl = url;
+      }
+      
+      // Normalize the URL before creating the event (must match server normalization)
+      const normalizedAuthUrl = normalizeUrl(authUrl);
       
       // Create and sign NIP-98 auth event
-      const authEvent = createNIP98AuthEvent(privateKey, url, method);
+      const authEvent = createNIP98AuthEvent(privateKeyBytes, normalizedAuthUrl, method);
       
       // Encode event as base64
       const eventJson = JSON.stringify(authEvent);
@@ -191,8 +375,11 @@ async function main() {
       console.log(`password=${base64Event}`);
       
     } else if (command === 'store') {
-      // For 'store', we don't need to do anything (credentials are generated on-demand)
-      // Just exit successfully
+      // For 'store', we don't store credentials because NIP-98 requires per-request credentials
+      // The URL and method are part of the signed event, so we can't reuse credentials
+      // However, we should NOT prevent git from storing - let other credential helpers handle it
+      // We just exit successfully without storing anything ourselves
+      // This allows git to call us again for each request
       process.exit(0);
     } else if (command === 'erase') {
       // For 'erase', we don't need to do anything

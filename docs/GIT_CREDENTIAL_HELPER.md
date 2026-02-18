@@ -36,10 +36,18 @@ export NOSTRGIT_SECRET_KEY="<your-64-char-hex-private-key>"
 
 ### 3. Configure git to use the credential helper
 
+**Important:** The credential helper must be called for EACH request (not just the first one), because NIP-98 requires per-request authentication tokens. Make sure it's configured BEFORE any caching credential helpers.
+
 #### Global configuration (for all GitRepublic repositories):
 
 ```bash
+# Add our helper FIRST (before any cache/store helpers)
 git config --global credential.helper '!node /absolute/path/to/gitrepublic-web/scripts/git-credential-nostr.js'
+
+# Optional: Disable credential caching to ensure our helper is always called
+git config --global credential.helper cache
+# Or remove cache helper if you want to ensure fresh credentials each time:
+# git config --global --unset credential.helper cache
 ```
 
 #### Per-domain configuration (recommended):
@@ -160,11 +168,14 @@ git pull gitrepublic-web main
 ## How It Works
 
 1. When git needs credentials, it calls the credential helper with the repository URL
-2. The helper reads your `NOSTRGIT_SECRET_KEY` environment variable (with fallbacks for backward compatibility)
-3. It creates a NIP-98 authentication event signed with your private key
-4. The signed event is base64-encoded and returned as the "password"
-5. Git sends this in the `Authorization: Nostr <base64-event>` header
-6. The GitRepublic server verifies the NIP-98 auth event and grants access
+2. The helper reads your `NOSTRGIT_SECRET_KEY` environment variable
+3. It creates a NIP-98 authentication event signed with your private key for the specific URL and HTTP method
+4. The signed event is base64-encoded and returned as `username=nostr` and `password=<base64-event>`
+5. Git converts this to `Authorization: Basic <base64(username:password)>` header
+6. The GitRepublic server detects Basic auth with username "nostr" and converts it to `Authorization: Nostr <base64-event>` format
+7. The server verifies the NIP-98 auth event (signature, URL, method, timestamp) and grants access if valid
+
+**Important:** The credential helper generates fresh credentials for each request because NIP-98 requires per-request authentication tokens. The URL and HTTP method are part of the signed event, so credentials cannot be reused.
 
 ## Troubleshooting
 
@@ -189,13 +200,39 @@ export NOSTRGIT_SECRET_KEY="nsec1..."
 - Check that the repository URL is correct
 - Ensure your key has maintainer permissions for push operations
 
-### Push operations fail
+### Push operations fail or show login dialog
 
-Push operations require POST authentication. The credential helper automatically detects push operations (when the path contains `git-receive-pack`) and generates a POST auth event. If you still have issues:
+If you see a login dialog when pushing, git isn't calling the credential helper for the POST request. This usually happens because:
 
-1. Verify you have maintainer permissions for the repository
-2. Check that branch protection rules allow your push
-3. Ensure your NOSTRGIT_SECRET_KEY is correctly set
+1. **Credential helper not configured correctly**: 
+   ```bash
+   # Check your credential helper configuration
+   git config --global --get-regexp credential.helper
+   
+   # Make sure the GitRepublic helper is configured for your domain
+   git config --global credential.http://localhost:5173.helper '!node /path/to/gitrepublic-web/scripts/git-credential-nostr.js'
+   ```
+
+2. **Other credential helpers interfering**: Git might be using cached credentials from another helper. Make sure the GitRepublic helper is listed FIRST:
+   ```bash
+   # Remove all credential helpers
+   git config --global --unset-all credential.helper
+   
+   # Add only the GitRepublic helper
+   git config --global credential.http://localhost:5173.helper '!node /path/to/gitrepublic-web/scripts/git-credential-nostr.js'
+   ```
+
+3. **NOSTRGIT_SECRET_KEY not set**: Make sure the environment variable is set in the shell where git runs:
+   ```bash
+   export NOSTRGIT_SECRET_KEY="nsec1..."
+   ```
+
+4. **Wrong private key**: Ensure your `NOSTRGIT_SECRET_KEY` matches the repository owner or you have maintainer permissions for the repository you're pushing to.
+
+5. **Authorization failure (403)**: If authentication succeeds but push fails with 403, check:
+   - Your pubkey matches the repository owner, OR
+   - You have maintainer permissions for the repository
+   - Branch protection rules allow your push
 
 ## Security Best Practices
 
