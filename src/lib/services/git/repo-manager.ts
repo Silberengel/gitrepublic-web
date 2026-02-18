@@ -163,6 +163,41 @@ export class RepoManager {
    * Get git environment variables with Tor proxy if needed for .onion addresses
    * Security: Only whitelist necessary environment variables
    */
+  /**
+   * Inject authentication token into a git URL if needed
+   * Supports GitHub tokens via GITHUB_TOKEN environment variable
+   * Returns the original URL if no token is needed or available
+   */
+  private injectAuthToken(url: string): string {
+    try {
+      const urlObj = new URL(url);
+      
+      // If URL already has credentials, don't modify it
+      if (urlObj.username) {
+        return url;
+      }
+      
+      // Check for GitHub token
+      if (urlObj.hostname === 'github.com' || urlObj.hostname.endsWith('.github.com')) {
+        const githubToken = process.env.GITHUB_TOKEN;
+        if (githubToken) {
+          // Inject token into URL: https://token@github.com/user/repo.git
+          urlObj.username = githubToken;
+          urlObj.password = ''; // GitHub uses token as username, password is empty
+          return urlObj.toString();
+        }
+      }
+      
+      // Add support for other git hosting services here if needed
+      // e.g., GitLab: GITLAB_TOKEN, Gitea: GITEA_TOKEN, etc.
+      
+      return url;
+    } catch {
+      // URL parsing failed, return original URL
+      return url;
+    }
+  }
+
   private getGitEnvForUrl(url: string): Record<string, string> {
     // Whitelist only necessary environment variables for security
     const env: Record<string, string> = {
@@ -213,14 +248,23 @@ export class RepoManager {
   private async syncFromSingleRemote(repoPath: string, url: string, index: number): Promise<void> {
     const remoteName = `remote-${index}`;
     const git = simpleGit(repoPath);
-    const gitEnv = this.getGitEnvForUrl(url);
+    // Inject authentication token if available (e.g., GITHUB_TOKEN)
+    const authenticatedUrl = this.injectAuthToken(url);
+    const gitEnv = this.getGitEnvForUrl(authenticatedUrl);
     
     try {
       // Add remote if not exists (ignore error if already exists)
+      // Use authenticated URL so git can access private repos
       try {
-        await git.addRemote(remoteName, url);
+        await git.addRemote(remoteName, authenticatedUrl);
       } catch {
-        // Remote might already exist, that's okay
+        // Remote might already exist, that's okay - try to update it
+        try {
+          await git.removeRemote(remoteName);
+          await git.addRemote(remoteName, authenticatedUrl);
+        } catch {
+          // If update fails, continue - might be using old URL
+        }
       }
       
       // Configure git proxy for this remote if it's a .onion address
@@ -545,16 +589,25 @@ export class RepoManager {
       }
 
       // Try to clone from the first available remote URL
-      // Use simple-git for safer cloning
+      // Inject authentication token if available (e.g., GITHUB_TOKEN)
+      const authenticatedUrl = this.injectAuthToken(remoteUrls[0]);
       const git = simpleGit();
-      const gitEnv = this.getGitEnvForUrl(remoteUrls[0]);
+      const gitEnv = this.getGitEnvForUrl(authenticatedUrl);
       
-      logger.info({ npub, repoName, sourceUrl: remoteUrls[0], cloneUrls }, 'Fetching repository on-demand from remote');
+      // Log if we're using authentication (but don't log the token)
+      const isAuthenticated = authenticatedUrl !== remoteUrls[0];
+      logger.info({ 
+        npub, 
+        repoName, 
+        sourceUrl: remoteUrls[0], 
+        cloneUrls,
+        authenticated: isAuthenticated
+      }, 'Fetching repository on-demand from remote');
       
       // Clone as bare repository
       // Use gitEnv which already contains necessary whitelisted environment variables
       await new Promise<void>((resolve, reject) => {
-        const cloneProcess = spawn('git', ['clone', '--bare', remoteUrls[0], repoPath], {
+        const cloneProcess = spawn('git', ['clone', '--bare', authenticatedUrl, repoPath], {
           env: gitEnv,
           stdio: ['ignore', 'pipe', 'pipe']
         });
@@ -574,13 +627,28 @@ export class RepoManager {
             resolve();
           } else {
             const errorMsg = `Git clone failed with code ${code}: ${stderr || stdout}`;
-            logger.error({ npub, repoName, sourceUrl: remoteUrls[0], code, stderr, stdout }, 'Git clone failed');
+            // Don't log the authenticated URL (might contain token)
+            logger.error({ 
+              npub, 
+              repoName, 
+              sourceUrl: remoteUrls[0], 
+              code, 
+              stderr, 
+              stdout,
+              authenticated: isAuthenticated
+            }, 'Git clone failed');
             reject(new Error(errorMsg));
           }
         });
 
         cloneProcess.on('error', (err) => {
-          logger.error({ npub, repoName, sourceUrl: remoteUrls[0], error: err }, 'Git clone process error');
+          logger.error({ 
+            npub, 
+            repoName, 
+            sourceUrl: remoteUrls[0], 
+            error: err,
+            authenticated: isAuthenticated
+          }, 'Git clone process error');
           reject(err);
         });
       });

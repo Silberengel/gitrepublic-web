@@ -9,6 +9,7 @@
   import { ForkCountService } from '$lib/services/nostr/fork-count-service.js';
   import { getPublicKeyWithNIP07, isNIP07Available } from '$lib/services/nostr/nip07-signer.js';
   import { userStore } from '$lib/stores/user-store.js';
+  import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
 
   // Registered repos (with domain in clone URLs)
   let registeredRepos = $state<Array<{ event: NostrEvent; npub: string; repoName: string }>>([]);
@@ -692,7 +693,7 @@
                           >
                             {deletingRepo?.npub === item.npub && deletingRepo?.repo === item.repoName ? 'Deleting...' : 'Delete'}
                           </button>
-                        {:else}
+                        {:else if hasUnlimitedAccess($userStore.userLevel)}
                           <button 
                             class="register-button"
                             onclick={() => registerRepo(item.npub, item.repoName)}

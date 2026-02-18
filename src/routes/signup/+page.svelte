@@ -8,6 +8,8 @@
   import { KIND } from '../../lib/types/nostr.js';
   import type { NostrEvent } from '../../lib/types/nostr.js';
   import { nip19 } from 'nostr-tools';
+  import { userStore } from '../../lib/stores/user-store.js';
+  import { hasUnlimitedAccess } from '../../lib/utils/user-access.js';
 
   let nip07Available = $state(false);
   let loading = $state(false);
@@ -1472,8 +1474,13 @@
   </header>
 
   <main>
-
-    {#if !nip07Available}
+    {#if !hasUnlimitedAccess($userStore.userLevel)}
+      <div class="warning">
+        <p>Only users with unlimited access can create or register repositories.</p>
+        <p>Please log in with an account that has write access to Nostr relays.</p>
+        <button onclick={() => goto('/')} class="button-primary">Go to Home</button>
+      </div>
+    {:else if !nip07Available}
       <div class="warning">
         <p>NIP-07 browser extension is required to sign repository announcements.</p>
         <p>Please install a Nostr browser extension (like Alby, nos2x, or similar).</p>

@@ -13,6 +13,9 @@ import { KIND } from '$lib/types/nostr.js';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
+import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS } from '$lib/config.js';
+import { NostrClient } from '$lib/services/nostr/nostr-client.js';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
@@ -25,15 +28,30 @@ export const GET: RequestHandler = createRepoGetHandler(
     // If repo doesn't exist, try to fetch it on-demand
     if (!existsSync(repoPath)) {
       try {
-        // Fetch repository announcement from Nostr
-        const events = await nostrClient.fetchEvents([
+        // Try cached client first (cache-first lookup)
+        const filters = [
           {
             kinds: [KIND.REPO_ANNOUNCEMENT],
             authors: [context.repoOwnerPubkey],
             '#d': [context.repo],
             limit: 1
           }
-        ]);
+        ];
+        
+        let events = await nostrClient.fetchEvents(filters);
+        
+        // If no events found in cache/default relays, try all relays (default + search)
+        // But first invalidate the cache entry so we don't get the same cached empty result
+        if (events.length === 0) {
+          const allRelays = [...new Set([...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS])];
+          // Only create new client if we have additional relays to try
+          if (allRelays.length > DEFAULT_NOSTR_RELAYS.length) {
+            // Invalidate the cache entry so we can try fresh with all relays
+            eventCache.invalidate(filters);
+            const allRelaysClient = new NostrClient(allRelays);
+            events = await allRelaysClient.fetchEvents(filters);
+          }
+        }
 
         if (events.length > 0) {
           // Try to fetch the repository from remote clone URLs
@@ -74,8 +92,12 @@ export const GET: RequestHandler = createRepoGetHandler(
             }
           }
         } else {
+          // No events found - could be because:
+          // 1. Repository doesn't exist
+          // 2. Relays are unreachable
+          // 3. Repository is on different relays
           throw handleNotFoundError(
-            'Repository announcement not found in Nostr',
+            'Repository announcement not found in Nostr. This could mean: (1) the repository does not exist, (2) the configured Nostr relays are unreachable, or (3) the repository is published on different relays. Try configuring additional relays via the NOSTR_RELAYS environment variable.',
             { operation: 'getBranches', npub: context.npub, repo: context.repo }
           );
         }

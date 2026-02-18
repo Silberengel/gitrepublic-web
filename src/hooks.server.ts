@@ -84,8 +84,13 @@ export const handle: Handle = async ({ event, resolve }) => {
                                   url.pathname.endsWith('/access') || // GET /access is read-only
                                   url.pathname.endsWith('/maintainers')); // GET /maintainers is read-only
 
-  // Check rate limit (skip for Vite internal requests and read-only repo requests)
-  const rateLimitResult = (isViteInternalRequest || isReadOnlyRepoRequest)
+  // Skip rate limiting for read-only GET requests to user endpoints (profile pages)
+  const isReadOnlyUserRequest = event.request.method === 'GET' && 
+                                  url.pathname.startsWith('/api/users/') &&
+                                  (url.pathname.endsWith('/repos')); // GET /users/[npub]/repos is read-only
+
+  // Check rate limit (skip for Vite internal requests and read-only requests)
+  const rateLimitResult = (isViteInternalRequest || isReadOnlyRepoRequest || isReadOnlyUserRequest)
     ? { allowed: true, resetAt: Date.now() }
     : rateLimiter.check(rateLimitType, rateLimitIdentifier, isAnonymous);
   if (!rateLimitResult.allowed) {

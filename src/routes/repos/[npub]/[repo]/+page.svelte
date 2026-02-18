@@ -16,6 +16,7 @@
   import { userStore } from '$lib/stores/user-store.js';
   import { generateVerificationFile, VERIFICATION_FILE_PATH } from '$lib/services/nostr/repo-verification.js';
   import type { NostrEvent } from '$lib/types/nostr.js';
+  import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
 
   // Get page data for OpenGraph metadata - use $derived to make it reactive
   const pageData = $derived($page.data as {
@@ -122,6 +123,11 @@
   // Maintainer status
   let isMaintainer = $state(false);
   let loadingMaintainerStatus = $state(false);
+  
+  // Clone status
+  let isRepoCloned = $state<boolean | null>(null); // null = unknown, true = cloned, false = not cloned
+  let checkingCloneStatus = $state(false);
+  let cloning = $state(false);
   
   // Verification status
   let verificationStatus = $state<{ verified: boolean; error?: string; message?: string } | null>(null);
@@ -470,6 +476,58 @@
       }
     } catch (err) {
       console.error('Error loading fork info:', err);
+    }
+  }
+
+  async function checkCloneStatus() {
+    if (checkingCloneStatus || isRepoCloned !== null) return;
+    
+    checkingCloneStatus = true;
+    try {
+      // Check if repo exists locally by trying to fetch branches
+      // If it returns 404, repo is not cloned
+      const response = await fetch(`/api/repos/${npub}/${repo}/branches`);
+      isRepoCloned = response.ok;
+    } catch (err) {
+      isRepoCloned = false;
+    } finally {
+      checkingCloneStatus = false;
+    }
+  }
+
+  async function cloneRepository() {
+    if (cloning) return;
+    
+    cloning = true;
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/clone`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: response.statusText }));
+        throw new Error(errorData.message || `Failed to clone repository: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      isRepoCloned = true;
+      
+      if (data.alreadyExists) {
+        alert('Repository already exists locally.');
+      } else {
+        alert('Repository cloned successfully! The repository is now available on this server.');
+        // Reload the page to show the cloned repo
+        window.location.reload();
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to clone repository';
+      alert(`Error: ${errorMessage}`);
+      console.error('Error cloning repository:', err);
+    } finally {
+      cloning = false;
     }
   }
 
@@ -822,6 +880,11 @@
     await loadTags();
     await checkMaintainerStatus();
     await loadBookmarkStatus();
+    
+    // Check clone status if user has unlimited access
+    if (hasUnlimitedAccess($userStore.userLevel)) {
+      await checkCloneStatus();
+    }
     await checkVerification();
     await loadReadme();
     await loadForkInfo();
@@ -1779,6 +1842,16 @@
           >
             {loadingBookmark ? '...' : (isBookmarked ? '★' : '☆')}
           </button>
+          {#if hasUnlimitedAccess($userStore.userLevel) && (isRepoCloned === false || (isRepoCloned === null && !checkingCloneStatus))}
+            <button 
+              onclick={cloneRepository} 
+              disabled={cloning || checkingCloneStatus} 
+              class="clone-button"
+              title="Clone this repository to the server (privileged users only)"
+            >
+              {cloning ? 'Cloning...' : (checkingCloneStatus ? 'Checking...' : 'Clone to Server')}
+            </button>
+          {/if}
           {#if isMaintainer}
             <a href={`/repos/${npub}/${repo}/settings`} class="settings-button">Settings</a>
           {/if}

@@ -21,28 +21,32 @@
   let error = $state<string | null>(null);
   let userPubkey = $state<string | null>(null);
   let viewerPubkeyHex = $state<string | null>(null);
+  let lastViewerPubkeyHex = $state<string | null>(null); // Track last viewer pubkey to detect changes
+  let isReloading = $state(false); // Guard to prevent concurrent reloads
 
-  // Sync with userStore
+  // Sync with userStore - only reload if viewer pubkey actually changed
   $effect(() => {
     const currentUser = $userStore;
-    const wasLoggedIn = userPubkey !== null || viewerPubkeyHex !== null;
+    const newViewerPubkeyHex = currentUser.userPubkeyHex;
     
-    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
-      const wasDifferent = userPubkey !== currentUser.userPubkey || viewerPubkeyHex !== currentUser.userPubkeyHex;
-      userPubkey = currentUser.userPubkey;
-      viewerPubkeyHex = currentUser.userPubkeyHex;
+    // Only update if viewer pubkey actually changed (not just any store change)
+    if (newViewerPubkeyHex !== lastViewerPubkeyHex) {
+      const wasLoggedIn = viewerPubkeyHex !== null;
+      const isNowLoggedIn = newViewerPubkeyHex !== null;
       
-      // Reload profile and repos when user logs in or pubkey changes
-      if (wasDifferent) {
-        loadUserProfile().catch(err => console.warn('Failed to reload user profile after login:', err));
-      }
-    } else {
-      userPubkey = null;
-      viewerPubkeyHex = null;
+      // Update viewer pubkey
+      viewerPubkeyHex = newViewerPubkeyHex;
+      lastViewerPubkeyHex = newViewerPubkeyHex;
       
-      // Reload profile when user logs out to hide private repos
-      if (wasLoggedIn) {
-        loadUserProfile().catch(err => console.warn('Failed to reload user profile after logout:', err));
+      // Only reload if login state actually changed (logged in -> logged out or vice versa)
+      // AND we're not already loading/reloading
+      if ((wasLoggedIn !== isNowLoggedIn) && !loading && !isReloading) {
+        isReloading = true;
+        loadUserProfile()
+          .catch(err => console.warn('Failed to reload user profile after login state change:', err))
+          .finally(() => {
+            isReloading = false;
+          });
       }
     }
   });
@@ -105,17 +109,27 @@
   }
 
   async function loadUserProfile() {
+    // Prevent concurrent loads
+    if (loading && !isReloading) {
+      return;
+    }
+    
     loading = true;
     error = null;
 
     try {
-      // Decode npub to get pubkey
+      // Decode npub to get pubkey (this is the profile owner, not the viewer)
       const decoded = nip19.decode(npub);
       if (decoded.type !== 'npub') {
         error = 'Invalid npub format';
         return;
       }
-      userPubkey = decoded.data as string;
+      const profileOwnerPubkey = decoded.data as string;
+      
+      // Only update userPubkey if it's different (avoid triggering effects)
+      if (userPubkey !== profileOwnerPubkey) {
+        userPubkey = profileOwnerPubkey;
+      }
 
       // Fetch user's repositories via API (with privacy filtering)
       const url = `/api/users/${npub}/repos?domain=${encodeURIComponent(gitDomain)}`;
