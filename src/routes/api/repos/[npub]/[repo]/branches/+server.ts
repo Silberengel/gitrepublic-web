@@ -37,11 +37,18 @@ export const GET: RequestHandler = createRepoGetHandler(
 
         if (events.length > 0) {
           // Try to fetch the repository from remote clone URLs
-          const fetched = await repoManager.fetchRepoOnDemand(
-            context.npub,
-            context.repo,
-            events[0]
-          );
+          let fetched = false;
+          try {
+            fetched = await repoManager.fetchRepoOnDemand(
+              context.npub,
+              context.repo,
+              events[0]
+            );
+          } catch (fetchError) {
+            // Log the actual error for debugging
+            console.error('[Branches] Error in fetchRepoOnDemand:', fetchError);
+            // Continue to check if repo exists anyway (might have been created despite error)
+          }
           
           // Always check if repo exists after fetch attempt (might have been created)
           // Also clear cache to ensure fileManager sees it
@@ -58,7 +65,7 @@ export const GET: RequestHandler = createRepoGetHandler(
             // Fetch returned true but repo doesn't exist - this shouldn't happen, but clear cache anyway
             repoCache.delete(RepoCache.repoExistsKey(context.npub, context.repo));
             // Wait a moment for filesystem to sync, then check again
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await new Promise(resolve => setTimeout(resolve, 500));
             if (!existsSync(repoPath)) {
               throw handleNotFoundError(
                 'Repository fetch completed but repository is not accessible',
@@ -78,9 +85,12 @@ export const GET: RequestHandler = createRepoGetHandler(
           // Repo exists now, clear cache and continue with normal flow
           repoCache.delete(RepoCache.repoExistsKey(context.npub, context.repo));
         } else {
-          // If fetching fails, return 404
+          // Log the error for debugging
+          console.error('[Branches] Error fetching repository:', err);
+          // If fetching fails, return 404 with more context
+          const errorMessage = err instanceof Error ? err.message : 'Repository not found';
           throw handleNotFoundError(
-            'Repository not found',
+            errorMessage,
             { operation: 'getBranches', npub: context.npub, repo: context.repo }
           );
         }

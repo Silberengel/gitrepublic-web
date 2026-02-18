@@ -448,6 +448,22 @@ export class RepoManager {
    * @param announcementEvent - The Nostr repo announcement event (optional, will fetch if not provided)
    * @returns true if repository was successfully fetched, false otherwise
    */
+  /**
+   * Check if a repository is private based on announcement event
+   * A repo is private if it has a tag ["private", "true"] or ["t", "private"]
+   */
+  private isPrivateRepo(announcement: NostrEvent): boolean {
+    // Check for ["private", "true"] tag
+    const privateTag = announcement.tags.find(t => t[0] === 'private' && t[1] === 'true');
+    if (privateTag) return true;
+
+    // Check for ["t", "private"] tag (topic tag)
+    const topicTag = announcement.tags.find(t => t[0] === 't' && t[1] === 'private');
+    if (topicTag) return true;
+
+    return false;
+  }
+
   async fetchRepoOnDemand(
     npub: string,
     repoName: string,
@@ -465,23 +481,36 @@ export class RepoManager {
       return false;
     }
 
-    // Security: Only allow fetching if user has unlimited access
-    // This prevents unauthorized repository creation
-    const { getCachedUserLevel } = await import('../security/user-level-cache.js');
-    const userLevel = getCachedUserLevel(announcementEvent.pubkey);
-    if (!userLevel || userLevel.level !== 'unlimited') {
-      logger.warn({ 
+    // Check if repository is public
+    const isPublic = !this.isPrivateRepo(announcementEvent);
+
+    // Security: For public repos, allow on-demand fetching regardless of owner's access level
+    // For private repos, require owner to have unlimited access to prevent unauthorized creation
+    if (!isPublic) {
+      const { getCachedUserLevel } = await import('../security/user-level-cache.js');
+      const userLevel = getCachedUserLevel(announcementEvent.pubkey);
+      if (!userLevel || userLevel.level !== 'unlimited') {
+        logger.warn({ 
+          npub, 
+          repoName,
+          pubkey: announcementEvent.pubkey.slice(0, 16) + '...',
+          level: userLevel?.level || 'none'
+        }, 'Skipping on-demand repo fetch: private repo requires owner with unlimited access');
+        return false;
+      }
+    } else {
+      logger.info({ 
         npub, 
         repoName,
-        pubkey: announcementEvent.pubkey.slice(0, 16) + '...',
-        level: userLevel?.level || 'none'
-      }, 'Skipping on-demand repo fetch: user does not have unlimited access');
-      return false;
+        pubkey: announcementEvent.pubkey.slice(0, 16) + '...'
+      }, 'Allowing on-demand fetch for public repository');
     }
 
+    // Extract clone URLs outside try block for error logging
+    const cloneUrls = this.extractCloneUrls(announcementEvent);
+    let remoteUrls: string[] = [];
+
     try {
-      // Extract clone URLs from announcement
-      const cloneUrls = this.extractCloneUrls(announcementEvent);
       
       // Filter out localhost URLs and our own domain (we want external sources)
       const externalUrls = cloneUrls.filter(url => {
@@ -492,7 +521,7 @@ export class RepoManager {
       });
 
       // If no external URLs, try any URL that's not our domain
-      const remoteUrls = externalUrls.length > 0 ? externalUrls : 
+      remoteUrls = externalUrls.length > 0 ? externalUrls : 
                         cloneUrls.filter(url => !url.includes(this.domain));
 
       // If still no remote URLs, but there are *any* clone URLs, try the first one
@@ -503,9 +532,11 @@ export class RepoManager {
       }
 
       if (remoteUrls.length === 0) {
-        logger.warn({ npub, repoName }, 'No remote clone URLs found for on-demand fetch');
+        logger.warn({ npub, repoName, cloneUrls, announcementEventId: announcementEvent.id }, 'No remote clone URLs found for on-demand fetch');
         return false;
       }
+      
+      logger.debug({ npub, repoName, cloneUrls, remoteUrls, isPublic }, 'On-demand fetch details');
 
       // Create directory structure
       const repoDir = join(this.repoRoot, npub);
@@ -518,7 +549,7 @@ export class RepoManager {
       const git = simpleGit();
       const gitEnv = this.getGitEnvForUrl(remoteUrls[0]);
       
-      logger.info({ npub, repoName, sourceUrl: remoteUrls[0] }, 'Fetching repository on-demand from remote');
+      logger.info({ npub, repoName, sourceUrl: remoteUrls[0], cloneUrls }, 'Fetching repository on-demand from remote');
       
       // Clone as bare repository
       // Use gitEnv which already contains necessary whitelisted environment variables
@@ -529,19 +560,29 @@ export class RepoManager {
         });
 
         let stderr = '';
+        let stdout = '';
         cloneProcess.stderr.on('data', (chunk: Buffer) => {
           stderr += chunk.toString();
+        });
+        cloneProcess.stdout.on('data', (chunk: Buffer) => {
+          stdout += chunk.toString();
         });
 
         cloneProcess.on('close', (code) => {
           if (code === 0) {
+            logger.info({ npub, repoName, sourceUrl: remoteUrls[0] }, 'Successfully cloned repository');
             resolve();
           } else {
-            reject(new Error(`Git clone failed with code ${code}: ${stderr}`));
+            const errorMsg = `Git clone failed with code ${code}: ${stderr || stdout}`;
+            logger.error({ npub, repoName, sourceUrl: remoteUrls[0], code, stderr, stdout }, 'Git clone failed');
+            reject(new Error(errorMsg));
           }
         });
 
-        cloneProcess.on('error', reject);
+        cloneProcess.on('error', (err) => {
+          logger.error({ npub, repoName, sourceUrl: remoteUrls[0], error: err }, 'Git clone process error');
+          reject(err);
+        });
       });
 
       // Verify the repository was actually created
@@ -561,7 +602,14 @@ export class RepoManager {
       return true;
     } catch (error) {
       const sanitizedError = sanitizeError(error);
-      logger.error({ error: sanitizedError, npub, repoName }, 'Failed to fetch repository on-demand');
+      logger.error({ 
+        error: sanitizedError, 
+        npub, 
+        repoName,
+        cloneUrls,
+        isPublic,
+        remoteUrls
+      }, 'Failed to fetch repository on-demand');
       return false;
     }
   }

@@ -14,6 +14,8 @@ import { signEventWithNIP07, isNIP07Available } from './nip07-signer.js';
 import { KIND } from '../../types/nostr.js';
 import { createProofEvent } from './relay-write-proof.js';
 import { nip19 } from 'nostr-tools';
+import { NostrClient } from './nostr-client.js';
+import { DEFAULT_NOSTR_RELAYS } from '../../config.js';
 
 export type UserLevel = 'unlimited' | 'rate_limited' | 'strictly_rate_limited';
 
@@ -44,6 +46,20 @@ export async function checkRelayWriteAccess(
 
     // Sign the event with NIP-07
     const signedEvent = await signEventWithNIP07(proofEventTemplate);
+
+    // Publish the event to relays BEFORE verification
+    // The server needs to be able to fetch it from relays to verify write access
+    const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+    const publishResult = await nostrClient.publishEvent(signedEvent, DEFAULT_NOSTR_RELAYS);
+    
+    // Wait a moment for the event to propagate to relays before verification
+    // This gives relays time to process and index the event
+    if (publishResult.success.length > 0) {
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+    } else {
+      // If publishing failed to all relays, still try verification (might be cached)
+      console.warn('Failed to publish proof event to any relay, but continuing with verification attempt');
+    }
 
     // Verify server-side via API endpoint (secure)
     const response = await fetch('/api/user/level', {

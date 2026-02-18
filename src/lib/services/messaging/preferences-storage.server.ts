@@ -13,9 +13,10 @@
  * It will throw an error if imported in browser/client code.
  */
 
-// Ensure this is only used server-side
+// This file uses .server.ts suffix so SvelteKit automatically excludes it from client bundles
+// The runtime check below is a safety measure
 if (typeof window !== 'undefined') {
-  throw new Error('preferences-storage.ts uses Node.js crypto and cannot be imported in browser code. Use API endpoints instead.');
+  throw new Error('preferences-storage.server.ts uses Node.js crypto and cannot be imported in browser code. Use API endpoints instead.');
 }
 
 import { 
@@ -28,6 +29,10 @@ import {
 } from 'crypto';
 import logger from '../logger.js';
 import { getCachedUserLevel } from '../security/user-level-cache.js';
+import type { MessagingPreferences } from './preferences-types.js';
+
+// Re-export the type for convenience
+export type { MessagingPreferences } from './preferences-types.js';
 
 // Encryption keys from environment (NEVER commit these!)
 // These are optional - if not set, messaging preferences will be disabled
@@ -40,24 +45,6 @@ const isMessagingConfigured = !!(ENCRYPTION_KEY && SALT_ENCRYPTION_KEY && LOOKUP
 
 if (!isMessagingConfigured) {
   logger.warn('Messaging preferences storage is not configured. Missing environment variables: MESSAGING_PREFS_ENCRYPTION_KEY, MESSAGING_SALT_ENCRYPTION_KEY, MESSAGING_LOOKUP_SECRET');
-}
-
-export interface MessagingPreferences {
-  telegram?: string; // Chat ID or username
-  simplex?: string;  // Contact ID
-  email?: {
-    to: string[];    // To: email addresses
-    cc?: string[];   // CC: email addresses (optional)
-  };
-  gitPlatforms?: Array<{
-    platform: 'github' | 'gitlab' | 'gitea' | 'codeberg' | 'forgejo' | 'onedev' | 'custom';
-    owner: string;   // Repository owner (username or org)
-    repo: string;    // Repository name
-    token: string;   // Personal access token (encrypted)
-    apiUrl?: string; // Custom API URL (required for onedev and self-hosted platforms)
-  }>;
-  enabled: boolean;
-  notifyOn?: string[]; // Event kinds to forward (e.g., ['1621', '1618'])
 }
 
 interface StoredPreferences {

@@ -5,7 +5,7 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { getPreferencesSummary } from '$lib/services/messaging/preferences-storage.js';
+import { getPreferencesSummary } from '$lib/services/messaging/preferences-storage.server.js';
 import { getCachedUserLevel } from '$lib/services/security/user-level-cache.js';
 import { extractRequestContext } from '$lib/utils/api-context.js';
 import logger from '$lib/services/logger.js';

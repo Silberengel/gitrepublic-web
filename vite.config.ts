@@ -11,7 +11,8 @@ if (process.env.NODE_ENV === 'production' || process.argv.includes('build')) {
   const shouldSuppress = (message: string): boolean => {
     return (
       message.includes('externalized for browser compatibility') ||
-      message.includes('[plugin:vite:resolve]') && message.includes('has been externalized')
+      message.includes('[plugin:vite:resolve]') && message.includes('has been externalized') ||
+      message.includes('[vite-plugin-svelte]') && message.includes('Unused CSS selector')
     );
   };
 
@@ -42,6 +43,15 @@ if (process.env.NODE_ENV === 'production' || process.argv.includes('build')) {
 
 export default defineConfig({
   plugins: [sveltekit()],
+  ssr: {
+    // Exclude Node.js-only modules from client bundle
+    noExternal: [],
+    external: []
+  },
+  optimizeDeps: {
+    // Exclude server-only modules from pre-bundling
+    exclude: ['src/lib/services/messaging/preferences-storage.ts']
+  },
   build: {
     rollupOptions: {
       onwarn(warning, warn) {

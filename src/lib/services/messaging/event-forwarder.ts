@@ -10,14 +10,17 @@ import { getCachedUserLevel } from '../security/user-level-cache.js';
 import { KIND } from '../../types/nostr.js';
 
 // Lazy import to avoid importing Node.js crypto in browser
-let getPreferences: typeof import('./preferences-storage.js').getPreferences;
+// Use a function type instead of typeof import to avoid static analysis
+let getPreferences: ((userPubkeyHex: string) => Promise<any>) | null = null;
 async function getPreferencesLazy() {
   if (typeof window !== 'undefined') {
     // Browser environment - event forwarding should be done server-side
     return null;
   }
   if (!getPreferences) {
-    const module = await import('./preferences-storage.js');
+    // Use dynamic path construction to prevent Vite from statically analyzing the import
+    const storagePath = './preferences-storage' + '.server.js';
+    const module = await import(storagePath);
     getPreferences = module.getPreferences;
   }
   return getPreferences;

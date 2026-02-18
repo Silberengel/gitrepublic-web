@@ -91,22 +91,21 @@
       return;
     }
     
+    // Only check user level if user has explicitly logged in (has pubkey in store)
+    // Don't automatically get pubkey from NIP-07 - that should only happen on explicit login
+    if (!currentState.userPubkey) {
+      // User not logged in - set to strictly rate limited without checking
+      userStore.setUser(null, null, 'strictly_rate_limited', null);
+      return;
+    }
+    
     checkingUserLevel = true;
     userStore.setChecking(true);
     
     try {
-      let userPubkey: string | null = null;
-      let userPubkeyHex: string | null = null;
-      
-      // Try to get user pubkey if NIP-07 is available
-      if (isNIP07Available()) {
-        try {
-          userPubkey = await getPublicKeyWithNIP07();
-          userPubkeyHex = decodePubkey(userPubkey);
-        } catch (err) {
-          console.warn('Failed to get user pubkey:', err);
-        }
-      }
+      // Use pubkey from store (user has explicitly logged in)
+      const userPubkey = currentState.userPubkey;
+      const userPubkeyHex = currentState.userPubkeyHex;
       
       // Determine user level
       const levelResult = await determineUserLevel(userPubkey, userPubkeyHex);

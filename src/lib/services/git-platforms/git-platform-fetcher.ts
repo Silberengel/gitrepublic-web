@@ -7,8 +7,10 @@
  */
 
 import logger from '../logger.js';
-import type { MessagingPreferences } from '../messaging/preferences-storage.js';
-import { getPreferences } from '../messaging/preferences-storage.js';
+import type { MessagingPreferences } from '../messaging/preferences-types.js';
+
+// Lazy-loaded function - will only be imported server-side
+let getPreferences: ((userPubkeyHex: string) => Promise<MessagingPreferences | null>) | null = null;
 
 type GitPlatform = 'github' | 'gitlab' | 'gitea' | 'codeberg' | 'forgejo' | 'onedev' | 'custom';
 
@@ -553,6 +555,24 @@ export async function getAllExternalItems(
   issues: ExternalIssue[];
   pullRequests: ExternalPullRequest[];
 }> {
+  // Dynamic import to avoid bundling Node.js crypto in browser
+  // This will only run server-side
+  if (!getPreferences) {
+    try {
+      // Only import server-side - this will fail in browser but that's OK
+      const module = await import('../messaging/preferences-storage.server.js');
+      getPreferences = module.getPreferences;
+    } catch (err) {
+      // If import fails (e.g., in browser), return empty results
+      // This is expected behavior - preferences-storage uses Node.js crypto
+      return { issues: [], pullRequests: [] };
+    }
+  }
+  
+  if (!getPreferences) {
+    return { issues: [], pullRequests: [] };
+  }
+  
   const preferences = await getPreferences(userPubkeyHex);
   if (!preferences || !preferences.gitPlatforms || preferences.gitPlatforms.length === 0) {
     return { issues: [], pullRequests: [] };

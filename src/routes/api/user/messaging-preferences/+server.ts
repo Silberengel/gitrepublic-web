@@ -10,12 +10,12 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { verifyEvent } from 'nostr-tools';
-import { storePreferences, getPreferences, deletePreferences, hasPreferences, getRateLimitStatus } from '$lib/services/messaging/preferences-storage.js';
+import { storePreferences, getPreferences, deletePreferences, hasPreferences, getRateLimitStatus } from '$lib/services/messaging/preferences-storage.server.js';
 import { getCachedUserLevel } from '$lib/services/security/user-level-cache.js';
 import { extractRequestContext } from '$lib/utils/api-context.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 import logger from '$lib/services/logger.js';
-import type { MessagingPreferences } from '$lib/services/messaging/preferences-storage.js';
+import type { MessagingPreferences } from '$lib/services/messaging/preferences-storage.server.js';
 
 /**
  * POST - Save messaging preferences
