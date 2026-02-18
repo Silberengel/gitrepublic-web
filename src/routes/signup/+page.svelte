@@ -1365,6 +1365,8 @@
         eventTags.push(['client', 'gitrepublic-web']);
       }
 
+      // We'll generate the announcement file content after signing (it's just the full event JSON)
+
       // Build event
       const eventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
         kind: KIND.REPO_ANNOUNCEMENT,
@@ -1378,6 +1380,26 @@
       console.log('Signing repository announcement event...');
       const signedEvent = await signEventWithNIP07(eventTemplate);
       console.log('Event signed successfully, event ID:', signedEvent.id);
+
+      // Generate announcement file content (just the full signed event JSON)
+      // The server will commit this to prove ownership - no need for a separate verification file event
+      const { generateVerificationFile } = await import('../../lib/services/nostr/repo-verification.js');
+      const announcementFileContent = generateVerificationFile(signedEvent, pubkey);
+      
+      // Create a signed event (kind 1642) with the announcement file content
+      // This allows the server to fetch and commit the client-signed announcement
+      const announcementFileEventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
+        kind: 1642, // Custom kind for announcement file
+        pubkey,
+        created_at: Math.floor(Date.now() / 1000),
+        content: announcementFileContent,
+        tags: [
+          ['e', signedEvent.id, '', 'announcement'],
+          ['d', dTag]
+        ]
+      };
+      
+      const signedAnnouncementFileEvent = await signEventWithNIP07(announcementFileEventTemplate);
 
       // Get user's inbox/outbox relays (from kind 10002) using comprehensive relay set
       console.log('Fetching user relays from comprehensive relay set...');
@@ -1426,6 +1448,13 @@
       console.log('Final relay set for publishing:', userRelays);
       
       console.log('Using relays for publishing:', userRelays);
+
+      // Publish announcement file event first (so it's available when server provisions)
+      console.log('Publishing announcement file event...');
+      await publishWithRetry(nostrClient, signedAnnouncementFileEvent, userRelays, 2).catch(err => {
+        console.warn('Failed to publish announcement file event:', err);
+        // Continue anyway - server can generate it as fallback
+      });
 
       // Publish repository announcement with retry logic
       let publishResult = await publishWithRetry(nostrClient, signedEvent, userRelays, 2);

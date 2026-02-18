@@ -140,7 +140,8 @@ export function createCommitSignatureEvent(
  * - nsec/hex: Direct key signing (server-side ONLY, via environment variables)
  * 
  * ⚠️ SECURITY WARNING: nsecKey should NEVER be sent from client requests.
- * It should only be used server-side via environment variables (e.g., NOSTRGIT_SECRET_KEY).
+ * It should only be used server-side via environment variables for automated operations.
+ * Note: The server should NOT sign commits on behalf of users - commits should be signed by their authors.
  * 
  * @param commitMessage - The commit message to sign
  * @param authorName - Author name

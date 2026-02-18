@@ -144,7 +144,7 @@ export class RepoManager {
       const git = simpleGit();
       await git.init(['--bare', repoPath.fullPath]);
       
-      // Create verification file and self-transfer event in the repository
+      // Create announcement file and self-transfer event in the repository
       await this.createVerificationFile(repoPath.fullPath, event, selfTransferEvent);
       
       // If there are other clone URLs, sync from them after creating the repo
@@ -154,7 +154,7 @@ export class RepoManager {
     } else if (isExistingRepo && selfTransferEvent) {
       // For existing repos, we might want to add the self-transfer event
       // But we should be careful not to overwrite existing history
-      // For now, we'll just ensure the verification file exists
+      // For now, we'll just ensure the announcement file exists
       // The self-transfer event should already be published to relays
       logger.info({ repoPath: repoPath.fullPath }, 'Existing repo - self-transfer event should be published to relays');
     }
@@ -660,12 +660,12 @@ export class RepoManager {
         throw new Error('Repository clone completed but repository path does not exist');
       }
 
-      // Create verification file with the announcement (non-blocking - repo is usable without it)
+      // Create announcement file with the signed announcement event (non-blocking - repo is usable without it)
       try {
         await this.createVerificationFile(repoPath, announcementEvent);
       } catch (verifyError) {
-        // Verification file creation is optional - log but don't fail
-        logger.warn({ error: verifyError, npub, repoName }, 'Failed to create verification file, but repository is usable');
+        // Announcement file creation is optional - log but don't fail
+        logger.warn({ error: verifyError, npub, repoName }, 'Failed to create announcement file, but repository is usable');
       }
 
       logger.info({ npub, repoName }, 'Successfully fetched repository on-demand');
@@ -749,8 +749,8 @@ export class RepoManager {
   }
 
   /**
-   * Create verification file and self-transfer event in a new repository
-   * This proves the repository is owned by the announcement author
+   * Create announcement file and self-transfer event in a new repository
+   * The announcement file contains the full signed announcement event JSON, proving ownership
    */
   private async createVerificationFile(repoPath: string, event: NostrEvent, selfTransferEvent?: NostrEvent): Promise<void> {
     try {
@@ -769,12 +769,43 @@ export class RepoManager {
       const git: SimpleGit = simpleGit();
       await git.clone(repoPath, workDir);
 
-      // Generate verification file content
-      const verificationContent = generateVerificationFile(event, event.pubkey);
+      // Extract announcement file content from client-signed event (kind 1642)
+      // The client creates and signs this event separately, with an 'e' tag pointing to the announcement
+      // The content is just the full announcement event JSON - simpler than a custom verification format
+      let announcementFileContent: string | null = null;
+      
+      try {
+        const { NostrClient } = await import('../nostr/nostr-client.js');
+        const { DEFAULT_NOSTR_RELAYS } = await import('../../config.js');
+        const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+        
+        // Look for a kind 1642 event that references this announcement
+        const announcementFileEvents = await nostrClient.fetchEvents([
+          {
+            kinds: [1642], // Announcement file event kind
+            authors: [event.pubkey],
+            '#e': [event.id], // References this announcement
+            limit: 1
+          }
+        ]);
+        
+        if (announcementFileEvents.length > 0) {
+          // Extract announcement file content from the client-signed event
+          announcementFileContent = announcementFileEvents[0].content;
+          logger.info({ repoPath, announcementFileEventId: announcementFileEvents[0].id }, 'Using client-signed announcement file');
+        }
+      } catch (err) {
+        logger.warn({ error: err, repoPath }, 'Failed to fetch announcement file event, generating server-side');
+      }
+      
+      // If client didn't provide announcement file, generate it from the announcement event
+      if (!announcementFileContent) {
+        announcementFileContent = generateVerificationFile(event, event.pubkey);
+      }
 
-      // Write verification file
-      const verificationPath = join(workDir, VERIFICATION_FILE_PATH);
-      writeFileSync(verificationPath, verificationContent, 'utf-8');
+      // Write announcement file (contains the full signed announcement event JSON)
+      const announcementPath = join(workDir, VERIFICATION_FILE_PATH);
+      writeFileSync(announcementPath, announcementFileContent, 'utf-8');
 
       // If self-transfer event is provided, include it in the commit
       const filesToAdd = [VERIFICATION_FILE_PATH];
@@ -805,31 +836,12 @@ export class RepoManager {
       
       // Use the event timestamp for commit date
       const commitDate = new Date(event.created_at * 1000).toISOString();
-      let commitMessage = selfTransferEvent 
-        ? 'Add Nostr repository verification and initial ownership proof'
-        : 'Add Nostr repository verification file';
+      const commitMessage = selfTransferEvent 
+        ? 'Add Nostr repository announcement and initial ownership proof'
+        : 'Add Nostr repository announcement';
       
-      // Sign commit if nsec key is provided (from environment or event)
-      // Note: For initial commits, we might not have the user's nsec, so this is optional
-      const nsecKey = process.env.NOSTRGIT_SECRET_KEY;
-      if (nsecKey) {
-        try {
-          const { createGitCommitSignature } = await import('./commit-signer.js');
-          const { signedMessage } = await createGitCommitSignature(
-            commitMessage,
-            'Nostr',
-            `${event.pubkey}@nostr`,
-            {
-              nsecKey,
-              timestamp: event.created_at
-            }
-          );
-          commitMessage = signedMessage;
-        } catch (err) {
-          logger.warn({ error: err, repoPath }, 'Failed to sign initial commit');
-          // Continue without signature if signing fails
-        }
-      }
+      // Note: Initial commits are unsigned. The repository owner can sign their own commits
+      // when they make changes. The server should never sign commits on behalf of users.
       
       await workGit.commit(commitMessage, filesToAdd, {
         '--author': `Nostr <${event.pubkey}@nostr>`,
@@ -846,8 +858,8 @@ export class RepoManager {
       // Clean up
       await rm(workDir, { recursive: true, force: true });
     } catch (error) {
-      logger.error({ error, repoPath }, 'Failed to create verification file');
-      // Don't throw - verification file creation is important but shouldn't block provisioning
+      logger.error({ error, repoPath }, 'Failed to create announcement file');
+      // Don't throw - announcement file creation is important but shouldn't block provisioning
     }
   }
 
@@ -861,7 +873,7 @@ export class RepoManager {
   }
 
   /**
-   * Check if a repository already has a verification file
+   * Check if a repository already has an announcement file
    * Used to determine if this is a truly new repo or an existing one being added
    */
   async hasVerificationFile(repoPath: string): Promise<boolean> {

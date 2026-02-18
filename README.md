@@ -55,7 +55,6 @@ See [ARCHITECTURE_FAQ.md](./docs/ARCHITECTURE_FAQ.md) for answers to common arch
   - Signatures embedded in commit messages as trailers
   - **Web UI**: Uses NIP-07 browser extension (secure, keys never leave browser)
   - **Git Operations**: Uses NIP-98 HTTP authentication (ephemeral signed events)
-  - **Server-side**: Optional `NOSTRGIT_SECRET_KEY` environment variable for automated signing
   - ⚠️ **Security Note**: Never send private keys (nsec) in API requests. Use NIP-07 for web UI or NIP-98 for git operations.
 
 ## Nostr Event Kinds Used
@@ -124,7 +123,7 @@ These are not part of any NIP but are used by this application:
      - Creates a bare git repository at `/repos/{npub}/{repo-name}.git`
      - Fetches the self-transfer event for ownership verification
      - Creates initial commit with `.nostr-ownership-transfer` file containing the self-transfer event
-     - Creates `.nostr-verification` file with the announcement event (for backward compatibility)
+     - Creates `.nostr-announcement` file with the full signed announcement event JSON
      - If repository has `clone` tags pointing to other remotes, syncs from those remotes
 
 3. **Repository Access**:
@@ -352,7 +351,7 @@ See `docs/SECURITY.md` and `docs/SECURITY_IMPLEMENTATION.md` for detailed inform
 
 ## Environment Variables
 
-- `NOSTRGIT_SECRET_KEY`: Server's nsec (bech32 or hex) for signing repo announcements and initial commits (optional)
+- `NOSTRGIT_SECRET_KEY_CLIENT`: User's nsec (bech32 or hex) for client-side git operations via credential helper (optional)
 - `GIT_REPO_ROOT`: Path to store git repositories (default: `/repos`)
 - `GIT_DOMAIN`: Domain for git repositories (default: `localhost:6543`)
 - `NOSTR_RELAYS`: Comma-separated list of Nostr relays (default: `wss://theforest.nostr1.com`)

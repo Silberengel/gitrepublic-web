@@ -31,9 +31,78 @@ export class OwnershipTransferService {
   }
 
   /**
+   * Get the current owner of a repository from the most recent announcement file in the git repo
+   * Ownership is determined by the most recent announcement file checked into the repository
+   * 
+   * @param npub - Repository owner npub (for path construction)
+   * @param repoId - The repository identifier (d-tag)
+   * @returns The current owner pubkey from the most recent announcement file in the repo
+   */
+  async getCurrentOwnerFromRepo(npub: string, repoId: string): Promise<string | null> {
+    try {
+      const { fileManager } = await import('../services/service-registry.js');
+      return await fileManager.getCurrentOwnerFromRepo(npub, repoId);
+    } catch (error) {
+      logger.error({ error, npub, repoId }, 'Error getting current owner from repo');
+      return null;
+    }
+  }
+  
+  /**
+   * Get owners for all clone URLs from the repository announcement
+   * Each clone can have its own owner determined by the most recent announcement file in that clone
+   * 
+   * @param announcementEvent - The repository announcement event
+   * @returns Map of clone URL to owner pubkey (or null if clone doesn't exist or has no announcement file)
+   */
+  async getOwnersForAllClones(announcementEvent: NostrEvent): Promise<Map<string, string | null>> {
+    const owners = new Map<string, string | null>();
+    
+    // Extract clone URLs from announcement
+    const cloneUrls: string[] = [];
+    for (const tag of announcementEvent.tags) {
+      if (tag[0] === 'clone') {
+        for (let i = 1; i < tag.length; i++) {
+          const url = tag[i];
+          if (url && typeof url === 'string') {
+            cloneUrls.push(url);
+          }
+        }
+      }
+    }
+    
+    // Get the repo identifier from the announcement
+    const dTag = announcementEvent.tags.find(t => t[0] === 'd')?.[1];
+    if (!dTag) {
+      return owners; // Can't determine repo name
+    }
+    
+    // Check the local GitRepublic clone (if it exists)
+    try {
+      const { nip19 } = await import('nostr-tools');
+      const npub = nip19.npubEncode(announcementEvent.pubkey);
+      const { fileManager } = await import('../services/service-registry.js');
+      
+      const localOwner = await fileManager.getCurrentOwnerFromRepo(npub, dTag);
+      const localUrl = cloneUrls.find(url => url.includes(npub) || url.includes(announcementEvent.pubkey));
+      if (localUrl) {
+        owners.set(localUrl, localOwner);
+      }
+    } catch (error) {
+      logger.warn({ error, announcementEvent: announcementEvent.id }, 'Failed to get owner from local clone');
+    }
+    
+    // For other clones (GitHub, GitLab, etc.), we'd need to fetch them first to check their announcement files
+    // This is a future enhancement - for now we only check the local GitRepublic clone
+    
+    return owners;
+  }
+
+  /**
    * Get the current owner of a repository, checking for ownership transfers
    * The initial ownership is proven by a self-transfer event (from owner to themselves)
    * 
+   * @deprecated Use getCurrentOwnerFromRepo instead - ownership is now determined by the most recent announcement file in the repo
    * @param originalOwnerPubkey - The original owner from the repo announcement
    * @param repoId - The repository identifier (d-tag)
    * @returns The current owner pubkey (may be different from original if transferred)

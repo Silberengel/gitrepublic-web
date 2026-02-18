@@ -1371,4 +1371,69 @@ export class FileManager {
       return [];
     }
   }
+
+  /**
+   * Get the current owner from the most recent announcement file in the repository
+   * Ownership is determined by the most recent announcement file checked into the git repo
+   * 
+   * @param npub - Repository owner npub (for path construction)
+   * @param repoName - The repository name
+   * @returns The current owner pubkey from the most recent announcement file, or null if not found
+   */
+  async getCurrentOwnerFromRepo(npub: string, repoName: string): Promise<string | null> {
+    try {
+      const { VERIFICATION_FILE_PATH } = await import('../nostr/repo-verification.js');
+      
+      if (!this.repoExists(npub, repoName)) {
+        return null;
+      }
+      
+      const repoPath = this.getRepoPath(npub, repoName);
+      const git: SimpleGit = simpleGit(repoPath);
+      
+      // Get git log for the announcement file, most recent first
+      // Use --all to check all branches, --reverse to get chronological order
+      const logOutput = await git.raw(['log', '--all', '--format=%H', '--reverse', '--', VERIFICATION_FILE_PATH]);
+      const commitHashes = logOutput.trim().split('\n').filter(Boolean);
+      
+      if (commitHashes.length === 0) {
+        return null; // No announcement file in repo
+      }
+      
+      // Get the most recent announcement file content (last commit in the list)
+      const mostRecentCommit = commitHashes[commitHashes.length - 1];
+      const announcementFile = await this.getFileContent(npub, repoName, VERIFICATION_FILE_PATH, mostRecentCommit);
+      
+      // Parse the announcement event from the file
+      let announcementEvent: any;
+      try {
+        announcementEvent = JSON.parse(announcementFile.content);
+      } catch (parseError) {
+        logger.warn({ error: parseError, npub, repoName, commit: mostRecentCommit }, 'Failed to parse announcement file JSON');
+        return null;
+      }
+      
+      // Validate the announcement event to prevent fake announcements
+      const { validateAnnouncementEvent } = await import('../nostr/repo-verification.js');
+      const validation = validateAnnouncementEvent(announcementEvent, repoName);
+      
+      if (!validation.valid) {
+        logger.warn({ 
+          error: validation.error, 
+          npub, 
+          repoName, 
+          commit: mostRecentCommit,
+          eventId: announcementEvent.id,
+          eventPubkey: announcementEvent.pubkey?.substring(0, 16) + '...'
+        }, 'Announcement file validation failed - possible fake announcement');
+        return null;
+      }
+      
+      // Return the pubkey from the validated announcement
+      return announcementEvent.pubkey;
+    } catch (error) {
+      logger.error({ error, npub, repoName }, 'Error getting current owner from repo');
+      return null;
+    }
+  }
 }

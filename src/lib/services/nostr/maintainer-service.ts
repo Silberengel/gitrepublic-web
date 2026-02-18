@@ -78,11 +78,12 @@ export class MaintainerService {
       // Check if repo is private
       const isPrivate = this.isPrivateRepo(announcement);
       
-      // Check for ownership transfers - get current owner
-      const currentOwner = await this.ownershipTransferService.getCurrentOwner(
-        announcement.pubkey,
-        repoId
-      );
+      // Get current owner from the most recent announcement file in the repo
+      // Ownership is determined by what's checked into the git repository, not Nostr events
+      const { nip19 } = await import('nostr-tools');
+      const npub = nip19.npubEncode(announcement.pubkey);
+      const { fileManager } = await import('../../services/service-registry.js');
+      const currentOwner = await fileManager.getCurrentOwnerFromRepo(npub, repoId) || announcement.pubkey;
       
       const maintainers: string[] = [currentOwner]; // Current owner is always a maintainer
 

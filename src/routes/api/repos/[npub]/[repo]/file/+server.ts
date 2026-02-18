@@ -378,7 +378,7 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
     }
     // Note: useNIP07 is no longer used since signing happens client-side
     // Explicitly ignore nsecKey from client requests - it's a security risk
-    // Server-side signing should use NOSTRGIT_SECRET_KEY environment variable instead
+    // Server-side signing is not recommended - commits should be signed by their authors
     if (nsecKey) {
       // Security: Log warning but never log the actual key value
       const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';

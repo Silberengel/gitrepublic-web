@@ -45,82 +45,100 @@ export const GET: RequestHandler = createRepoGetHandler(
 
     const announcement = events[0];
 
-    // Check for ownership transfer events (including self-transfer for initial ownership)
-    const repoTag = `${KIND.REPO_ANNOUNCEMENT}:${context.repoOwnerPubkey}:${context.repo}`;
-    const transferEvents = await nostrClient.fetchEvents([
-      {
-        kinds: [KIND.OWNERSHIP_TRANSFER],
-        '#a': [repoTag],
-        limit: 100
-      }
-    ]);
-
-    // Look for self-transfer event (initial ownership proof)
-    // Self-transfer: from owner to themselves, tagged with 'self-transfer'
-    const selfTransfer = transferEvents.find(event => {
-      const pTag = event.tags.find(t => t[0] === 'p');
-      let toPubkey = pTag?.[1];
-      
-      // Decode npub if needed
-      if (toPubkey) {
-        try {
-          toPubkey = decodeNpubToHex(toPubkey) || toPubkey;
-        } catch {
-          // Assume it's already hex
+    // Extract clone URLs from announcement
+    const cloneUrls: string[] = [];
+    for (const tag of announcement.tags) {
+      if (tag[0] === 'clone') {
+        for (let i = 1; i < tag.length; i++) {
+          const url = tag[i];
+          if (url && typeof url === 'string') {
+            cloneUrls.push(url);
+          }
         }
-      }
-      
-      return event.pubkey === context.repoOwnerPubkey && 
-             toPubkey === context.repoOwnerPubkey;
-    });
-
-    // Verify ownership - prefer self-transfer event, fall back to verification file
-    let verified = false;
-    let verificationMethod = '';
-    let verificationError: string | undefined;
-
-    if (selfTransfer) {
-      // Verify self-transfer event signature
-      const { verifyEvent } = await import('nostr-tools');
-      if (verifyEvent(selfTransfer)) {
-        verified = true;
-        verificationMethod = 'self-transfer-event';
-      } else {
-        verified = false;
-        verificationError = 'Self-transfer event signature is invalid';
-        verificationMethod = 'self-transfer-event';
-      }
-    } else {
-      // Fall back to verification file method (for backward compatibility)
-      try {
-        const verificationFile = await fileManager.getFileContent(context.npub, context.repo, VERIFICATION_FILE_PATH, 'HEAD');
-        const verification = verifyRepositoryOwnership(announcement, verificationFile.content);
-        verified = verification.valid;
-        verificationError = verification.error;
-        verificationMethod = 'verification-file';
-      } catch (err) {
-        verified = false;
-        verificationError = 'No ownership proof found (neither self-transfer event nor verification file)';
-        verificationMethod = 'none';
       }
     }
 
-    if (verified) {
+    // Verify ownership for each clone separately
+    // Ownership is determined by the most recent announcement file checked into each clone
+    const cloneVerifications: Array<{ url: string; verified: boolean; ownerPubkey: string | null; error?: string }> = [];
+    
+    // First, verify the local GitRepublic clone (if it exists)
+    let localVerified = false;
+    let localOwner: string | null = null;
+    let localError: string | undefined;
+    
+    try {
+      // Get current owner from the most recent announcement file in the repo
+      localOwner = await fileManager.getCurrentOwnerFromRepo(context.npub, context.repo);
+      
+      if (localOwner) {
+        // Verify the announcement file matches the announcement event
+        try {
+          const announcementFile = await fileManager.getFileContent(context.npub, context.repo, VERIFICATION_FILE_PATH, 'HEAD');
+          const verification = verifyRepositoryOwnership(announcement, announcementFile.content);
+          localVerified = verification.valid;
+          if (!verification.valid) {
+            localError = verification.error;
+          }
+        } catch (err) {
+          localVerified = false;
+          localError = 'Announcement file not found in repository';
+        }
+      } else {
+        localVerified = false;
+        localError = 'No announcement file found in repository';
+      }
+    } catch (err) {
+      localVerified = false;
+      localError = err instanceof Error ? err.message : 'Failed to verify local clone';
+    }
+    
+    // Add local clone verification
+    const localUrl = cloneUrls.find(url => url.includes(context.npub) || url.includes(context.repoOwnerPubkey));
+    if (localUrl) {
+      cloneVerifications.push({
+        url: localUrl,
+        verified: localVerified,
+        ownerPubkey: localOwner,
+        error: localError
+      });
+    }
+    
+    // For other clones (GitHub, GitLab, etc.), we'd need to fetch them first to check their announcement files
+    // This is a future enhancement - for now we only verify the local GitRepublic clone
+    
+    // Overall verification: at least one clone must be verified
+    const overallVerified = cloneVerifications.some(cv => cv.verified);
+    const verifiedClones = cloneVerifications.filter(cv => cv.verified);
+    const currentOwner = localOwner || context.repoOwnerPubkey;
+
+    if (overallVerified) {
       return json({
         verified: true,
         announcementId: announcement.id,
-        ownerPubkey: context.repoOwnerPubkey,
-        verificationMethod,
-        selfTransferEventId: selfTransfer?.id,
-        message: 'Repository ownership verified successfully'
+        ownerPubkey: currentOwner,
+        verificationMethod: 'announcement-file',
+        cloneVerifications: cloneVerifications.map(cv => ({
+          url: cv.url,
+          verified: cv.verified,
+          ownerPubkey: cv.ownerPubkey,
+          error: cv.error
+        })),
+        message: `Repository ownership verified successfully for ${verifiedClones.length} clone(s)`
       });
     } else {
       return json({
         verified: false,
-        error: verificationError || 'Repository ownership verification failed',
+        error: localError || 'Repository ownership verification failed',
         announcementId: announcement.id,
-        verificationMethod,
-        message: 'Repository ownership verification failed'
+        verificationMethod: 'announcement-file',
+        cloneVerifications: cloneVerifications.map(cv => ({
+          url: cv.url,
+          verified: cv.verified,
+          ownerPubkey: cv.ownerPubkey,
+          error: cv.error
+        })),
+        message: 'Repository ownership verification failed for all clones'
       });
     }
   },
