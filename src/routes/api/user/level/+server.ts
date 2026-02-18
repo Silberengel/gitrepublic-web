@@ -93,9 +93,9 @@ export const POST: RequestHandler = async (event) => {
       logger.info({ userPubkeyHex, level: cached.level }, '[API] Using cached user level (proof event signature validated)');
       return json({
         level: cached.level,
-        userPubkeyHex,
         verified: true,
         cached: true
+        // SECURITY: Removed userPubkeyHex - client already knows their own pubkey
       });
     }
 
@@ -120,10 +120,10 @@ export const POST: RequestHandler = async (event) => {
         );
         return json({
           level: cachedOnRelayDown.level,
-          userPubkeyHex,
           verified: true,
           cached: true,
           relayDown: true
+          // SECURITY: Removed userPubkeyHex - client already knows their own pubkey
         });
       }
       
@@ -153,8 +153,8 @@ export const POST: RequestHandler = async (event) => {
       
       return json({
         level: 'unlimited',
-        userPubkeyHex,
         verified: true
+        // SECURITY: Removed userPubkeyHex - client already knows their own pubkey
       });
     } else {
       // User is logged in but no write access - rate limited
@@ -171,9 +171,9 @@ export const POST: RequestHandler = async (event) => {
       
       return json({
         level: 'rate_limited',
-        userPubkeyHex,
         verified: true,
         error: verification.error
+        // SECURITY: Removed userPubkeyHex - client already knows their own pubkey
       });
     }
   } catch (err) {

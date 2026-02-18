@@ -14,13 +14,14 @@ export const GET: RequestHandler = createRepoGetHandler(
     const { maintainers, owner } = await maintainerService.getMaintainers(context.repoOwnerPubkey, context.repo);
 
     // If userPubkey provided, check if they're a maintainer
+    // SECURITY: Do NOT leak userPubkey in response - only return boolean status
     if (context.userPubkeyHex) {
       const isMaintainer = maintainers.includes(context.userPubkeyHex);
       return json({ 
         maintainers, 
         owner, 
-        isMaintainer,
-        userPubkey: context.userPubkeyHex 
+        isMaintainer
+        // SECURITY: Removed userPubkey leak - client already knows their own pubkey
       });
     }
 

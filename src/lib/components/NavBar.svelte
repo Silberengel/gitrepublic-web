@@ -8,6 +8,7 @@
   import { onMount } from 'svelte';
   import { userStore } from '../stores/user-store.js';
   import { clearActivity, updateActivity } from '../services/activity-tracker.js';
+  import { determineUserLevel, decodePubkey } from '../services/nostr/user-level-service.js';
 
   let userPubkey = $state<string | null>(null);
   let mobileMenuOpen = $state(false);
@@ -61,14 +62,72 @@
   }
 
   async function login() {
+    if (!isNIP07Available()) {
+      alert('Nostr extension not found. Please install a Nostr extension like nos2x or Alby to login.');
+      return;
+    }
+
     try {
-      if (!isNIP07Available()) {
-        alert('NIP-07 extension not found. Please install a Nostr extension like Alby or nos2x.');
+      // Get public key directly from NIP-07
+      let pubkey: string;
+      try {
+        pubkey = await getPublicKeyWithNIP07();
+        if (!pubkey) {
+          throw new Error('No public key returned from extension');
+        }
+      } catch (err) {
+        console.error('Failed to get public key from NIP-07:', err);
+        alert('Failed to connect to Nostr extension. Please make sure your extension is unlocked and try again.');
         return;
       }
-      userPubkey = await getPublicKeyWithNIP07();
+
+      // Convert npub to hex for API calls
+      let pubkeyHex: string;
+      if (/^[0-9a-f]{64}$/i.test(pubkey)) {
+        // Already hex format
+        pubkeyHex = pubkey.toLowerCase();
+        userPubkey = pubkey;
+      } else {
+        // Try to decode as npub
+        try {
+          const decoded = nip19.decode(pubkey);
+          if (decoded.type === 'npub') {
+            pubkeyHex = decoded.data as string;
+            userPubkey = pubkey; // Keep original npub format
+          } else {
+            throw new Error('Invalid pubkey format');
+          }
+        } catch (decodeErr) {
+          console.error('Failed to decode pubkey:', decodeErr);
+          alert('Invalid public key format. Please try again.');
+          return;
+        }
+      }
+
+      // Determine user level (checks relay write access)
+      const levelResult = await determineUserLevel(userPubkey, pubkeyHex);
+      
+      // Update user store
+      userStore.setUser(
+        levelResult.userPubkey,
+        levelResult.userPubkeyHex,
+        levelResult.level,
+        levelResult.error || null
+      );
+      
+      // Update activity tracking on successful login
+      updateActivity();
+      
+      // Show success message
+      if (levelResult.level === 'unlimited') {
+        console.log('Unlimited access granted!');
+      } else if (levelResult.level === 'rate_limited') {
+        console.log('Logged in with rate-limited access.');
+      }
     } catch (err) {
       console.error('Login error:', err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      alert(`Failed to login: ${errorMessage}. Please make sure your Nostr extension is unlocked and try again.`);
     }
   }
 
@@ -99,7 +158,6 @@
         <a href="/repos" class:active={isActive('/repos')} onclick={closeMobileMenu}>Repositories</a>
         <a href="/search" class:active={isActive('/search')} onclick={closeMobileMenu}>Search</a>
         <a href="/signup" class:active={isActive('/signup')} onclick={closeMobileMenu}>Register</a>
-        <a href="/verify" class:active={isActive('/verify')} onclick={closeMobileMenu}>Verify Repo</a>
         <a href="/docs" class:active={isActive('/docs')} onclick={closeMobileMenu}>Docs</a>
       </div>
     </nav>

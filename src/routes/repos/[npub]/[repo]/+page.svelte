@@ -14,6 +14,8 @@
   import { KIND } from '$lib/types/nostr.js';
   import { nip19 } from 'nostr-tools';
   import { userStore } from '$lib/stores/user-store.js';
+  import { generateVerificationFile, VERIFICATION_FILE_PATH } from '$lib/services/nostr/repo-verification.js';
+  import type { NostrEvent } from '$lib/types/nostr.js';
 
   // Get page data for OpenGraph metadata - use $derived to make it reactive
   const pageData = $derived($page.data as {
@@ -123,6 +125,8 @@
   
   // Verification status
   let verificationStatus = $state<{ verified: boolean; error?: string; message?: string } | null>(null);
+  let showVerificationDialog = $state(false);
+  let verificationFileContent = $state<string | null>(null);
   let loadingVerification = $state(false);
 
   // Issues
@@ -988,6 +992,63 @@
     }
   }
 
+  async function generateVerificationFileForRepo() {
+    if (!pageData.repoOwnerPubkey || !userPubkeyHex) {
+      error = 'Unable to generate verification file: missing repository or user information';
+      return;
+    }
+
+    try {
+      // Fetch the repository announcement event
+      const nostrClient = new NostrClient([...new Set([...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS])]);
+      const events = await nostrClient.fetchEvents([
+        {
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          authors: [pageData.repoOwnerPubkey],
+          '#d': [repo],
+          limit: 1
+        }
+      ]);
+
+      if (events.length === 0) {
+        error = 'Repository announcement not found. Please ensure the repository is registered on Nostr.';
+        return;
+      }
+
+      const announcement = events[0] as NostrEvent;
+      verificationFileContent = generateVerificationFile(announcement, pageData.repoOwnerPubkey);
+      showVerificationDialog = true;
+    } catch (err) {
+      console.error('Failed to generate verification file:', err);
+      error = `Failed to generate verification file: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  function copyVerificationToClipboard() {
+    if (!verificationFileContent) return;
+    
+    navigator.clipboard.writeText(verificationFileContent).then(() => {
+      alert('Verification file content copied to clipboard!');
+    }).catch((err) => {
+      console.error('Failed to copy:', err);
+      alert('Failed to copy to clipboard. Please select and copy manually.');
+    });
+  }
+
+  function downloadVerificationFile() {
+    if (!verificationFileContent) return;
+    
+    const blob = new Blob([verificationFileContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = VERIFICATION_FILE_PATH;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   async function loadBranches() {
     try {
       const response = await fetch(`/api/repos/${npub}/${repo}/branches`);
@@ -1721,20 +1782,21 @@
           {#if isMaintainer}
             <a href={`/repos/${npub}/${repo}/settings`} class="settings-button">Settings</a>
           {/if}
+          {#if pageData.repoOwnerPubkey && userPubkeyHex === pageData.repoOwnerPubkey && verificationStatus?.verified !== true}
+            <button 
+              onclick={generateVerificationFileForRepo} 
+              class="verify-button"
+              title="Generate verification file"
+            >
+              Generate Verification File
+            </button>
+          {/if}
           {#if isMaintainer}
             <button onclick={() => {
               if (!userPubkey || !isMaintainer) return;
               showCreateBranchDialog = true;
             }} class="create-branch-button">+ New Branch</button>
           {/if}
-          <span class="auth-status">
-            <img src="/icons/check-circle.svg" alt="Verified" class="icon-inline" />
-            {#if isMaintainer}
-              Maintainer
-            {:else}
-              Authenticated (Contributor)
-            {/if}
-          </span>
         {/if}
       </div>
       </div>
@@ -1749,8 +1811,8 @@
       {#if verificationStatus}
         <span class="verification-status" class:verified={verificationStatus.verified} class:unverified={!verificationStatus.verified}>
           {#if verificationStatus.verified}
-            <img src="/icons/check-circle.svg" alt="Verified" class="icon-inline" />
-            Verified
+            <img src="/icons/check-circle.svg" alt="Verified Repo Ownership" class="icon-inline" />
+            Verified Repo Ownership
           {:else}
             <img src="/icons/alert-triangle.svg" alt="Unverified" class="icon-inline" />
             Unverified
@@ -2508,6 +2570,46 @@
       </div>
     </div>
   {/if}
+
+  <!-- Verification File Dialog -->
+  {#if showVerificationDialog && verificationFileContent}
+    <div 
+      class="modal-overlay" 
+      role="dialog"
+      aria-modal="true"
+      aria-label="Repository verification file"
+      onclick={() => showVerificationDialog = false}
+      onkeydown={(e) => e.key === 'Escape' && (showVerificationDialog = false)}
+      tabindex="-1"
+    >
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div 
+        class="modal verification-modal" 
+        role="document"
+        onclick={(e) => e.stopPropagation()}
+      >
+        <h3>Repository Verification File</h3>
+        <p class="verification-instructions">
+          Create a file named <code>{VERIFICATION_FILE_PATH}</code> in the root of your git repository and paste the content below into it.
+          Then commit and push the file to your repository.
+        </p>
+        <div class="verification-file-content">
+          <div class="file-header">
+            <span class="filename">{VERIFICATION_FILE_PATH}</span>
+            <div class="file-actions">
+              <button onclick={copyVerificationToClipboard} class="copy-button">Copy</button>
+              <button onclick={downloadVerificationFile} class="download-button">Download</button>
+            </div>
+          </div>
+          <pre class="file-content"><code>{verificationFileContent}</code></pre>
+        </div>
+        <div class="modal-actions">
+          <button onclick={() => showVerificationDialog = false} class="cancel-button">Close</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -2599,6 +2701,33 @@
   .bookmark-button.bookmarked:hover:not(:disabled) {
     opacity: 0.9;
     transform: scale(1.1);
+  }
+
+  .verify-button {
+    padding: 0.5rem 1rem;
+    background: var(--accent);
+    color: var(--accent-text, white);
+    border: 1px solid var(--accent);
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    display: inline-block;
+  }
+
+  .verify-button:hover:not(:disabled) {
+    opacity: 0.9;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+
+  .verify-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    background: var(--success-bg, #10b981);
+    color: var(--success-text, white);
   }
 
   .repo-banner {
@@ -3113,13 +3242,6 @@
     font-family: 'IBM Plex Serif', serif;
   }
 
-  .auth-status {
-    font-size: 0.875rem;
-    color: var(--text-primary);
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-  }
 
   .repo-view {
     flex: 1;
@@ -3342,6 +3464,85 @@
   .modal h3 {
     margin: 0 0 1rem 0;
     color: var(--text-primary);
+  }
+
+  .verification-modal {
+    max-width: 800px;
+    min-width: 600px;
+  }
+
+  .verification-instructions {
+    color: var(--text-secondary);
+    margin-bottom: 1rem;
+    line-height: 1.6;
+  }
+
+  .verification-instructions code {
+    background: var(--bg-secondary);
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    font-family: monospace;
+    color: var(--accent);
+  }
+
+  .verification-file-content {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.375rem;
+    overflow: hidden;
+    margin-bottom: 1rem;
+  }
+
+  .file-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .filename {
+    font-family: monospace;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .file-actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .copy-button,
+  .download-button {
+    padding: 0.375rem 0.75rem;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .copy-button:hover,
+  .download-button:hover {
+    background: var(--bg-secondary);
+    border-color: var(--accent);
+  }
+
+  .file-content {
+    margin: 0;
+    padding: 1rem;
+    overflow-x: auto;
+    background: var(--bg-primary);
+  }
+
+  .file-content code {
+    font-family: 'Courier New', monospace;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    white-space: pre;
   }
 
   .modal label {
@@ -4000,10 +4201,6 @@
   }
 
   /* Theme-aware icon colors */
-  .auth-status .icon-inline {
-    filter: brightness(0) saturate(100%) invert(1);
-    opacity: 0.8;
-  }
 
   .verification-status.verified .icon-inline {
     /* Green checkmark for verified */
