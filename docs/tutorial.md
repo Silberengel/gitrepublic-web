@@ -594,6 +594,50 @@ GitRepublic implements NIP-34 for repository announcements. Key event types:
 
 See the [NIP-34 specification](/docs/nip34/spec) for full details.
 
+### GRASP Protocol Support
+
+GitRepublic supports the [GRASP (Git Repository Announcement and Synchronization Protocol)](https://gitworkshop.dev/npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr/grasp) for interoperability with other git hosting services built on Nostr.
+
+**What is GRASP?**
+
+GRASP is a protocol that extends NIP-34 to provide a standardized way for git repositories to be announced, synchronized, and managed across different hosting providers. GRASP servers implement additional NIP-34 event kinds (such as patches, pull request updates, repository state tracking, and user grasp lists) that enable more advanced collaboration features.
+
+**How GitRepublic Supports GRASP:**
+
+While GitRepublic is directly git-based and doesn't require all NIP-34 features to function, we fully support repositories hosted on GRASP servers:
+
+1. **Multi-Remote Synchronization**: When you create a repository announcement with multiple `clone` URLs (including GRASP server URLs), GitRepublic automatically:
+   - Syncs from GRASP servers when provisioning new repositories
+   - Pushes changes to all configured remotes (including GRASP servers) after each push
+   - Keeps your repository synchronized across all hosting providers
+
+2. **On-Demand Repository Fetching**: If a repository is announced on Nostr but not yet provisioned locally, GitRepublic can:
+   - Automatically fetch the repository from any configured clone URL (including GRASP servers)
+   - Display and serve repositories hosted entirely on GRASP servers
+   - Clone repositories from GRASP servers when users access them
+
+3. **Interoperability**: You can:
+   - Use GitRepublic as your primary git host while syncing to GRASP servers
+   - Host repositories on GRASP servers and have them accessible through GitRepublic
+   - Migrate repositories between GRASP servers and GitRepublic seamlessly
+
+**Example: Using GRASP Servers**
+
+When creating a repository, you can add GRASP server URLs as clone URLs:
+
+```
+https://grasp.example.com/user/repo.git
+```
+
+GitRepublic will automatically:
+- Clone from the GRASP server if the repo doesn't exist locally
+- Push all changes to the GRASP server after each push
+- Keep both repositories in sync
+
+This means you can use GitRepublic's direct git-based workflow while maintaining compatibility with GRASP-based services that use patches, PR updates, and other advanced NIP-34 features.
+
+For more information about the GRASP protocol, see the [GRASP Protocol Documentation](https://gitworkshop.dev/npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr/grasp).
+
 ### NIP-98 HTTP Authentication
 
 Git operations use NIP-98 for authentication:
