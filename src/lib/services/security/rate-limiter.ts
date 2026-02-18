@@ -66,14 +66,22 @@ export class RateLimiter {
 
   /**
    * Get rate limit configuration for operation type
+   * @param type - Operation type
+   * @param isAnonymous - Whether the user is anonymous (stricter limits)
    */
-  private getLimitForType(type: string): number {
-    const envKey = `RATE_LIMIT_${type.toUpperCase()}_MAX`;
+  private getLimitForType(type: string, isAnonymous: boolean = false): number {
+    // Anonymous users get stricter limits (50% of authenticated limits)
+    const anonymousMultiplier = isAnonymous ? 0.5 : 1.0;
+    
+    const envKey = isAnonymous 
+      ? `RATE_LIMIT_${type.toUpperCase()}_ANON_MAX`
+      : `RATE_LIMIT_${type.toUpperCase()}_MAX`;
+    
     const defaultLimits: Record<string, number> = {
-      git: 60,      // Git operations: 60/min
-      api: 120,     // API requests: 120/min
-      file: 30,     // File operations: 30/min
-      search: 20    // Search requests: 20/min
+      git: 60,      // Git operations: 60/min (authenticated), 30/min (anonymous)
+      api: 120,     // API requests: 120/min (authenticated), 60/min (anonymous)
+      file: 30,     // File operations: 30/min (authenticated), 15/min (anonymous)
+      search: 20    // Search requests: 20/min (authenticated), 10/min (anonymous)
     };
 
     const envValue = process.env[envKey];
@@ -81,14 +89,18 @@ export class RateLimiter {
       return parseInt(envValue, 10);
     }
 
-    return defaultLimits[type] || 60;
+    const baseLimit = defaultLimits[type] || 60;
+    return Math.floor(baseLimit * anonymousMultiplier);
   }
 
   /**
    * Check rate limit for a specific operation type
+   * @param type - Operation type
+   * @param identifier - User identifier (pubkey or IP)
+   * @param isAnonymous - Whether the user is anonymous (applies stricter limits)
    */
-  check(type: string, identifier: string): { allowed: boolean; remaining: number; resetAt: number } {
-    const maxRequests = this.getLimitForType(type);
+  check(type: string, identifier: string, isAnonymous: boolean = false): { allowed: boolean; remaining: number; resetAt: number } {
+    const maxRequests = this.getLimitForType(type, isAnonymous);
     return this.checkLimit(type, identifier, maxRequests);
   }
 

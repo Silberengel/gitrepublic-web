@@ -708,10 +708,6 @@
     }
   }
 
-  function logout() {
-    userPubkey = null;
-    isMaintainer = false;
-  }
 
   async function checkMaintainerStatus() {
     if (repoNotFound || !userPubkey) {

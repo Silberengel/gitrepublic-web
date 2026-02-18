@@ -1,6 +1,10 @@
 /**
  * Service for verifying that a user can write to at least one default relay
- * This replaces rate limiting by requiring proof of relay write capability
+ * This is a trust mechanism - only users who can write to trusted default relays
+ * get unlimited access. This limits access to trusted npubs.
+ * 
+ * The user only needs to be able to write to ONE of the default relays, not all.
+ * If the proof event is found on any default relay, access is granted.
  * 
  * Accepts NIP-98 events (kind 27235) as proof, since publishing a NIP-98 event
  * to a relay proves the user can write to that relay.
@@ -32,7 +36,7 @@ export async function verifyRelayWriteProof(
   proofEvent: NostrEvent,
   userPubkey: string,
   relays: string[] = DEFAULT_NOSTR_RELAYS
-): Promise<{ valid: boolean; error?: string; relay?: string }> {
+): Promise<{ valid: boolean; error?: string; relay?: string; relayDown?: boolean }> {
   // Verify the event signature
   if (!verifyEvent(proofEvent)) {
     return { valid: false, error: 'Invalid event signature' };
@@ -81,6 +85,8 @@ export async function verifyRelayWriteProof(
   }
 
   // Try to verify the event exists on at least one default relay
+  // User only needs write access to ONE of the default relays, not all
+  // This is a trust mechanism - if they can write to any trusted relay, they're trusted
   const nostrClient = new NostrClient(relays);
   try {
     const events = await nostrClient.fetchEvents([
@@ -92,7 +98,7 @@ export async function verifyRelayWriteProof(
     ]);
 
     if (events.length === 0) {
-      return { valid: false, error: 'Proof event not found on any default relay' };
+      return { valid: false, error: 'Proof event not found on any default relay. User must be able to write to at least one default relay.' };
     }
 
     // Verify the fetched event matches
@@ -101,12 +107,17 @@ export async function verifyRelayWriteProof(
       return { valid: false, error: 'Fetched event does not match proof event' };
     }
 
-    // Determine which relay(s) have the event (we can't know for sure, but we verified it exists)
+    // Event found on at least one default relay - user has write access
+    // We can't determine which specific relay(s) have it, but that's fine
+    // The important thing is they can write to at least one trusted relay
     return { valid: true, relay: relays[0] }; // Return first relay as indication
   } catch (error) {
+    // Relay connection failed - this is a network/relay issue, not an auth failure
+    // Return a special error that indicates we should check cache
     return {
       valid: false,
-      error: `Failed to verify proof on relays: ${error instanceof Error ? error.message : String(error)}`
+      error: `Failed to verify proof on relays: ${error instanceof Error ? error.message : String(error)}`,
+      relayDown: true // Flag to indicate relay connectivity issue
     };
   }
 }

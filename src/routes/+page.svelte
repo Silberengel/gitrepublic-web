@@ -4,13 +4,28 @@
   import { page } from '$app/stores';
   import { getPublicKeyWithNIP07, isNIP07Available } from '../lib/services/nostr/nip07-signer.js';
   import { nip19 } from 'nostr-tools';
+  import { determineUserLevel, decodePubkey } from '../lib/services/nostr/user-level-service.js';
+  import { userStore } from '../lib/stores/user-store.js';
+  import { updateActivity } from '../lib/services/activity-tracker.js';
 
   let userPubkey = $state<string | null>(null);
   let userPubkeyHex = $state<string | null>(null);
   let checkingAuth = $state(true);
+  let checkingLevel = $state(false);
+  let levelMessage = $state<string | null>(null);
 
-  onMount(async () => {
-    await checkAuth();
+  onMount(() => {
+    // Prevent body scroll when splash page is shown
+    document.body.style.overflow = 'hidden';
+    
+    // Check auth asynchronously
+    checkAuth();
+    
+    // Return cleanup function
+    return () => {
+      // Re-enable scrolling when component is destroyed
+      document.body.style.overflow = '';
+    };
   });
 
   async function checkAuth() {
@@ -37,13 +52,48 @@
   async function handleLogin() {
     if (isNIP07Available()) {
       try {
+        checkingLevel = true;
+        levelMessage = 'Checking authentication...';
+        
         await checkAuth();
-        if (userPubkey) {
+        
+        if (userPubkey && userPubkeyHex) {
+          levelMessage = 'Verifying relay write access...';
+          
+          // Determine user level (checks relay write access)
+          const levelResult = await determineUserLevel(userPubkey, userPubkeyHex);
+          
+          // Update user store
+          userStore.setUser(
+            levelResult.userPubkey,
+            levelResult.userPubkeyHex,
+            levelResult.level,
+            levelResult.error || null
+          );
+          
+          // Update activity tracking on successful login
+          updateActivity();
+          
+          checkingLevel = false;
+          levelMessage = null;
+          
+          // Show appropriate message based on level
+          if (levelResult.level === 'unlimited') {
+            levelMessage = 'Unlimited access granted!';
+          } else if (levelResult.level === 'rate_limited') {
+            levelMessage = 'Logged in with rate-limited access.';
+          }
+          
           // User is logged in, go to repos page
           goto('/repos');
+        } else {
+          checkingLevel = false;
+          levelMessage = null;
         }
       } catch (err) {
         console.error('Login failed:', err);
+        checkingLevel = false;
+        levelMessage = null;
         alert('Failed to login. Please make sure you have a Nostr extension installed (like nos2x or Alby).');
       }
     } else {
@@ -101,8 +151,11 @@
     </div>
 
     <div class="splash-message">
-      {#if checkingAuth}
-        <p class="splash-text">Checking authentication...</p>
+      {#if checkingAuth || checkingLevel}
+        <p class="splash-text">{levelMessage || 'Checking authentication...'}</p>
+        {#if checkingLevel && levelMessage}
+          <p class="splash-text-secondary">This may take a few seconds...</p>
+        {/if}
       {:else if userPubkey}
         <p class="splash-text">Welcome back! You're logged in.</p>
         <p class="splash-text-secondary">You can now access all repositories you have permission to view.</p>
@@ -114,7 +167,7 @@
     </div>
 
     <div class="splash-actions">
-      {#if checkingAuth}
+      {#if checkingAuth || checkingLevel}
         <div class="splash-loading">Loading...</div>
       {:else if userPubkey}
         <button class="splash-button splash-button-primary" onclick={() => goto('/repos')}>
@@ -135,13 +188,21 @@
 
 <style>
   .splash-container {
-    min-height: 100vh;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100vw;
+    height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
-    position: relative;
+    z-index: 9999;
     overflow: hidden;
     background: linear-gradient(135deg, var(--bg-primary, #f5f5f5) 0%, var(--bg-secondary, #e8e8e8) 100%);
+    /* Ensure it covers everything and blocks interaction */
+    pointer-events: auto;
   }
 
   .splash-background {

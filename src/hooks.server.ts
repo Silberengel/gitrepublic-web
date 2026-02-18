@@ -54,16 +54,33 @@ export const handle: Handle = async ({ event, resolve }) => {
     rateLimitType = 'search';
   }
 
+  // Extract user pubkey for rate limiting (authenticated users get higher limits)
+  const userPubkey = event.request.headers.get('X-User-Pubkey') || 
+                     event.request.headers.get('x-user-pubkey') ||
+                     url.searchParams.get('userPubkey') || 
+                     null;
+  
+  // Use user pubkey as identifier if authenticated, otherwise use IP
+  // This allows authenticated users to have per-user limits (can't bypass by changing IP)
+  // and anonymous users are limited by IP (prevents abuse)
+  const rateLimitIdentifier = userPubkey ? `user:${userPubkey}` : `ip:${clientIp}`;
+  const isAnonymous = !userPubkey;
+
   // Check rate limit (skip for Vite internal requests)
   const rateLimitResult = isViteInternalRequest 
     ? { allowed: true, resetAt: Date.now() }
-    : rateLimiter.check(rateLimitType, clientIp);
+    : rateLimiter.check(rateLimitType, rateLimitIdentifier, isAnonymous);
   if (!rateLimitResult.allowed) {
     auditLogger.log({
       ip: clientIp,
       action: `rate_limit.${rateLimitType}`,
       result: 'denied',
-      metadata: { path: url.pathname }
+      metadata: { 
+        path: url.pathname,
+        identifier: rateLimitIdentifier,
+        isAnonymous,
+        userPubkey: userPubkey || null
+      }
     });
     return error(429, `Rate limit exceeded. Try again after ${new Date(rateLimitResult.resetAt).toISOString()}`);
   }
@@ -74,6 +91,27 @@ export const handle: Handle = async ({ event, resolve }) => {
   
   try {
     const response = await resolve(event);
+    
+    // Add security headers
+    response.headers.set('X-Content-Type-Options', 'nosniff');
+    response.headers.set('X-Frame-Options', 'DENY');
+    response.headers.set('X-XSS-Protection', '1; mode=block');
+    response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+    response.headers.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+    
+    // Add CSP header (Content Security Policy)
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'", // unsafe-eval needed for Svelte
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: https:",
+      "font-src 'self' data:",
+      "connect-src 'self' wss: https:",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self'"
+    ].join('; ');
+    response.headers.set('Content-Security-Policy', csp);
     
     // Log successful request if it's a security-sensitive operation
     if (url.pathname.startsWith('/api/')) {

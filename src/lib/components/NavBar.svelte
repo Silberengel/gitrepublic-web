@@ -1,16 +1,35 @@
 <script lang="ts">
   import { page } from '$app/stores';
+  import { goto } from '$app/navigation';
   import { getPublicKeyWithNIP07, isNIP07Available } from '../services/nostr/nip07-signer.js';
   import { nip19 } from 'nostr-tools';
   import ThemeToggle from './ThemeToggle.svelte';
   import UserBadge from './UserBadge.svelte';
   import { onMount } from 'svelte';
+  import { userStore } from '../stores/user-store.js';
+  import { clearActivity, updateActivity } from '../services/activity-tracker.js';
 
   let userPubkey = $state<string | null>(null);
   let mobileMenuOpen = $state(false);
 
   onMount(async () => {
     await checkAuth();
+    // Update activity on mount
+    updateActivity();
+    
+    // Set up activity tracking for user interactions
+    const updateActivityOnInteraction = () => updateActivity();
+    
+    // Track various user interactions
+    document.addEventListener('click', updateActivityOnInteraction, { passive: true });
+    document.addEventListener('keydown', updateActivityOnInteraction, { passive: true });
+    document.addEventListener('scroll', updateActivityOnInteraction, { passive: true });
+    
+    return () => {
+      document.removeEventListener('click', updateActivityOnInteraction);
+      document.removeEventListener('keydown', updateActivityOnInteraction);
+      document.removeEventListener('scroll', updateActivityOnInteraction);
+    };
   });
 
   function toggleMobileMenu() {
@@ -46,6 +65,12 @@
 
   function logout() {
     userPubkey = null;
+    // Reset user store
+    userStore.reset();
+    // Clear activity tracking
+    clearActivity();
+    // Navigate to home page to reset all component state to anonymous
+    goto('/');
   }
 
   function isActive(path: string): boolean {
