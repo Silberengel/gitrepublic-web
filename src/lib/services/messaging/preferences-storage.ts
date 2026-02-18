@@ -8,7 +8,15 @@
  * - Per-user key derivation (master key + pubkey + salt)
  * - AES-256-GCM authenticated encryption
  * - Random IV per encryption
+ * 
+ * NOTE: This module uses Node.js crypto and should only be used server-side.
+ * It will throw an error if imported in browser/client code.
  */
+
+// Ensure this is only used server-side
+if (typeof window !== 'undefined') {
+  throw new Error('preferences-storage.ts uses Node.js crypto and cannot be imported in browser code. Use API endpoints instead.');
+}
 
 import { 
   createCipheriv, 

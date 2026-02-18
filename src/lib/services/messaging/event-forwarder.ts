@@ -6,9 +6,22 @@
 
 import logger from '../logger.js';
 import type { NostrEvent } from '../../types/nostr.js';
-import { getPreferences } from './preferences-storage.js';
 import { getCachedUserLevel } from '../security/user-level-cache.js';
 import { KIND } from '../../types/nostr.js';
+
+// Lazy import to avoid importing Node.js crypto in browser
+let getPreferences: typeof import('./preferences-storage.js').getPreferences;
+async function getPreferencesLazy() {
+  if (typeof window !== 'undefined') {
+    // Browser environment - event forwarding should be done server-side
+    return null;
+  }
+  if (!getPreferences) {
+    const module = await import('./preferences-storage.js');
+    getPreferences = module.getPreferences;
+  }
+  return getPreferences;
+}
 
 // ============================================================================
 // Types & Interfaces
@@ -584,7 +597,12 @@ export async function forwardEventIfEnabled(
       return;
     }
 
-    const preferences = await getPreferences(userPubkeyHex);
+    const getPreferencesFn = await getPreferencesLazy();
+    if (!getPreferencesFn) {
+      // Browser environment - forwarding should be done server-side via API
+      return;
+    }
+    const preferences = await getPreferencesFn(userPubkeyHex);
     if (!preferences || !preferences.enabled) {
       return;
     }

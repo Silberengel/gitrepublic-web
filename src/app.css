@@ -251,13 +251,13 @@ button:disabled, .button:disabled {
   cursor: not-allowed;
 }
 
-.btn-primary, .login-button, .save-button, .view-button, .search-button, .create-file-button, .create-branch-button, .create-tag-button, .create-issue-button, .create-pr-button, .add-comment-btn, .reply-btn {
+.btn-primary, .login-button, .save-button, .search-button, .create-file-button, .create-branch-button, .create-tag-button, .create-issue-button, .create-pr-button, .add-comment-btn, .reply-btn {
   background: var(--button-primary);
   color: white;
   border: none;
 }
 
-.btn-primary:hover:not(:disabled), .login-button:hover:not(:disabled), .save-button:hover:not(:disabled), .view-button:hover, .search-button:hover:not(:disabled), .create-file-button:hover, .create-branch-button:hover, .create-tag-button:hover, .create-issue-button:hover, .create-pr-button:hover, .add-comment-btn:hover, .reply-btn:hover {
+.btn-primary:hover:not(:disabled), .login-button:hover:not(:disabled), .save-button:hover:not(:disabled), .search-button:hover:not(:disabled), .create-file-button:hover, .create-branch-button:hover, .create-tag-button:hover, .create-issue-button:hover, .create-pr-button:hover, .add-comment-btn:hover, .reply-btn:hover {
   background: var(--button-primary-hover);
 }
 
@@ -1287,7 +1287,15 @@ label.filter-checkbox > span,
 .register-button {
   background: var(--accent);
   color: var(--accent-text, white);
-  border-color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+  display: inline-block;
 }
 
 .register-button:hover {

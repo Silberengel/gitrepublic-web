@@ -462,7 +462,7 @@
                         <p class="description">{getRepoDescription(repo)}</p>
                       {/if}
                     </div>
-                    <a href="/repos/{item.npub}/{item.repoName}" class="view-button">
+                    <a href="/repos/{item.npub}/{item.repoName}" class="register-button">
                       View & Edit →
                     </a>
                   </div>
@@ -524,7 +524,7 @@
                       {/if}
                     </div>
                     <div class="repo-actions">
-                      <a href="/repos/{item.npub}/{item.repoName}" class="view-button">
+                      <a href="/repos/{item.npub}/{item.repoName}" class="register-button">
                         View & Edit →
                       </a>
                       {#if canDelete}
