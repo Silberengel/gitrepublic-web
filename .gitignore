@@ -11,4 +11,3 @@ yarn-error.log
 
 # Cloned repositories - should never be committed
 /repos/
-repos/

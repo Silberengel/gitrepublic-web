@@ -212,7 +212,7 @@ export const GET: RequestHandler = async (event) => {
     const requestContext = extractRequestContext(event);
     const userPubkey = requestContext.userPubkeyHex || null;
     const gitDomain = event.url.searchParams.get('domain') || GIT_DOMAIN;
-    const forceRefresh = url.searchParams.get('refresh') === 'true';
+    const forceRefresh = event.url.searchParams.get('refresh') === 'true';
     
     // Check cache
     if (!forceRefresh && cache && (Date.now() - cache.timestamp) < CACHE_TTL) {

@@ -96,7 +96,6 @@
   
   <div class="splash-content">
     <div class="splash-header">
-      <img src="/logo.png" alt="GitRepublic" class="splash-logo" />
       <h1 class="splash-title">GitRepublic</h1>
       <p class="splash-subtitle">Decentralized Git Hosting on Nostr</p>
     </div>
@@ -131,20 +130,6 @@
       {/if}
     </div>
 
-    <div class="splash-features">
-      <div class="feature-item">
-        <strong>🔐 Private Repositories</strong>
-        <p>Control who can access your code</p>
-      </div>
-      <div class="feature-item">
-        <strong>🌐 Decentralized</strong>
-        <p>Built on Nostr protocol</p>
-      </div>
-      <div class="feature-item">
-        <strong>🔧 Full Git Support</strong>
-        <p>All standard Git operations</p>
-      </div>
-    </div>
   </div>
 </div>
 
@@ -190,14 +175,6 @@
 
   .splash-header {
     margin-bottom: 3rem;
-  }
-
-  .splash-logo {
-    width: 120px;
-    height: 120px;
-    margin: 0 auto 1.5rem;
-    display: block;
-    filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.1));
   }
 
   .splash-title {
@@ -284,32 +261,6 @@
     padding: 2rem;
   }
 
-  .splash-features {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 2rem;
-    margin-top: 4rem;
-    padding-top: 3rem;
-    border-top: 1px solid var(--border-color, #ddd);
-  }
-
-  .feature-item {
-    text-align: center;
-  }
-
-  .feature-item strong {
-    display: block;
-    font-size: 1.2rem;
-    color: var(--text-primary, #1a1a1a);
-    margin-bottom: 0.5rem;
-  }
-
-  .feature-item p {
-    font-size: 0.95rem;
-    color: var(--text-secondary, #666);
-    margin: 0;
-  }
-
   @media (max-width: 768px) {
     .splash-title {
       font-size: 2.5rem;
@@ -323,19 +274,9 @@
       font-size: 1.2rem;
     }
 
-    .splash-logo {
-      width: 80px;
-      height: 80px;
-    }
-
     .splash-button {
       width: 100%;
       min-width: unset;
-    }
-
-    .splash-features {
-      grid-template-columns: 1fr;
-      gap: 1.5rem;
     }
   }
 
