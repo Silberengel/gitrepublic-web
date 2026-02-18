@@ -7,17 +7,20 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
-import { DEFAULT_NOSTR_RELAYS, GIT_DOMAIN } from '$lib/config.js';
+import { BookmarksService } from '$lib/services/nostr/bookmarks-service.js';
+import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS, GIT_DOMAIN } from '$lib/config.js';
 import { KIND } from '$lib/types/nostr.js';
 import { nip19 } from 'nostr-tools';
 import { handleApiError, handleValidationError } from '$lib/utils/error-handler.js';
 import { extractRequestContext } from '$lib/utils/api-context.js';
 import logger from '$lib/services/logger.js';
+import { truncatePubkey } from '$lib/utils/security.js';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import type { RequestEvent } from '@sveltejs/kit';
 
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
+const bookmarksService = new BookmarksService(DEFAULT_NOSTR_SEARCH_RELAYS);
 
 export const GET: RequestHandler = async (event) => {
   try {
@@ -51,6 +54,16 @@ export const GET: RequestHandler = async (event) => {
       }
     ]);
 
+    // Get viewer's bookmarked repos if authenticated
+    let bookmarkedRepos: Set<string> = new Set();
+    if (viewerPubkey) {
+      try {
+        bookmarkedRepos = await bookmarksService.getBookmarkedRepos(viewerPubkey);
+      } catch (err) {
+        logger.warn({ error: err, viewerPubkey: truncatePubkey(viewerPubkey) }, 'Failed to fetch bookmarked repos');
+      }
+    }
+    
     const repos: NostrEvent[] = [];
     
     // Process each announcement with privacy filtering
@@ -59,10 +72,6 @@ export const GET: RequestHandler = async (event) => {
         .filter(t => t[0] === 'clone')
         .flatMap(t => t.slice(1))
         .filter(url => url && typeof url === 'string');
-      
-      // Filter for repos that list our domain
-      const hasDomain = cloneUrls.some(url => url.includes(gitDomain));
-      if (!hasDomain) continue;
       
       // Extract repo name from d-tag
       const dTag = event.tags.find(t => t[0] === 'd')?.[1];
@@ -79,9 +88,16 @@ export const GET: RequestHandler = async (event) => {
       if (!isPrivate) {
         canView = true; // Public repos are viewable by anyone
       } else if (viewerPubkey) {
-        // Private repos require authentication
+        // Private repos require authentication - check if viewer owns, maintains, or has bookmarked
         try {
+          // Check if viewer is owner or maintainer
           canView = await maintainerService.canView(viewerPubkey, userPubkey, dTag);
+          
+          // If not owner/maintainer, check if viewer has bookmarked it
+          if (!canView) {
+            const repoAddress = `${KIND.REPO_ANNOUNCEMENT}:${userPubkey}:${dTag}`;
+            canView = bookmarkedRepos.has(repoAddress);
+          }
         } catch (err) {
           logger.warn({ error: err, pubkey: userPubkey, repo: dTag }, 'Failed to check repo access');
           canView = false;

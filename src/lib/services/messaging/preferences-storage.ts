@@ -30,15 +30,16 @@ import logger from '../logger.js';
 import { getCachedUserLevel } from '../security/user-level-cache.js';
 
 // Encryption keys from environment (NEVER commit these!)
+// These are optional - if not set, messaging preferences will be disabled
 const ENCRYPTION_KEY = process.env.MESSAGING_PREFS_ENCRYPTION_KEY;
 const SALT_ENCRYPTION_KEY = process.env.MESSAGING_SALT_ENCRYPTION_KEY;
 const LOOKUP_SECRET = process.env.MESSAGING_LOOKUP_SECRET;
 
-if (!ENCRYPTION_KEY || !SALT_ENCRYPTION_KEY || !LOOKUP_SECRET) {
-  throw new Error(
-    'Missing required environment variables: ' +
-    'MESSAGING_PREFS_ENCRYPTION_KEY, MESSAGING_SALT_ENCRYPTION_KEY, MESSAGING_LOOKUP_SECRET'
-  );
+// Check if messaging preferences are configured
+const isMessagingConfigured = !!(ENCRYPTION_KEY && SALT_ENCRYPTION_KEY && LOOKUP_SECRET);
+
+if (!isMessagingConfigured) {
+  logger.warn('Messaging preferences storage is not configured. Missing environment variables: MESSAGING_PREFS_ENCRYPTION_KEY, MESSAGING_SALT_ENCRYPTION_KEY, MESSAGING_LOOKUP_SECRET');
 }
 
 export interface MessagingPreferences {
@@ -90,17 +91,19 @@ setInterval(() => {
  */
 function getLookupKey(userPubkeyHex: string): string {
   if (!LOOKUP_SECRET) {
-    throw new Error('LOOKUP_SECRET not configured');
+    throw new Error('Messaging preferences are not configured. LOOKUP_SECRET environment variable is missing.');
   }
   return createHmac('sha256', LOOKUP_SECRET)
     .update(userPubkeyHex)
     .digest('hex');
 }
 
-/**
- * Check and enforce rate limiting on decryption attempts
- */
 function checkRateLimit(userPubkeyHex: string): { allowed: boolean; remaining: number } {
+  // If not configured, allow all (no rate limiting)
+  if (!isMessagingConfigured) {
+    return { allowed: true, remaining: MAX_DECRYPTION_ATTEMPTS };
+  }
+
   const lookupKey = getLookupKey(userPubkeyHex);
   const now = Date.now();
   
@@ -124,6 +127,7 @@ function checkRateLimit(userPubkeyHex: string): { allowed: boolean; remaining: n
   attempt.count++;
   return { allowed: true, remaining: MAX_DECRYPTION_ATTEMPTS - attempt.count };
 }
+
 
 /**
  * Encrypt data with AES-256-GCM
@@ -216,6 +220,10 @@ export async function storePreferences(
   userPubkeyHex: string,
   preferences: MessagingPreferences
 ): Promise<void> {
+  if (!isMessagingConfigured) {
+    throw new Error('Messaging preferences are not configured. Please set MESSAGING_PREFS_ENCRYPTION_KEY, MESSAGING_SALT_ENCRYPTION_KEY, and MESSAGING_LOOKUP_SECRET environment variables.');
+  }
+
   // Verify user has unlimited access
   const cached = getCachedUserLevel(userPubkeyHex);
   if (!cached || cached.level !== 'unlimited') {
@@ -257,6 +265,11 @@ export async function storePreferences(
 export async function getPreferences(
   userPubkeyHex: string
 ): Promise<MessagingPreferences | null> {
+  if (!isMessagingConfigured) {
+    // If not configured, return null (no preferences stored)
+    return null;
+  }
+
   // Check rate limit
   const rateLimit = checkRateLimit(userPubkeyHex);
   if (!rateLimit.allowed) {
@@ -365,27 +378,39 @@ export async function getPreferencesSummary(userPubkeyHex: string): Promise<{
   };
   notifyOn?: string[];
 } | null> {
-  const preferences = await getPreferences(userPubkeyHex);
-  
-  if (!preferences) {
+  try {
+    // If not configured, return null (not configured)
+    if (!isMessagingConfigured) {
+      return null;
+    }
+
+    const preferences = await getPreferences(userPubkeyHex);
+    
+    if (!preferences) {
+      return null;
+    }
+
+    return {
+      configured: true,
+      enabled: preferences.enabled,
+      platforms: {
+        telegram: !!preferences.telegram,
+        simplex: !!preferences.simplex,
+        email: !!preferences.email,
+        gitPlatforms: preferences.gitPlatforms?.map(gp => ({
+          platform: gp.platform,
+          owner: gp.owner,
+          repo: gp.repo,
+          apiUrl: gp.apiUrl
+          // token is intentionally omitted
+        }))
+      },
+      notifyOn: preferences.notifyOn
+    };
+  } catch (err) {
+    // If any error occurs (e.g., decryption fails, not configured, etc.), return null
+    logger.warn({ error: err, userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 
+      'Failed to get preferences summary');
     return null;
   }
-
-  return {
-    configured: true,
-    enabled: preferences.enabled,
-    platforms: {
-      telegram: !!preferences.telegram,
-      simplex: !!preferences.simplex,
-      email: !!preferences.email,
-      gitPlatforms: preferences.gitPlatforms?.map(gp => ({
-        platform: gp.platform,
-        owner: gp.owner,
-        repo: gp.repo,
-        apiUrl: gp.apiUrl
-        // token is intentionally omitted
-      }))
-    },
-    notifyOn: preferences.notifyOn
-  };
 }

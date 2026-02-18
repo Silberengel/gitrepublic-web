@@ -14,12 +14,31 @@
   let checkingLevel = $state(false);
   let levelMessage = $state<string | null>(null);
 
+  // React to userStore changes (e.g., when user logs out)
+  $effect(() => {
+    const currentUser = $userStore;
+    if (!currentUser.userPubkey) {
+      // User has logged out - clear local state
+      userPubkey = null;
+      userPubkeyHex = null;
+    }
+  });
+
   onMount(() => {
     // Prevent body scroll when splash page is shown
     document.body.style.overflow = 'hidden';
     
-    // Check auth asynchronously
-    checkAuth();
+    // Check userStore first - if user has logged out, don't check extension
+    const currentUser = $userStore;
+    if (!currentUser.userPubkey) {
+      // User has logged out or never logged in
+      userPubkey = null;
+      userPubkeyHex = null;
+      checkingAuth = false;
+    } else {
+      // Check auth asynchronously
+      checkAuth();
+    }
     
     // Return cleanup function
     return () => {
@@ -30,6 +49,16 @@
 
   async function checkAuth() {
     checkingAuth = true;
+    
+    // Check userStore first - if user has logged out, clear state
+    const currentUser = $userStore;
+    if (!currentUser.userPubkey) {
+      userPubkey = null;
+      userPubkeyHex = null;
+      checkingAuth = false;
+      return;
+    }
+    
     if (isNIP07Available()) {
       try {
         userPubkey = await getPublicKeyWithNIP07();
@@ -53,7 +82,13 @@
         }
       } catch (err) {
         console.warn('Failed to load user pubkey:', err);
+        userPubkey = null;
+        userPubkeyHex = null;
       }
+    } else {
+      // Extension not available, clear state
+      userPubkey = null;
+      userPubkeyHex = null;
     }
     checkingAuth = false;
   }

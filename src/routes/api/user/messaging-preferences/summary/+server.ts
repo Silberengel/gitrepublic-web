@@ -53,6 +53,24 @@ export const GET: RequestHandler = async (event) => {
       });
     }
     
-    return error(500, 'Failed to get messaging preferences summary');
+    // If messaging is not configured, return not configured
+    if (err instanceof Error && (
+      err.message.includes('not configured') || 
+      err.message.includes('environment variable') ||
+      err.message.includes('LOOKUP_SECRET')
+    )) {
+      return json({
+        configured: false,
+        enabled: false,
+        platforms: {}
+      });
+    }
+    
+    // For any other error, return not configured (graceful degradation)
+    return json({
+      configured: false,
+      enabled: false,
+      platforms: {}
+    });
   }
 };

@@ -100,6 +100,7 @@ export const handle: Handle = async ({ event, resolve }) => {
     response.headers.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
     
     // Add CSP header (Content Security Policy)
+    // Allow frames from common git hosting platforms for web URL previews
     const csp = [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline' 'unsafe-eval'", // unsafe-eval needed for Svelte
@@ -107,6 +108,7 @@ export const handle: Handle = async ({ event, resolve }) => {
       "img-src 'self' data: https:",
       "font-src 'self' data: https://fonts.gstatic.com",
       "connect-src 'self' wss: https:",
+      "frame-src 'self' https:", // Allow iframes from same origin and HTTPS URLs (for web URL previews)
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'"

@@ -52,6 +52,7 @@ export const KIND = {
   THREAD: 11, // NIP-7D: Discussion thread
   BRANCH_PROTECTION: 30620, // Custom: Branch protection rules
   RELAY_LIST: 10002, // NIP-65: Relay list metadata
+  BOOKMARKS: 10003, // NIP-51: Bookmarks list
   NIP98_AUTH: 27235, // NIP-98: HTTP authentication event
   HIGHLIGHT: 9802, // NIP-84: Highlight event
   PUBLIC_MESSAGE: 24, // NIP-24: Public message (direct chat)

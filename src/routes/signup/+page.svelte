@@ -253,6 +253,119 @@
     documentation = newDocs;
   }
 
+  async function lookupDocumentation(index: number) {
+    const doc = documentation[index]?.trim();
+    if (!doc) {
+      lookupError[`doc-${index}`] = 'Please enter a naddr to lookup';
+      return;
+    }
+
+    const lookupKey = `doc-${index}`;
+    lookupLoading[lookupKey] = true;
+    lookupError[lookupKey] = null;
+    lookupResults[lookupKey] = null;
+
+    try {
+      // Try to decode as naddr
+      let decoded;
+      try {
+        decoded = nip19.decode(doc);
+      } catch {
+        lookupError[lookupKey] = 'Invalid naddr format';
+        return;
+      }
+
+      if (decoded.type !== 'naddr') {
+        lookupError[lookupKey] = 'Please enter a valid naddr (naddr1...)';
+        return;
+      }
+
+      // Extract the components from the decoded naddr
+      const { pubkey, kind, identifier, relays } = decoded.data as {
+        pubkey: string;
+        kind: number;
+        identifier: string;
+        relays?: string[];
+      };
+
+      if (!pubkey || !kind || !identifier) {
+        lookupError[lookupKey] = 'Invalid naddr: missing required components';
+        return;
+      }
+
+      // Convert to the format needed for documentation tag: kind:pubkey:identifier
+      // If there's a relay hint, we can optionally add it, but the standard format is kind:pubkey:identifier
+      const docFormat = `${kind}:${pubkey}:${identifier}`;
+      
+      // Update the documentation field with the converted format
+      const newDocs = [...documentation];
+      newDocs[index] = docFormat;
+      documentation = newDocs;
+
+      // Also fetch the event to show some info
+      const relaysToUse = relays && relays.length > 0 ? relays : getSearchRelays();
+      const client = new NostrClient(relaysToUse);
+      
+      const events = await client.fetchEvents([
+        {
+          kinds: [kind],
+          authors: [pubkey],
+          '#d': [identifier],
+          limit: 1
+        }
+      ]);
+
+      if (events.length > 0) {
+        lookupResults[lookupKey] = events;
+        lookupError[lookupKey] = null;
+      } else {
+        // Still update the field even if we can't fetch the event
+        lookupError[lookupKey] = 'Documentation address converted, but event not found on relays';
+      }
+    } catch (err) {
+      lookupError[lookupKey] = `Lookup failed: ${String(err)}`;
+    } finally {
+      lookupLoading[lookupKey] = false;
+    }
+  }
+
+  /**
+   * Publish event with retry logic
+   * Retries failed relays up to maxRetries times
+   */
+  async function publishWithRetry(
+    client: NostrClient,
+    event: NostrEvent,
+    relays: string[],
+    maxRetries: number = 2
+  ): Promise<{ success: string[]; failed: Array<{ relay: string; error: string }> }> {
+    let result = await client.publishEvent(event, relays);
+    
+    // If we have some successes, return early
+    if (result.success.length > 0) {
+      return result;
+    }
+    
+    // If all failed and we have retries left, retry only the failed relays
+    if (result.failed.length > 0 && maxRetries > 0) {
+      console.log(`Retrying publish to ${result.failed.length} failed relay(s)...`);
+      const failedRelays = result.failed.map((f: { relay: string; error: string }) => f.relay);
+      
+      // Wait a bit before retry
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      const retryResult = await client.publishEvent(event, failedRelays);
+      
+      // Merge results
+      return {
+        success: [...result.success, ...retryResult.success],
+        failed: retryResult.failed
+      };
+    }
+    
+    return result;
+  }
+
   async function handleWebUrlHover(index: number, url: string) {
     // Clear any existing timeout
     if (previewTimeout) {
@@ -462,8 +575,8 @@
         }
         
         // Filter private repos
-        events = await Promise.all(
-          filteredEvents.map(async (event) => {
+        const filteredPrivateEvents = await Promise.all(
+          filteredEvents.map(async (event): Promise<NostrEvent | null> => {
             const isPrivate = event.tags.some(t => 
               (t[0] === 'private' && t[1] === 'true') || 
               (t[0] === 't' && t[1] === 'private')
@@ -503,7 +616,7 @@
             return null;
           })
         );
-        events = events.filter(e => e !== null) as NostrEvent[];
+        events = filteredPrivateEvents.filter((e): e is NostrEvent => e !== null);
       }
 
       if (events.length === 0) {
@@ -1260,22 +1373,64 @@
       };
 
       // Sign with NIP-07
+      console.log('Signing repository announcement event...');
       const signedEvent = await signEventWithNIP07(eventTemplate);
+      console.log('Event signed successfully, event ID:', signedEvent.id);
 
-      // Get user's inbox/outbox relays (from kind 10002) using full relay set to find newest
+      // Get user's inbox/outbox relays (from kind 10002) using comprehensive relay set
+      console.log('Fetching user relays from comprehensive relay set...');
       const { getUserRelays } = await import('../../lib/services/nostr/user-relays.js');
-      // Use comprehensive relay set to ensure we get the newest kind 10002 event
-      const fullRelaySet = combineRelays([], [...DEFAULT_NOSTR_SEARCH_RELAYS, ...DEFAULT_NOSTR_RELAYS]);
-      const fullRelayClient = new NostrClient(fullRelaySet);
-      const { inbox, outbox } = await getUserRelays(pubkey, fullRelayClient);
       
-      // Combine user's outbox with default relays
-      const userRelays = combineRelays(outbox);
+      // Use comprehensive relay set including ALL search relays and default relays
+      // This ensures we can find the user's kind 10002 event even if it's on a less common relay
+      const allSearchRelays = [...new Set([...DEFAULT_NOSTR_SEARCH_RELAYS, ...DEFAULT_NOSTR_RELAYS])];
+      console.log('Querying kind 10002 from relays:', allSearchRelays);
+      const fullRelayClient = new NostrClient(allSearchRelays);
+      
+      let userRelays: string[] = [];
+      try {
+        const { inbox, outbox } = await getUserRelays(pubkey, fullRelayClient);
+        console.log('User relays fetched - inbox:', inbox.length, 'outbox:', outbox.length);
+        if (inbox.length > 0) console.log('Inbox relays:', inbox);
+        if (outbox.length > 0) console.log('Outbox relays:', outbox);
+        
+        // If we found user relays, use them; otherwise fall back to defaults
+        if (outbox.length > 0) {
+          // Use user's outbox relays (these are the relays the user prefers for publishing)
+          // Combine with defaults as fallback
+          userRelays = combineRelays(outbox, DEFAULT_NOSTR_RELAYS);
+          console.log('Using user outbox relays for publishing:', outbox);
+        } else if (inbox.length > 0) {
+          // If no outbox but have inbox, use inbox relays (some users only set inbox)
+          userRelays = combineRelays(inbox, DEFAULT_NOSTR_RELAYS);
+          console.log('Using user inbox relays for publishing (no outbox found):', inbox);
+        } else {
+          // No user relays found, use defaults
+          userRelays = DEFAULT_NOSTR_RELAYS;
+          console.warn('No user relays found in kind 10002, using default relays only');
+        }
+      } catch (err) {
+        console.warn('Failed to fetch user relays, using defaults:', err);
+        // Fall back to default relays if user relay fetch fails
+        userRelays = DEFAULT_NOSTR_RELAYS;
+      }
+      
+      // Ensure we have at least some relays to publish to
+      if (userRelays.length === 0) {
+        console.warn('No relays available, using default relays');
+        userRelays = DEFAULT_NOSTR_RELAYS;
+      }
+      
+      console.log('Final relay set for publishing:', userRelays);
+      
+      console.log('Using relays for publishing:', userRelays);
 
-      // Publish repository announcement
-      const result = await nostrClient.publishEvent(signedEvent, userRelays);
+      // Publish repository announcement with retry logic
+      let publishResult = await publishWithRetry(nostrClient, signedEvent, userRelays, 2);
+      console.log('Publish result:', publishResult);
 
-      if (result.success.length > 0) {
+      if (publishResult.success.length > 0) {
+        console.log(`Successfully published to ${publishResult.success.length} relay(s):`, publishResult.success);
         // Create and publish initial ownership proof (self-transfer event)
         const { OwnershipTransferService } = await import('../../lib/services/nostr/ownership-transfer-service.js');
         const ownershipService = new OwnershipTransferService(userRelays);
@@ -1289,11 +1444,18 @@
         });
 
         success = true;
+        // Redirect to the newly created repository page
+        // Use invalidateAll to ensure the repos list refreshes
+        const userNpub = nip19.npubEncode(pubkey);
         setTimeout(() => {
-          goto('/');
+          // Invalidate all caches and redirect
+          goto(`/repos/${userNpub}/${dTag}`, { invalidateAll: true, replaceState: false });
         }, 2000);
       } else {
-        error = 'Failed to publish to any relays.';
+        // Show detailed error information
+        const errorDetails = publishResult.failed.map(f => `${f.relay}: ${f.error}`).join('\n');
+        error = `Failed to publish to any relays after retries.\n\nRelays attempted: ${userRelays.length}\n\nErrors:\n${errorDetails || 'Unknown error'}\n\nPlease check:\n• Your internet connection\n• Relay availability\n• Try again in a few moments`;
+        console.error('Failed to publish repository announcement:', publishResult);
       }
 
     } catch (e) {
@@ -1837,9 +1999,18 @@
               type="text"
               value={doc}
               oninput={(e) => updateDocumentation(index, e.currentTarget.value)}
-              placeholder="30818:pubkey:d-tag"
+              placeholder="naddr1... or 30818:pubkey:d-tag"
               disabled={loading}
             />
+            <button
+              type="button"
+              onclick={() => lookupDocumentation(index)}
+              disabled={loading || lookupLoading[`doc-${index}`]}
+              class="lookup-button"
+              title="Lookup naddr and convert to documentation format"
+            >
+              {lookupLoading[`doc-${index}`] ? '...' : 'Lookup'}
+            </button>
             {#if documentation.length > 1}
               <button
                 type="button"
@@ -1850,6 +2021,14 @@
               </button>
             {/if}
           </div>
+          {#if lookupError[`doc-${index}`]}
+            <div class="error-text">{lookupError[`doc-${index}`]}</div>
+          {/if}
+          {#if lookupResults[`doc-${index}`]}
+            <div class="lookup-results">
+              <small>✓ Documentation address converted successfully</small>
+            </div>
+          {/if}
         {/each}
         <button
           type="button"

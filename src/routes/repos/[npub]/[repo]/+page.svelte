@@ -8,8 +8,9 @@
   import ForwardingConfig from '$lib/components/ForwardingConfig.svelte';
   import { getPublicKeyWithNIP07, isNIP07Available } from '$lib/services/nostr/nip07-signer.js';
   import { NostrClient } from '$lib/services/nostr/nostr-client.js';
-  import { DEFAULT_NOSTR_RELAYS, combineRelays } from '$lib/config.js';
+  import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS, combineRelays } from '$lib/config.js';
   import { getUserRelays } from '$lib/services/nostr/user-relays.js';
+  import { BookmarksService } from '$lib/services/nostr/bookmarks-service.js';
   import { KIND } from '$lib/types/nostr.js';
   import { nip19 } from 'nostr-tools';
 
@@ -126,6 +127,12 @@
   // Fork
   let forkInfo = $state<{ isFork: boolean; originalRepo: { npub: string; repo: string } | null } | null>(null);
   let forking = $state(false);
+
+  // Bookmarks
+  let isBookmarked = $state(false);
+  let loadingBookmark = $state(false);
+  let bookmarksService: BookmarksService | null = null;
+  let repoAddress = $state<string | null>(null);
 
   // Repository images
   let repoImage = $state<string | null>(null);
@@ -745,6 +752,20 @@
   });
 
   onMount(async () => {
+    // Initialize bookmarks service
+    bookmarksService = new BookmarksService(DEFAULT_NOSTR_SEARCH_RELAYS);
+    
+    // Decode npub to get repo owner pubkey for bookmark address
+    try {
+      const decoded = nip19.decode(npub);
+      if (decoded.type === 'npub') {
+        const repoOwnerPubkey = decoded.data as string;
+        repoAddress = `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkey}:${repo}`;
+      }
+    } catch (err) {
+      console.warn('Failed to decode npub for bookmark address:', err);
+    }
+
     await loadBranches();
     // Skip other API calls if repository doesn't exist
     if (repoNotFound) {
@@ -759,6 +780,7 @@
     await checkAuth();
     await loadTags();
     await checkMaintainerStatus();
+    await loadBookmarkStatus();
     await checkVerification();
     await loadReadme();
     await loadForkInfo();
@@ -769,8 +791,9 @@
     try {
       if (isNIP07Available()) {
         userPubkey = await getPublicKeyWithNIP07();
-        // Recheck maintainer status after auth
+        // Recheck maintainer status and bookmark status after auth
         await checkMaintainerStatus();
+        await loadBookmarkStatus();
       }
     } catch (err) {
       console.log('NIP-07 not available or user not connected');
@@ -785,14 +808,57 @@
         return;
       }
       userPubkey = await getPublicKeyWithNIP07();
-      // Re-check maintainer status after login
+      // Re-check maintainer status and bookmark status after login
       await checkMaintainerStatus();
+      await loadBookmarkStatus();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to connect';
       console.error('Login error:', err);
     }
   }
 
+
+  async function loadBookmarkStatus() {
+    if (!userPubkey || !repoAddress || !bookmarksService) return;
+    
+    try {
+      isBookmarked = await bookmarksService.isBookmarked(userPubkey, repoAddress);
+    } catch (err) {
+      console.warn('Failed to load bookmark status:', err);
+    }
+  }
+
+  async function toggleBookmark() {
+    if (!userPubkey || !repoAddress || !bookmarksService || loadingBookmark) return;
+    
+    loadingBookmark = true;
+    try {
+      // Get user's relays for publishing
+      const { getUserRelays } = await import('$lib/services/nostr/user-relays.js');
+      const allSearchRelays = [...new Set([...DEFAULT_NOSTR_SEARCH_RELAYS, ...DEFAULT_NOSTR_RELAYS])];
+      const fullRelayClient = new NostrClient(allSearchRelays);
+      const { outbox, inbox } = await getUserRelays(userPubkey, fullRelayClient);
+      const userRelays = combineRelays(outbox.length > 0 ? outbox : inbox, DEFAULT_NOSTR_RELAYS);
+      
+      let success = false;
+      if (isBookmarked) {
+        success = await bookmarksService.removeBookmark(userPubkey, repoAddress, userRelays);
+      } else {
+        success = await bookmarksService.addBookmark(userPubkey, repoAddress, userRelays);
+      }
+      
+      if (success) {
+        isBookmarked = !isBookmarked;
+      } else {
+        alert(`Failed to ${isBookmarked ? 'remove' : 'add'} bookmark. Please try again.`);
+      }
+    } catch (err) {
+      console.error('Failed to toggle bookmark:', err);
+      alert(`Failed to ${isBookmarked ? 'remove' : 'add'} bookmark: ${String(err)}`);
+    } finally {
+      loadingBookmark = false;
+    }
+  }
 
   async function checkMaintainerStatus() {
     if (repoNotFound || !userPubkey) {
@@ -1551,6 +1617,15 @@
         {#if userPubkey}
           <button onclick={forkRepository} disabled={forking} class="fork-button">
             {forking ? 'Forking...' : 'Fork'}
+          </button>
+          <button 
+            onclick={toggleBookmark} 
+            disabled={loadingBookmark || !repoAddress} 
+            class="bookmark-button"
+            class:bookmarked={isBookmarked}
+            title={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
+          >
+            {loadingBookmark ? '...' : (isBookmarked ? '★ Bookmarked' : '☆ Bookmark')}
           </button>
           {#if isMaintainer}
             <a href={`/repos/${npub}/${repo}/settings`} class="settings-button">Settings</a>
@@ -2368,6 +2443,39 @@
     flex-wrap: wrap;
     margin-top: auto;
     align-self: flex-end;
+  }
+
+  .bookmark-button {
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    border: 1px solid var(--border-color);
+    border-radius: 0.375rem;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: 'IBM Plex Serif', serif;
+  }
+
+  .bookmark-button:hover:not(:disabled) {
+    background: var(--bg-secondary);
+    border-color: var(--accent);
+  }
+
+  .bookmark-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .bookmark-button.bookmarked {
+    background: var(--accent);
+    color: var(--accent-text, white);
+    border-color: var(--accent);
+  }
+
+  .bookmark-button.bookmarked:hover:not(:disabled) {
+    opacity: 0.9;
   }
 
   .repo-banner {

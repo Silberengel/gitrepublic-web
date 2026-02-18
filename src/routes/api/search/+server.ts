@@ -105,9 +105,18 @@ export const GET: RequestHandler = async (event) => {
         if (!isPrivate) {
           canView = true; // Public repos are viewable by anyone
         } else if (userPubkey) {
-          // Private repos require authentication
+          // Private repos require authentication - check if user owns, maintains, or has bookmarked
           try {
+            // Check if user is owner or maintainer
             canView = await maintainerService.canView(userPubkey, event.pubkey, repoId);
+            
+            // If not owner/maintainer, check if user has bookmarked it
+            if (!canView) {
+              const { BookmarksService } = await import('$lib/services/nostr/bookmarks-service.js');
+              const bookmarksService = new BookmarksService(DEFAULT_NOSTR_SEARCH_RELAYS);
+              const repoAddress = `${KIND.REPO_ANNOUNCEMENT}:${event.pubkey}:${repoId}`;
+              canView = await bookmarksService.isBookmarked(userPubkey, repoAddress);
+            }
           } catch (err) {
             logger.warn({ error: err, pubkey: event.pubkey, repo: repoId }, 'Failed to check repo access in search');
             canView = false;

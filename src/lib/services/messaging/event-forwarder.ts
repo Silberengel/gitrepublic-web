@@ -128,27 +128,52 @@ const GIT_PLATFORM_CONFIGS: Record<string, Omit<GitPlatformConfig, 'baseUrl'>> =
   }
 };
 
+// Only access process.env server-side (not in browser)
+const getEnv = (key: string, defaultValue: string = ''): string => {
+  if (typeof window !== 'undefined') {
+    // Browser environment - return default
+    return defaultValue;
+  }
+  // Server-side - access process.env
+  return (typeof process !== 'undefined' && process.env?.[key]) || defaultValue;
+};
+
+const getEnvBool = (key: string, defaultValue: boolean = false): boolean => {
+  if (typeof window !== 'undefined') {
+    return defaultValue;
+  }
+  return (typeof process !== 'undefined' && process.env?.[key]) === 'true';
+};
+
+const getEnvInt = (key: string, defaultValue: number): number => {
+  if (typeof window !== 'undefined') {
+    return defaultValue;
+  }
+  const value = typeof process !== 'undefined' ? process.env?.[key] : undefined;
+  return value ? parseInt(value, 10) : defaultValue;
+};
+
 const MESSAGING_CONFIG: MessagingConfig = {
   telegram: {
-    botToken: process.env.TELEGRAM_BOT_TOKEN || '',
-    enabled: process.env.TELEGRAM_ENABLED === 'true'
+    botToken: getEnv('TELEGRAM_BOT_TOKEN'),
+    enabled: getEnvBool('TELEGRAM_ENABLED')
   },
   simplex: {
-    apiUrl: process.env.SIMPLEX_API_URL || '',
-    apiKey: process.env.SIMPLEX_API_KEY || '',
-    enabled: process.env.SIMPLEX_ENABLED === 'true'
+    apiUrl: getEnv('SIMPLEX_API_URL'),
+    apiKey: getEnv('SIMPLEX_API_KEY'),
+    enabled: getEnvBool('SIMPLEX_ENABLED')
   },
   email: {
-    smtpHost: process.env.SMTP_HOST || '',
-    smtpPort: parseInt(process.env.SMTP_PORT || '587', 10),
-    smtpUser: process.env.SMTP_USER || '',
-    smtpPassword: process.env.SMTP_PASSWORD || '',
-    fromAddress: process.env.SMTP_FROM_ADDRESS || '',
-    fromName: process.env.SMTP_FROM_NAME || 'GitRepublic',
-    enabled: process.env.EMAIL_ENABLED === 'true'
+    smtpHost: getEnv('SMTP_HOST'),
+    smtpPort: getEnvInt('SMTP_PORT', 587),
+    smtpUser: getEnv('SMTP_USER'),
+    smtpPassword: getEnv('SMTP_PASSWORD'),
+    fromAddress: getEnv('SMTP_FROM_ADDRESS'),
+    fromName: getEnv('SMTP_FROM_NAME', 'GitRepublic'),
+    enabled: getEnvBool('EMAIL_ENABLED')
   },
   gitPlatforms: {
-    enabled: process.env.GIT_PLATFORMS_ENABLED === 'true'
+    enabled: getEnvBool('GIT_PLATFORMS_ENABLED')
   }
 };
 
@@ -441,7 +466,7 @@ async function sendEmail(
   }
 
   try {
-    const smtpUrl = process.env.SMTP_API_URL;
+    const smtpUrl = getEnv('SMTP_API_URL');
     
     if (smtpUrl) {
       // Use SMTP API if provided
@@ -449,7 +474,7 @@ async function sendEmail(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.SMTP_API_KEY || ''}`
+          'Authorization': `Bearer ${getEnv('SMTP_API_KEY')}`
         },
         body: JSON.stringify({
           from: MESSAGING_CONFIG.email.fromAddress,

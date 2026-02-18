@@ -98,7 +98,7 @@
       <div class="nav-links">
         <a href="/" class:active={isActive('/') && $page.url.pathname === '/'} onclick={closeMobileMenu}>Repositories</a>
         <a href="/search" class:active={isActive('/search')} onclick={closeMobileMenu}>Search</a>
-        <a href="/signup" class:active={isActive('/signup')} onclick={closeMobileMenu}>Sign Up</a>
+        <a href="/signup" class:active={isActive('/signup')} onclick={closeMobileMenu}>Register</a>
         <a href="/docs" class:active={isActive('/docs')} onclick={closeMobileMenu}>Docs</a>
       </div>
     </nav>
@@ -148,6 +148,8 @@
     border-bottom: 1px solid var(--border-color);
     margin-bottom: 2rem;
     background: var(--bg-primary);
+    position: relative;
+    z-index: 100;
   }
 
   .header-container {

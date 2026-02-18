@@ -38,6 +38,20 @@
     await loadUserAndContacts();
   });
 
+  // Reload repos when page becomes visible (e.g., after returning from another page)
+  $effect(() => {
+    if (typeof document !== 'undefined') {
+      const handleVisibilityChange = () => {
+        if (document.visibilityState === 'visible') {
+          // Reload repos when page becomes visible to catch newly published repos
+          loadRepos().catch(err => console.warn('Failed to reload repos on visibility change:', err));
+        }
+      };
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }
+  });
+
   async function loadUserAndContacts() {
     if (!isNIP07Available()) {
       return;
