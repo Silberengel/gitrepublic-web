@@ -189,8 +189,33 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
       return error(401, 'Authentication required. Please provide userPubkey.');
     }
 
+    // Check if repo exists locally
     if (!fileManager.repoExists(npub, repo)) {
-      return error(404, 'Repository not found');
+      // Try to fetch announcement to see if repo exists in Nostr
+      let repoOwnerPubkey: string;
+      try {
+        repoOwnerPubkey = requireNpubHex(npub);
+      } catch {
+        return error(400, 'Invalid npub format');
+      }
+
+      // Fetch repository announcement from Nostr
+      const events = await nostrClient.fetchEvents([
+        {
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          authors: [repoOwnerPubkey],
+          '#d': [repo],
+          limit: 1
+        }
+      ]);
+
+      if (events.length > 0) {
+        // Repository exists in Nostr but is not cloned locally
+        // For file editing, we need a local clone
+        return error(404, 'Repository is not cloned locally. To edit files, the repository must be cloned to the server first. Please use the "Clone to Server" button if you have unlimited access, or contact a server administrator.');
+      } else {
+        return error(404, 'Repository not found');
+      }
     }
 
     // Check if user is a maintainer

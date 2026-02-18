@@ -138,6 +138,10 @@
   let checkingCloneStatus = $state(false);
   let cloning = $state(false);
   
+  // Helper: Check if repo needs to be cloned for write operations
+  const needsClone = $derived(isRepoCloned === false);
+  const cloneTooltip = 'Please clone this repo to use this feature.';
+  
   // Verification status
   let verificationStatus = $state<{ verified: boolean; error?: string; message?: string } | null>(null);
   let showVerificationDialog = $state(false);
@@ -1292,10 +1296,8 @@
     await checkMaintainerStatus();
     await loadBookmarkStatus();
     
-    // Check clone status if user has unlimited access
-    if (hasUnlimitedAccess($userStore.userLevel)) {
-      await checkCloneStatus();
-    }
+    // Check clone status (needed to disable write operations)
+    await checkCloneStatus();
     await checkVerification();
     await loadReadme();
     await loadForkInfo();
@@ -1766,8 +1768,9 @@
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to save file');
+        const errorData = await response.json().catch(() => ({ message: response.statusText }));
+        const errorMessage = errorData.message || errorData.error || 'Failed to save file';
+        throw new Error(errorMessage);
       }
 
       // Reload file to get updated content
@@ -2400,10 +2403,15 @@
             </button>
           {/if}
           {#if isMaintainer}
-            <button onclick={() => {
-              if (!userPubkey || !isMaintainer) return;
-              showCreateBranchDialog = true;
-            }} class="create-branch-button">+ New Branch</button>
+            <button 
+              onclick={() => {
+                if (!userPubkey || !isMaintainer || needsClone) return;
+                showCreateBranchDialog = true;
+              }} 
+              class="create-branch-button"
+              disabled={needsClone}
+              title={needsClone ? cloneTooltip : 'Create a new branch'}
+            >+ New Branch</button>
           {/if}
         {/if}
       </div>
@@ -2503,10 +2511,15 @@
               <button onclick={handleBack} class="back-button">← Back</button>
             {/if}
             {#if userPubkey && isMaintainer}
-              <button onclick={() => {
-                if (!userPubkey || !isMaintainer) return;
-                showCreateFileDialog = true;
-              }} class="create-file-button">+ New File</button>
+              <button 
+                onclick={() => {
+                  if (!userPubkey || !isMaintainer || needsClone) return;
+                  showCreateFileDialog = true;
+                }} 
+                class="create-file-button"
+                disabled={needsClone}
+                title={needsClone ? cloneTooltip : 'Create a new file'}
+              >+ New File</button>
             {/if}
             <button 
               onclick={() => showFileListOnMobile = !showFileListOnMobile} 
@@ -2539,7 +2552,15 @@
                   {/if}
                 </button>
                 {#if userPubkey && isMaintainer && file.type === 'file'}
-                  <button onclick={() => deleteFile(file.path)} class="delete-file-button" title="Delete file">
+                  <button 
+                    onclick={() => {
+                      if (needsClone) return;
+                      deleteFile(file.path);
+                    }} 
+                    class="delete-file-button" 
+                    disabled={needsClone}
+                    title={needsClone ? cloneTooltip : 'Delete file'}
+                  >
                     <img src="/icons/x.svg" alt="Delete" class="icon-small" />
                   </button>
                 {/if}
@@ -2589,10 +2610,15 @@
         <div class="tags-header">
           <h2>Tags</h2>
           {#if userPubkey && isMaintainer}
-            <button onclick={() => {
-              if (!userPubkey || !isMaintainer) return;
-              showCreateTagDialog = true;
-            }} class="create-tag-button">+ New Tag</button>
+            <button 
+              onclick={() => {
+                if (!userPubkey || !isMaintainer || needsClone) return;
+                showCreateTagDialog = true;
+              }} 
+              class="create-tag-button"
+              disabled={needsClone}
+              title={needsClone ? cloneTooltip : 'Create a new tag'}
+            >+ New Tag</button>
           {/if}
         </div>
         {#if tags.length === 0}
@@ -2739,10 +2765,15 @@
                 <span class="unsaved-indicator">● Unsaved changes</span>
               {/if}
               {#if isMaintainer}
-                <button onclick={() => {
-                  if (!userPubkey || !isMaintainer) return;
-                  showCommitDialog = true;
-                }} disabled={!hasChanges || saving} class="save-button">
+                <button 
+                  onclick={() => {
+                    if (!userPubkey || !isMaintainer || needsClone) return;
+                    showCommitDialog = true;
+                  }} 
+                  disabled={!hasChanges || saving || needsClone} 
+                  class="save-button"
+                  title={needsClone ? cloneTooltip : (hasChanges ? 'Save changes' : 'No changes to save')}
+                >
                   {saving ? 'Saving...' : 'Save'}
                 </button>
               {:else if userPubkey}
@@ -2771,6 +2802,7 @@
                   content={editedContent} 
                   language={fileLanguage}
                   onChange={handleContentChange}
+                  readOnly={needsClone}
                 />
               {:else}
                 <div class="read-only-editor">
@@ -3207,7 +3239,12 @@
         </label>
         <div class="modal-actions">
           <button onclick={() => showCreateFileDialog = false} class="cancel-button">Cancel</button>
-          <button onclick={createFile} disabled={!newFileName.trim() || saving} class="save-button">
+          <button 
+            onclick={createFile} 
+            disabled={!newFileName.trim() || saving || needsClone} 
+            class="save-button"
+            title={needsClone ? cloneTooltip : ''}
+          >
             {saving ? 'Creating...' : 'Create'}
           </button>
         </div>
@@ -3249,7 +3286,12 @@
         </label>
         <div class="modal-actions">
           <button onclick={() => showCreateBranchDialog = false} class="cancel-button">Cancel</button>
-          <button onclick={createBranch} disabled={!newBranchName.trim() || saving} class="save-button">
+          <button 
+            onclick={createBranch} 
+            disabled={!newBranchName.trim() || saving || needsClone} 
+            class="save-button"
+            title={needsClone ? cloneTooltip : ''}
+          >
             {saving ? 'Creating...' : 'Create Branch'}
           </button>
         </div>
@@ -3290,7 +3332,12 @@
         </label>
         <div class="modal-actions">
           <button onclick={() => showCreateTagDialog = false} class="cancel-button">Cancel</button>
-          <button onclick={createTag} disabled={!newTagName.trim() || saving} class="save-button">
+          <button 
+            onclick={createTag} 
+            disabled={!newTagName.trim() || saving || needsClone} 
+            class="save-button"
+            title={needsClone ? cloneTooltip : ''}
+          >
             {saving ? 'Creating...' : 'Create Tag'}
           </button>
         </div>
@@ -3506,7 +3553,12 @@
         </label>
         <div class="modal-actions">
           <button onclick={() => showCommitDialog = false} class="cancel-button">Cancel</button>
-          <button onclick={saveFile} disabled={!commitMessage.trim() || saving} class="save-button">
+          <button 
+            onclick={saveFile} 
+            disabled={!commitMessage.trim() || saving || needsClone} 
+            class="save-button"
+            title={needsClone ? cloneTooltip : ''}
+          >
             {saving ? 'Saving...' : 'Commit & Save'}
           </button>
         </div>
