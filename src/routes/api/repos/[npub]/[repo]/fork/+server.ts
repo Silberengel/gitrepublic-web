@@ -21,6 +21,7 @@ import { isValidBranchName } from '$lib/utils/security.js';
 import { ResourceLimits } from '$lib/services/security/resource-limits.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 import { ForkCountService } from '$lib/services/nostr/fork-count-service.js';
+import { getCachedUserLevel } from '$lib/services/security/user-level-cache.js';
 import logger from '$lib/services/logger.js';
 import { handleApiError, handleValidationError, handleNotFoundError, handleAuthorizationError } from '$lib/utils/error-handler.js';
 
@@ -107,6 +108,20 @@ export const POST: RequestHandler = async ({ params, request }) => {
     
     // Determine fork name (use original name if not specified)
     const forkRepoName = forkName || repo;
+
+    // Check if user has unlimited access (required for storing repos locally)
+    const userLevel = getCachedUserLevel(userPubkeyHex);
+    if (!userLevel || userLevel.level !== 'unlimited') {
+      const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+      auditLogger.logRepoFork(
+        userPubkeyHex,
+        `${npub}/${repo}`,
+        `${userNpub}/${forkRepoName}`,
+        'failure',
+        'User does not have unlimited access'
+      );
+      return error(403, 'Repository creation requires unlimited access. Please verify you can write to at least one default Nostr relay.');
+    }
 
     // Check resource limits before forking
     const resourceCheck = await resourceLimits.canCreateRepo(userNpub);

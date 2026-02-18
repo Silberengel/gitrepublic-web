@@ -77,14 +77,20 @@ function getLookupKey(fingerprint: string): string {
 /**
  * Calculate SSH key fingerprint (MD5 or SHA256)
  * Format: MD5: aa:bb:cc:dd... or SHA256: base64...
+ * 
+ * SSH public keys are in format: "key-type base64-key [comment]"
+ * The comment field (optional) can contain NIP-05 identifiers or email addresses.
+ * Only the key-type and base64-key are used for fingerprint calculation.
  */
 export function calculateSSHKeyFingerprint(publicKey: string, algorithm: 'md5' | 'sha256' = 'sha256'): string {
   // SSH public keys are in format: "key-type base64-key [comment]"
+  // Comment field is optional and can contain NIP-05 identifiers (e.g., "user@domain.com")
   const parts = publicKey.trim().split(/\s+/);
   if (parts.length < 2) {
     throw new Error('Invalid SSH public key format');
   }
 
+  // Only use the key data (parts[1]) for fingerprint, ignore comment (parts[2+])
   const keyData = Buffer.from(parts[1], 'base64');
   
   if (algorithm === 'md5') {
@@ -130,6 +136,12 @@ function checkRateLimit(userPubkey: string): { allowed: boolean; remaining: numb
 
 /**
  * Parse SSH key attestation from Nostr event
+ * 
+ * SSH public keys are in the format: "key-type base64-key [comment]"
+ * The comment field is optional and can contain:
+ * - Email addresses (e.g., "user@example.com")
+ * - NIP-05 identifiers (e.g., "user@domain.com" - same format as email)
+ * - Any other identifier
  */
 function parseAttestationEvent(event: NostrEvent): {
   sshPublicKey: string;
@@ -137,6 +149,8 @@ function parseAttestationEvent(event: NostrEvent): {
   revoked: boolean;
 } {
   // Content should contain the SSH public key
+  // Format: "ssh-rsa AAAAB3NzaC1yc2E... [comment]"
+  // The comment field (after the key data) can contain NIP-05 identifiers or email addresses
   const sshPublicKey = event.content.trim();
   if (!sshPublicKey) {
     throw new Error('SSH public key not found in event content');

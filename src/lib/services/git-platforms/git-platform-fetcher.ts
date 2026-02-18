@@ -457,7 +457,13 @@ async function fetchIssues(
 
     const rawIssues = await fetchFromPlatform<any>(url, headers, platform);
     return rawIssues
-      .filter((issue: any) => !issue.pull_request) // Exclude PRs (GitHub returns PRs in issues endpoint)
+      .filter((issue: any) => {
+        // Exclude PRs (GitHub returns PRs in issues endpoint)
+        if (issue.pull_request) return false;
+        // GitLab merge requests have iid but are not issues
+        if (platform === 'gitlab' && issue.merge_request) return false;
+        return true;
+      })
       .map((issue: any) => normalizeIssue(issue, platform, owner, repo, apiUrl));
   } catch (error) {
     logger.error({ error, platform, owner, repo }, 'Failed to fetch issues');

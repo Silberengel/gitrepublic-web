@@ -14,12 +14,22 @@ GitRepublic supports SSH key attestation, allowing you to use standard `git` com
 - You must have a Nostr key pair (via NIP-07 browser extension)
 - You must have an SSH key pair
 
+## SSH Key Comment Field
+
+The SSH public key comment field (the part after the key data) can contain:
+- **NIP-05 identifiers** (e.g., `user@domain.com`) - recommended for Nostr users
+- Email addresses (e.g., `user@example.com`)
+- Any other identifier
+
+The comment field is optional and does not affect the key fingerprint or authentication. It's purely for identification purposes.
+
 ## How It Works
 
 1. **Generate SSH Key** (if you don't have one):
    ```bash
-   ssh-keygen -t ed25519 -C "your-email@example.com"
-   # Or use RSA: ssh-keygen -t rsa -b 4096 -C "your-email@example.com"
+   ssh-keygen -t ed25519 -C "your-nip05@example.com"
+   # Or use RSA: ssh-keygen -t rsa -b 4096 -C "your-nip05@example.com"
+   # Note: The comment field (-C) can contain your NIP-05 identifier or email address
    ```
 
 2. **Get Your SSH Public Key**:
@@ -55,7 +65,7 @@ GitRepublic supports SSH key attestation, allowing you to use standard `git` com
     "pubkey": "your-nostr-pubkey-hex",
     "created_at": 1234567890,
     "tags": [],
-    "content": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... your-email@example.com",
+    "content": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... your-nip05@example.com",
     "id": "event-id-hex",
     "sig": "event-signature-hex"
   }

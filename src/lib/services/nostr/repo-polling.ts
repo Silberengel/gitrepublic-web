@@ -7,6 +7,7 @@ import { KIND } from '../../types/nostr.js';
 import type { NostrEvent } from '../../types/nostr.js';
 import { RepoManager } from '../git/repo-manager.js';
 import { OwnershipTransferService } from './ownership-transfer-service.js';
+import { getCachedUserLevel } from '../security/user-level-cache.js';
 import logger from '../logger.js';
 
 export class RepoPollingService {
@@ -159,6 +160,20 @@ export class RepoPollingService {
               logger.warn({ repoId: dTag, pubkey: event.pubkey }, 'Self-transfer event template created. Owner should sign and publish it to relays.');
             } catch (err) {
               logger.error({ error: err, repoId: dTag }, 'Failed to create self-transfer event template');
+            }
+          }
+
+          // Check if user has unlimited access before provisioning new repos
+          // This prevents spam and abuse
+          if (!isExistingRepo) {
+            const userLevel = getCachedUserLevel(event.pubkey);
+            if (!userLevel || userLevel.level !== 'unlimited') {
+              logger.warn({ 
+                eventId: event.id, 
+                pubkey: event.pubkey.slice(0, 16) + '...',
+                level: userLevel?.level || 'none'
+              }, 'Skipping repo provisioning: user does not have unlimited access');
+              continue;
             }
           }
 

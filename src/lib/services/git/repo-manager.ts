@@ -119,6 +119,17 @@ export class RepoManager {
     // Check if repo already exists
     const repoExists = existsSync(repoPath.fullPath);
     
+    // Security: Only allow new repo creation if user has unlimited access
+    // This prevents spam and abuse
+    const isNewRepo = !repoExists;
+    if (isNewRepo && !isExistingRepo) {
+      const { getCachedUserLevel } = await import('../security/user-level-cache.js');
+      const userLevel = getCachedUserLevel(event.pubkey);
+      if (!userLevel || userLevel.level !== 'unlimited') {
+        throw new Error(`Repository creation requires unlimited access. User has level: ${userLevel?.level || 'none'}`);
+      }
+    }
+    
     // If there are other clone URLs, sync from them first (for existing repos)
     const otherUrls = cloneUrls.filter(url => !url.includes(this.domain));
     if (otherUrls.length > 0 && repoExists) {
@@ -127,7 +138,6 @@ export class RepoManager {
     }
 
     // Create bare repository if it doesn't exist
-    const isNewRepo = !repoExists;
     if (isNewRepo) {
       // Use simple-git to create bare repo (safer than exec)
       const git = simpleGit();
@@ -452,6 +462,20 @@ export class RepoManager {
 
     // If no announcement provided, we can't fetch (caller should provide it)
     if (!announcementEvent) {
+      return false;
+    }
+
+    // Security: Only allow fetching if user has unlimited access
+    // This prevents unauthorized repository creation
+    const { getCachedUserLevel } = await import('../security/user-level-cache.js');
+    const userLevel = getCachedUserLevel(announcementEvent.pubkey);
+    if (!userLevel || userLevel.level !== 'unlimited') {
+      logger.warn({ 
+        npub, 
+        repoName,
+        pubkey: announcementEvent.pubkey.slice(0, 16) + '...',
+        level: userLevel?.level || 'none'
+      }, 'Skipping on-demand repo fetch: user does not have unlimited access');
       return false;
     }
 
