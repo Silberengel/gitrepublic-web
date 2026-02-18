@@ -9,6 +9,7 @@ import { createRepoGetHandler, withRepoValidation } from '$lib/utils/api-handler
 import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
 import { handleValidationError, handleApiError } from '$lib/utils/error-handler.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
+import { forwardEventIfEnabled } from '$lib/services/messaging/event-forwarder.js';
 
 export const GET: RequestHandler = createRepoGetHandler(
   async (context: RepoRequestContext) => {
@@ -37,6 +38,15 @@ export const POST: RequestHandler = withRepoValidation(
     
     if (result.failed.length > 0 && result.success.length === 0) {
       throw handleApiError(new Error('Failed to publish issue to all relays'), { operation: 'createIssue', npub: repoContext.npub, repo: repoContext.repo }, 'Failed to publish issue to all relays');
+    }
+
+    // Forward to messaging platforms if user has unlimited access and preferences configured
+    if (requestContext.userPubkeyHex && result.success.length > 0) {
+      forwardEventIfEnabled(issueEvent, requestContext.userPubkeyHex)
+        .catch(err => {
+          // Log but don't fail the request - forwarding is optional
+          console.error('Failed to forward event to messaging platforms:', err);
+        });
     }
 
     return json({ success: true, event: issueEvent, published: result });

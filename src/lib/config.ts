@@ -21,7 +21,6 @@ export const DEFAULT_NOSTR_RELAYS =
     ? process.env.NOSTR_RELAYS.split(',').map(r => r.trim()).filter(r => r.length > 0)
     : [
         'wss://theforest.nostr1.com',
-        'wss://nostr.land',
       ];
 
 /**
@@ -32,12 +31,12 @@ export const DEFAULT_NOSTR_SEARCH_RELAYS =
   typeof process !== 'undefined' && process.env?.NOSTR_SEARCH_RELAYS
     ? process.env.NOSTR_SEARCH_RELAYS.split(',').map(r => r.trim()).filter(r => r.length > 0)
     : [
-         'wss://relay.damus.io',
-         'wss://thecitadel.nostr1.com',
-         'wss://nostr21.com',
-         'wss://profiles.nostr1.com',
-         "wss://relay.primal.net",
-         ...DEFAULT_NOSTR_RELAYS,
+        'wss://nostr.land',
+        'wss://relay.damus.io',
+        'wss://thecitadel.nostr1.com',
+        'wss://nostr21.com',
+        'wss://profiles.nostr1.com',
+        "wss://relay.primal.net",
       ];
 
 /**

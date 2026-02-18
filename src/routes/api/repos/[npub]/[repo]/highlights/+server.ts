@@ -13,6 +13,7 @@ import { createRepoGetHandler, withRepoValidation } from '$lib/utils/api-handler
 import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
 import { handleApiError, handleValidationError } from '$lib/utils/error-handler.js';
 import { decodeNpubToHex } from '$lib/utils/npub-utils.js';
+import { forwardEventIfEnabled } from '$lib/services/messaging/event-forwarder.js';
 
 /**
  * GET - Get highlights for a pull request
@@ -83,6 +84,17 @@ export const POST: RequestHandler = withRepoValidation(
     
     if (result.failed.length > 0 && result.success.length === 0) {
       throw handleApiError(new Error('Failed to publish to all relays'), { operation: 'createHighlight', npub: repoContext.npub, repo: repoContext.repo }, 'Failed to publish to all relays');
+    }
+
+    // Forward to messaging platforms if user has unlimited access and preferences configured
+    // Decode userPubkey if it's an npub
+    const userPubkeyHex = requestContext.userPubkeyHex || (userPubkey ? decodeNpubToHex(userPubkey) : null);
+    if (userPubkeyHex && result.success.length > 0) {
+      forwardEventIfEnabled(highlightEvent as NostrEvent, userPubkeyHex)
+        .catch(err => {
+          // Log but don't fail the request - forwarding is optional
+          console.error('Failed to forward event to messaging platforms:', err);
+        });
     }
 
     return json({ success: true, event: highlightEvent, published: result });

@@ -5,6 +5,7 @@
   import CodeEditor from '$lib/components/CodeEditor.svelte';
   import PRDetail from '$lib/components/PRDetail.svelte';
   import UserBadge from '$lib/components/UserBadge.svelte';
+  import ForwardingConfig from '$lib/components/ForwardingConfig.svelte';
   import { getPublicKeyWithNIP07, isNIP07Available } from '$lib/services/nostr/nip07-signer.js';
   import { NostrClient } from '$lib/services/nostr/nostr-client.js';
   import { DEFAULT_NOSTR_RELAYS, combineRelays } from '$lib/config.js';
@@ -1456,6 +1457,9 @@
             <span class="clone-more">+{pageData.repoCloneUrls.length - 3} more</span>
           {/if}
         </div>
+      {/if}
+      {#if pageData.repoOwnerPubkey && userPubkey === pageData.repoOwnerPubkey}
+        <ForwardingConfig userPubkeyHex={pageData.repoOwnerPubkey} />
       {/if}
       <div class="header-actions-bottom">
         {#if userPubkey}
