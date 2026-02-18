@@ -124,7 +124,7 @@ export class RepoManager {
     const isNewRepo = !repoExists;
     if (isNewRepo && !isExistingRepo) {
       const { getCachedUserLevel } = await import('../security/user-level-cache.js');
-      const { hasUnlimitedAccess } = await import('../utils/user-access.js');
+      const { hasUnlimitedAccess } = await import('../../utils/user-access.js');
       const userLevel = getCachedUserLevel(event.pubkey);
       if (!hasUnlimitedAccess(userLevel?.level)) {
         throw new Error(`Repository creation requires unlimited access. User has level: ${userLevel?.level || 'none'}`);
@@ -533,7 +533,7 @@ export class RepoManager {
     // For private repos, require owner to have unlimited access to prevent unauthorized creation
     if (!isPublic) {
       const { getCachedUserLevel } = await import('../security/user-level-cache.js');
-      const { hasUnlimitedAccess } = await import('../utils/user-access.js');
+      const { hasUnlimitedAccess } = await import('../../utils/user-access.js');
       const userLevel = getCachedUserLevel(announcementEvent.pubkey);
       if (!hasUnlimitedAccess(userLevel?.level)) {
         logger.warn({ 

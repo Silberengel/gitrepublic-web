@@ -44,7 +44,7 @@ const LOOKUP_SECRET = process.env.MESSAGING_LOOKUP_SECRET;
 const isMessagingConfigured = !!(ENCRYPTION_KEY && SALT_ENCRYPTION_KEY && LOOKUP_SECRET);
 
 if (!isMessagingConfigured) {
-  logger.warn('Messaging preferences storage is not configured. Missing environment variables: MESSAGING_PREFS_ENCRYPTION_KEY, MESSAGING_SALT_ENCRYPTION_KEY, MESSAGING_LOOKUP_SECRET');
+  logger.info('Messaging preferences storage is disabled (optional feature). To enable, set environment variables: MESSAGING_PREFS_ENCRYPTION_KEY, MESSAGING_SALT_ENCRYPTION_KEY, MESSAGING_LOOKUP_SECRET');
 }
 
 interface StoredPreferences {
@@ -213,7 +213,7 @@ export async function storePreferences(
 
   // Verify user has unlimited access
   const cached = getCachedUserLevel(userPubkeyHex);
-  const { hasUnlimitedAccess } = await import('../utils/user-access.js');
+  const { hasUnlimitedAccess } = await import('../../utils/user-access.js');
   if (!hasUnlimitedAccess(cached?.level)) {
     throw new Error('Messaging forwarding requires unlimited access');
   }

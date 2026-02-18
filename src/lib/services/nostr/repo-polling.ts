@@ -167,7 +167,7 @@ export class RepoPollingService {
           // This prevents spam and abuse
           if (!isExistingRepo) {
             const userLevel = getCachedUserLevel(event.pubkey);
-            const { hasUnlimitedAccess } = await import('../utils/user-access.js');
+            const { hasUnlimitedAccess } = await import('../../utils/user-access.js');
             if (!hasUnlimitedAccess(userLevel?.level)) {
               logger.warn({ 
                 eventId: event.id, 

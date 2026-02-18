@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { EditorView } from '@codemirror/view';
-  import { EditorState, type Extension } from '@codemirror/state';
-  import { basicSetup } from '@codemirror/basic-setup';
+  import { EditorView, keymap } from '@codemirror/view';
+  import { EditorState, type Extension, Compartment } from '@codemirror/state';
+  import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+  import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
+  import { closeBrackets, autocompletion, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
   import { markdown } from '@codemirror/lang-markdown';
   import { StreamLanguage } from '@codemirror/language';
   import { asciidoc } from 'codemirror-asciidoc';
@@ -27,6 +29,7 @@
 
   let editorView: EditorView | null = null;
   let editorElement: HTMLDivElement;
+  let languageCompartment = new Compartment();
 
   function getLanguageExtension(): Extension[] {
     switch (language) {
@@ -39,38 +42,57 @@
     }
   }
 
+  function createExtensions(): Extension[] {
+    const extensions: Extension[] = [
+      history(),
+      closeBrackets(),
+      autocompletion(),
+      highlightSelectionMatches(),
+      keymap.of([
+        ...closeBracketsKeymap,
+        ...defaultKeymap,
+        ...searchKeymap,
+        ...historyKeymap,
+        ...completionKeymap
+      ] as any),
+      // Add language extensions in a compartment for dynamic updates
+      languageCompartment.of(getLanguageExtension()),
+      // Add update listener
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          const newContent = update.state.doc.toString();
+          onChange(newContent);
+        }
+        
+        // Handle text selection
+        if (update.selectionSet && !readOnly) {
+          const selection = update.state.selection.main;
+          if (!selection.empty) {
+            const selectedText = update.state.doc.sliceString(selection.from, selection.to);
+            const startLine = update.state.doc.lineAt(selection.from);
+            const endLine = update.state.doc.lineAt(selection.to);
+            
+            onSelection(
+              selectedText,
+              startLine.number,
+              endLine.number,
+              selection.from,
+              selection.to
+            );
+          }
+        }
+      }),
+      // Add editable state
+      EditorView.editable.of(!readOnly)
+    ];
+    
+    return extensions;
+  }
+
   onMount(() => {
     const state = EditorState.create({
       doc: content,
-      extensions: [
-        basicSetup,
-        ...getLanguageExtension(),
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            const newContent = update.state.doc.toString();
-            onChange(newContent);
-          }
-          
-          // Handle text selection
-          if (update.selectionSet && !readOnly) {
-            const selection = update.state.selection.main;
-            if (!selection.empty) {
-              const selectedText = update.state.doc.sliceString(selection.from, selection.to);
-              const startLine = update.state.doc.lineAt(selection.from);
-              const endLine = update.state.doc.lineAt(selection.to);
-              
-              onSelection(
-                selectedText,
-                startLine.number,
-                endLine.number,
-                selection.from,
-                selection.to
-              );
-            }
-          }
-        }),
-        EditorView.editable.of(!readOnly)
-      ]
+      extensions: createExtensions()
     });
 
     editorView = new EditorView({
@@ -103,20 +125,10 @@
   // Update language when prop changes
   $effect(() => {
     if (editorView) {
-      const state = EditorState.create({
-        doc: editorView.state.doc.toString(),
-        extensions: [
-          basicSetup,
-          ...getLanguageExtension(),
-          EditorView.updateListener.of((update) => {
-            if (update.docChanged) {
-              const newContent = update.state.doc.toString();
-              onChange(newContent);
-            }
-          })
-        ]
+      // Update language extension using compartment
+      editorView.dispatch({
+        effects: languageCompartment.reconfigure(getLanguageExtension())
       });
-      editorView.setState(state);
     }
   });
 </script>

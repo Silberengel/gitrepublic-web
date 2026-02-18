@@ -1595,12 +1595,60 @@
 
       files = await response.json();
       currentPath = path;
+      
+      // Auto-load README if we're in the root directory and no file is currently selected
+      if (path === '' && !currentFile) {
+        const readmeFile = findReadmeFile(files);
+        if (readmeFile) {
+          // Small delay to ensure UI is ready
+          setTimeout(() => {
+            loadFile(readmeFile.path);
+          }, 100);
+        }
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load files';
       console.error('Error loading files:', err);
     } finally {
       loading = false;
     }
+  }
+
+  // Helper function to find README file in file list
+  function findReadmeFile(fileList: Array<{ name: string; path: string; type: 'file' | 'directory' }>): { name: string; path: string; type: 'file' | 'directory' } | null {
+    // Priority order for README files (most common first)
+    const readmeExtensions = ['md', 'markdown', 'txt', 'adoc', 'asciidoc', 'rst', 'org'];
+    
+    // First, try to find README with extensions (prioritized order)
+    for (const ext of readmeExtensions) {
+      const readmeFile = fileList.find(file => 
+        file.type === 'file' && 
+        file.name.toLowerCase() === `readme.${ext}`
+      );
+      if (readmeFile) {
+        return readmeFile;
+      }
+    }
+    
+    // Then check for README without extension
+    const readmeNoExt = fileList.find(file => 
+      file.type === 'file' && 
+      file.name.toLowerCase() === 'readme'
+    );
+    if (readmeNoExt) {
+      return readmeNoExt;
+    }
+    
+    // Finally, check for any file starting with "readme." (case-insensitive)
+    const readmeAny = fileList.find(file => 
+      file.type === 'file' && 
+      file.name.toLowerCase().startsWith('readme.')
+    );
+    if (readmeAny) {
+      return readmeAny;
+    }
+    
+    return null;
   }
 
   async function loadFile(filePath: string) {
@@ -1894,7 +1942,15 @@
         headers: buildApiHeaders()
       });
       if (response.ok) {
-        commits = await response.json();
+        const data = await response.json();
+        // Normalize commits: API-based commits use 'sha', local commits use 'hash'
+        commits = data.map((commit: any) => ({
+          hash: commit.hash || commit.sha || '',
+          message: commit.message || 'No message',
+          author: commit.author || 'Unknown',
+          date: commit.date || new Date().toISOString(),
+          files: commit.files || []
+        })).filter((commit: any) => commit.hash); // Filter out commits without hash
       }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load commit history';
@@ -1907,8 +1963,11 @@
     loadingCommits = true;
     error = null;
     try {
-      const parentHash = commits.find(c => c.hash === commitHash) 
-        ? commits[commits.findIndex(c => c.hash === commitHash) + 1]?.hash || `${commitHash}^`
+      // Normalize commit hash (handle both 'hash' and 'sha' properties)
+      const getCommitHash = (c: any) => c.hash || c.sha || '';
+      const commitIndex = commits.findIndex(c => getCommitHash(c) === commitHash);
+      const parentHash = commitIndex >= 0
+        ? (commits[commitIndex + 1] ? getCommitHash(commits[commitIndex + 1]) : `${commitHash}^`)
         : `${commitHash}^`;
       
       const response = await fetch(`/api/repos/${npub}/${repo}/diff?from=${parentHash}&to=${commitHash}`, {
@@ -2505,16 +2564,19 @@
         {:else}
           <ul class="commit-list">
             {#each commits as commit}
-              <li class="commit-item" class:selected={selectedCommit === commit.hash}>
-                <button onclick={() => viewDiff(commit.hash)} class="commit-button">
-                  <div class="commit-hash">{commit.hash.slice(0, 7)}</div>
-                  <div class="commit-message">{commit.message}</div>
-                  <div class="commit-meta">
-                    <span>{commit.author}</span>
-                    <span>{new Date(commit.date).toLocaleString()}</span>
-                  </div>
-                </button>
-              </li>
+              {@const commitHash = commit.hash || (commit as any).sha || ''}
+              {#if commitHash}
+                <li class="commit-item" class:selected={selectedCommit === commitHash}>
+                  <button onclick={() => viewDiff(commitHash)} class="commit-button">
+                    <div class="commit-hash">{commitHash.slice(0, 7)}</div>
+                    <div class="commit-message">{commit.message || 'No message'}</div>
+                    <div class="commit-meta">
+                      <span>{commit.author || 'Unknown'}</span>
+                      <span>{commit.date ? new Date(commit.date).toLocaleString() : 'Unknown date'}</span>
+                    </div>
+                  </button>
+                </li>
+              {/if}
             {/each}
           </ul>
         {/if}
@@ -2538,13 +2600,16 @@
         {:else}
           <ul class="tag-list">
             {#each tags as tag}
-              <li class="tag-item">
-                <div class="tag-name">{tag.name}</div>
-                <div class="tag-hash">{tag.hash.slice(0, 7)}</div>
-                {#if tag.message}
-                  <div class="tag-message">{tag.message}</div>
-                {/if}
-              </li>
+              {@const tagHash = tag.hash || ''}
+              {#if tagHash}
+                <li class="tag-item">
+                  <div class="tag-name">{tag.name}</div>
+                  <div class="tag-hash">{tagHash.slice(0, 7)}</div>
+                  {#if tag.message}
+                    <div class="tag-message">{tag.message}</div>
+                  {/if}
+                </li>
+              {/if}
             {/each}
           </ul>
         {/if}
