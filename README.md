@@ -351,7 +351,7 @@ See `docs/SECURITY.md` and `docs/SECURITY_IMPLEMENTATION.md` for detailed inform
 
 ## Environment Variables
 
-- `NOSTRGIT_SECRET_KEY_CLIENT`: User's nsec (bech32 or hex) for client-side git operations via credential helper (optional)
+- `NOSTRGIT_SECRET_KEY`: User's nsec (bech32 or hex) for client-side git operations via credential helper (optional)
 - `GIT_REPO_ROOT`: Path to store git repositories (default: `/repos`)
 - `GIT_DOMAIN`: Domain for git repositories (default: `localhost:6543`)
 - `NOSTR_RELAYS`: Comma-separated list of Nostr relays (default: `wss://theforest.nostr1.com`)

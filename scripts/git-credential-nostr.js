@@ -13,9 +13,9 @@
  *      git config --global credential.https://your-domain.com.helper '!node /path/to/gitrepublic-web/scripts/git-credential-nostr.js'
  * 
  * Environment variables:
- *   NOSTRGIT_SECRET_KEY_CLIENT - Your Nostr private key (nsec format or hex) for client-side git operations
+ *   NOSTRGIT_SECRET_KEY - Your Nostr private key (nsec format or hex) for client-side git operations
  * 
- * Security: Keep your NOSTRGIT_SECRET_KEY_CLIENT secure and never commit it to version control!
+ * Security: Keep your NOSTRGIT_SECRET_KEY secure and never commit it to version control!
  */
 
 import { createHash } from 'crypto';
@@ -124,11 +124,11 @@ async function main() {
     // For 'get' command, generate credentials
     if (command === 'get') {
       // Get private key from environment variable
-      // Support NOSTRGIT_SECRET_KEY_CLIENT (preferred), with fallbacks for backward compatibility
-      const nsec = process.env.NOSTRGIT_SECRET_KEY_CLIENT || process.env.NOSTR_PRIVATE_KEY || process.env.NSEC;
+      // Support NOSTRGIT_SECRET_KEY (preferred), with fallbacks for backward compatibility
+      const nsec = process.env.NOSTRGIT_SECRET_KEY || process.env.NOSTR_PRIVATE_KEY || process.env.NSEC;
       if (!nsec) {
-        console.error('Error: NOSTRGIT_SECRET_KEY_CLIENT environment variable is not set');
-        console.error('Set it with: export NOSTRGIT_SECRET_KEY_CLIENT="nsec1..." or NOSTRGIT_SECRET_KEY_CLIENT="<hex-key>"');
+        console.error('Error: NOSTRGIT_SECRET_KEY environment variable is not set');
+        console.error('Set it with: export NOSTRGIT_SECRET_KEY="nsec1..." or NOSTRGIT_SECRET_KEY="<hex-key>"');
         process.exit(1);
       }
       

@@ -40,7 +40,7 @@ export class OwnershipTransferService {
    */
   async getCurrentOwnerFromRepo(npub: string, repoId: string): Promise<string | null> {
     try {
-      const { fileManager } = await import('../services/service-registry.js');
+      const { fileManager } = await import('../service-registry.js');
       return await fileManager.getCurrentOwnerFromRepo(npub, repoId);
     } catch (error) {
       logger.error({ error, npub, repoId }, 'Error getting current owner from repo');
@@ -81,7 +81,7 @@ export class OwnershipTransferService {
     try {
       const { nip19 } = await import('nostr-tools');
       const npub = nip19.npubEncode(announcementEvent.pubkey);
-      const { fileManager } = await import('../services/service-registry.js');
+      const { fileManager } = await import('../service-registry.js');
       
       const localOwner = await fileManager.getCurrentOwnerFromRepo(npub, dTag);
       const localUrl = cloneUrls.find(url => url.includes(npub) || url.includes(announcementEvent.pubkey));

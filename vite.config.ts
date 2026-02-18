@@ -46,14 +46,52 @@ export default defineConfig({
   ssr: {
     // Exclude Node.js-only modules from client bundle
     noExternal: [],
-    external: []
+    external: [
+      'simple-git',
+      'child_process',
+      'fs',
+      'fs/promises',
+      'path',
+      'os',
+      'crypto',
+      'stream',
+      'util',
+      'events',
+      'buffer'
+    ]
   },
   optimizeDeps: {
     // Exclude server-only modules from pre-bundling
-    exclude: ['src/lib/services/messaging/preferences-storage.ts']
+    exclude: [
+      'src/lib/services/messaging/preferences-storage.ts',
+      'simple-git'
+    ]
   },
   build: {
     rollupOptions: {
+      external: (id) => {
+        // Externalize Node.js-only modules to prevent bundling for browser
+        if (id === 'simple-git' || id.startsWith('simple-git/')) {
+          return true;
+        }
+        // Externalize Node.js built-in modules
+        if (
+          id === 'child_process' ||
+          id === 'fs' ||
+          id === 'fs/promises' ||
+          id === 'path' ||
+          id === 'os' ||
+          id === 'crypto' ||
+          id === 'stream' ||
+          id === 'util' ||
+          id === 'events' ||
+          id === 'buffer' ||
+          id.startsWith('node:')
+        ) {
+          return true;
+        }
+        return false;
+      },
       onwarn(warning, warn) {
         // Suppress warnings about externalized modules (expected for SSR builds)
         if (

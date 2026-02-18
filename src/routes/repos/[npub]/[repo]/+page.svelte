@@ -154,7 +154,12 @@
   const cloneTooltip = 'Please clone this repo to use this feature.';
   
   // Verification status
-  let verificationStatus = $state<{ verified: boolean; error?: string; message?: string } | null>(null);
+  let verificationStatus = $state<{ 
+    verified: boolean; 
+    error?: string; 
+    message?: string;
+    cloneVerifications?: Array<{ url: string; verified: boolean; ownerPubkey: string | null; error?: string }>;
+  } | null>(null);
   let showVerificationDialog = $state(false);
   let verificationFileContent = $state<string | null>(null);
   let loadingVerification = $state(false);
@@ -1480,13 +1485,18 @@
       });
       if (response.ok) {
         const data = await response.json();
+        console.log('[Verification] Response:', data);
         verificationStatus = data;
+      } else {
+        console.warn('[Verification] Response not OK:', response.status, response.statusText);
+        verificationStatus = { verified: false, error: `Verification check failed: ${response.status}` };
       }
     } catch (err) {
-      console.error('Failed to check verification:', err);
+      console.error('[Verification] Failed to check verification:', err);
       verificationStatus = { verified: false, error: 'Failed to check verification' };
     } finally {
       loadingVerification = false;
+      console.log('[Verification] Status after check:', verificationStatus);
     }
   }
 
@@ -2774,7 +2784,54 @@
         <div class="repo-clone-urls">
           <span class="clone-label">Clone:</span>
           {#each pageData.repoCloneUrls.slice(0, 3) as cloneUrl}
-            <code class="clone-url">{cloneUrl}</code>
+            {@const cloneVerification = verificationStatus?.cloneVerifications?.find(cv => {
+              // Match URLs more flexibly (handle trailing slashes, http/https differences)
+              const normalizeUrl = (url: string) => url.replace(/\/$/, '').toLowerCase().replace(/^https?:\/\//, '');
+              const normalizedCv = normalizeUrl(cv.url);
+              const normalizedClone = normalizeUrl(cloneUrl);
+              const matches = normalizedCv === normalizedClone || 
+                             normalizedCv.includes(normalizedClone) || 
+                             normalizedClone.includes(normalizedCv);
+              if (matches) {
+                console.log('[Verification] Matched clone URL:', cloneUrl, 'with verification:', cv);
+              }
+              return matches;
+            })}
+            <div class="clone-url-wrapper">
+              <code class="clone-url">{cloneUrl}</code>
+              {#if loadingVerification}
+                <span class="verification-badge loading" title="Checking verification...">
+                  <span style="opacity: 0.5;">⋯</span>
+                </span>
+              {:else if cloneVerification !== undefined}
+                <span 
+                  class="verification-badge" 
+                  class:verified={cloneVerification.verified} 
+                  class:unverified={!cloneVerification.verified}
+                  title={cloneVerification.verified ? 'Verified ownership' : (cloneVerification.error || 'Unverified')}
+                >
+                  {#if cloneVerification.verified}
+                    <img src="/icons/check-circle.svg" alt="Verified" class="icon-inline" />
+                  {:else}
+                    <img src="/icons/alert-triangle.svg" alt="Unverified" class="icon-inline" />
+                  {/if}
+                </span>
+              {:else if verificationStatus}
+                {#if verificationStatus.cloneVerifications && verificationStatus.cloneVerifications.length > 0}
+                  <span class="verification-badge unverified" title="Verification status unknown for this clone">
+                    <img src="/icons/alert-triangle.svg" alt="Unknown" class="icon-inline" />
+                  </span>
+                {:else}
+                  <span class="verification-badge unverified" title="Verification not available for this clone">
+                    <img src="/icons/alert-triangle.svg" alt="Not verified" class="icon-inline" />
+                  </span>
+                {/if}
+              {:else}
+                <span class="verification-badge unverified" title="Verification not checked">
+                  <img src="/icons/alert-triangle.svg" alt="Not checked" class="icon-inline" />
+                </span>
+              {/if}
+            </div>
           {/each}
           {#if pageData.repoCloneUrls.length > 3}
             <span class="clone-more">+{pageData.repoCloneUrls.length - 3} more</span>
@@ -2861,17 +2918,6 @@
             {/if}
           {/if}
         </div>
-      {#if verificationStatus}
-        <span class="verification-status" class:verified={verificationStatus.verified} class:unverified={!verificationStatus.verified}>
-          {#if verificationStatus.verified}
-            <img src="/icons/check-circle.svg" alt="Verified Repo Ownership" class="icon-inline" />
-            Verified Repo Ownership
-          {:else}
-            <img src="/icons/alert-triangle.svg" alt="Unverified" class="icon-inline" />
-            Unverified
-          {/if}
-        </span>
-      {/if}
       </div>
     </div>
   </header>
@@ -4533,6 +4579,12 @@
     font-weight: 500;
   }
 
+  .clone-url-wrapper {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
   .clone-url {
     padding: 0.125rem 0.375rem;
     background: var(--bg-secondary);
@@ -5786,22 +5838,31 @@
     color: var(--text-primary);
   }
 
-  .verification-status {
-    padding: 0.25rem 0.5rem;
+  .verification-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.125rem 0.25rem;
     border-radius: 0.25rem;
     font-size: 0.75rem;
-    font-weight: 500;
-    margin-left: 0.5rem;
+    flex-shrink: 0;
   }
 
-  .verification-status.verified {
-    background: var(--success-bg);
-    color: var(--success-text);
+  .verification-badge.loading {
+    opacity: 0.6;
   }
 
-  .verification-status.unverified {
-    background: var(--error-bg);
-    color: var(--error-text);
+  .verification-badge.verified {
+    color: var(--success-text, #10b981);
+  }
+
+  .verification-badge.unverified {
+    color: var(--error-text, #f59e0b);
+  }
+
+  .verification-badge .icon-inline {
+    width: 1em;
+    height: 1em;
+    margin: 0;
   }
 
   .icon-inline {
@@ -5824,12 +5885,12 @@
 
   /* Theme-aware icon colors */
 
-  .verification-status.verified .icon-inline {
+  .verification-badge.verified .icon-inline {
     /* Green checkmark for verified */
     filter: brightness(0) saturate(100%) invert(48%) sepia(79%) saturate(2476%) hue-rotate(86deg) brightness(118%) contrast(119%);
   }
 
-  .verification-status.unverified .icon-inline {
+  .verification-badge.unverified .icon-inline {
     /* Orange/yellow warning for unverified */
     filter: brightness(0) saturate(100%) invert(67%) sepia(93%) saturate(1352%) hue-rotate(358deg) brightness(102%) contrast(106%);
   }

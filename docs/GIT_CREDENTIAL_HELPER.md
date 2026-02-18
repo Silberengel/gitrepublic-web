@@ -14,7 +14,7 @@ GitRepublic uses NIP-98 HTTP Authentication for git operations. The credential h
 chmod +x scripts/git-credential-nostr.js
 ```
 
-### 2. Set your NOSTRGIT_SECRET_KEY_CLIENT environment variable
+### 2. Set your NOSTRGIT_SECRET_KEY environment variable
 
 **Important:** 
 - This is YOUR user private key (for authenticating your git operations)
@@ -22,14 +22,14 @@ chmod +x scripts/git-credential-nostr.js
 
 ```bash
 # Option 1: Export in your shell session
-export NOSTRGIT_SECRET_KEY_CLIENT="nsec1..."
+export NOSTRGIT_SECRET_KEY="nsec1..."
 
 # Option 2: Add to your ~/.bashrc or ~/.zshrc (for persistent setup)
-echo 'export NOSTRGIT_SECRET_KEY_CLIENT="nsec1..."' >> ~/.bashrc
+echo 'export NOSTRGIT_SECRET_KEY="nsec1..."' >> ~/.bashrc
 source ~/.bashrc
 
 # Option 3: Use a hex private key (64 characters)
-export NOSTRGIT_SECRET_KEY_CLIENT="<your-64-char-hex-private-key>"
+export NOSTRGIT_SECRET_KEY="<your-64-char-hex-private-key>"
 
 # Note: The script also supports NOSTR_PRIVATE_KEY and NSEC for backward compatibility
 ```
@@ -88,7 +88,7 @@ git clone https://your-domain.com/npub1abc123.../my-repo.git
 git clone http://localhost:5173/api/git/npub1abc123.../my-repo.git
 ```
 
-The credential helper will automatically generate a NIP-98 auth token using your NOSTRGIT_SECRET_KEY_CLIENT.
+The credential helper will automatically generate a NIP-98 auth token using your NOSTRGIT_SECRET_KEY.
 
 ## Localhost Setup Example
 
@@ -102,10 +102,10 @@ npm run dev
 # Server runs on http://localhost:5173
 ```
 
-### 2. Set your NOSTRGIT_SECRET_KEY_CLIENT
+### 2. Set your NOSTRGIT_SECRET_KEY
 
 ```bash
-export NOSTRGIT_SECRET_KEY_CLIENT="nsec1..."
+export NOSTRGIT_SECRET_KEY="nsec1..."
 ```
 
 ### 3. Configure git for localhost
@@ -131,12 +131,12 @@ git clone http://localhost:5173/api/git/npub1abc123.../my-repo.git
 cd my-repo
 
 # If you need to add the remote manually
-git remote add origin http://localhost:5173/api/git/npub1abc123.../my-repo.git
+git remote add gitrepublic-web http://localhost:5173/api/git/npub1abc123.../my-repo.git
 
 # Make some changes and push
 git add .
 git commit -m "Initial commit"
-git push -u origin main
+git push -u gitrepublic-web main
 ```
 
 **Note:** The git HTTP backend endpoint is `/api/git/`, so the full URL format is:
@@ -145,7 +145,7 @@ git push -u origin main
 ### Push changes
 
 ```bash
-git push origin main
+git push gitrepublic-web main
 ```
 
 The credential helper will generate the appropriate NIP-98 auth token for push operations.
@@ -153,14 +153,14 @@ The credential helper will generate the appropriate NIP-98 auth token for push o
 ### Fetch/Pull
 
 ```bash
-git fetch origin
-git pull origin main
+git fetch gitrepublic-web
+git pull gitrepublic-web main
 ```
 
 ## How It Works
 
 1. When git needs credentials, it calls the credential helper with the repository URL
-2. The helper reads your `NOSTRGIT_SECRET_KEY_CLIENT` environment variable (with fallbacks for backward compatibility)
+2. The helper reads your `NOSTRGIT_SECRET_KEY` environment variable (with fallbacks for backward compatibility)
 3. It creates a NIP-98 authentication event signed with your private key
 4. The signed event is base64-encoded and returned as the "password"
 5. Git sends this in the `Authorization: Nostr <base64-event>` header
@@ -168,14 +168,14 @@ git pull origin main
 
 ## Troubleshooting
 
-### Error: NOSTRGIT_SECRET_KEY_CLIENT environment variable is not set
+### Error: NOSTRGIT_SECRET_KEY environment variable is not set
 
-Make sure you've exported the NOSTRGIT_SECRET_KEY_CLIENT variable:
+Make sure you've exported the NOSTRGIT_SECRET_KEY variable:
 ```bash
-export NOSTRGIT_SECRET_KEY_CLIENT="nsec1..."
+export NOSTRGIT_SECRET_KEY="nsec1..."
 ```
 
-**Note:** The script also supports `NOSTR_PRIVATE_KEY` and `NSEC` for backward compatibility, but `NOSTRGIT_SECRET_KEY_CLIENT` is the preferred name.
+**Note:** The script also supports `NOSTR_PRIVATE_KEY` and `NSEC` for backward compatibility, but `NOSTRGIT_SECRET_KEY` is the preferred name.
 
 ### Error: Invalid nsec format
 
@@ -195,12 +195,12 @@ Push operations require POST authentication. The credential helper automatically
 
 1. Verify you have maintainer permissions for the repository
 2. Check that branch protection rules allow your push
-3. Ensure your NOSTRGIT_SECRET_KEY_CLIENT is correctly set
+3. Ensure your NOSTRGIT_SECRET_KEY is correctly set
 
 ## Security Best Practices
 
-1. **Never commit your NOSTRGIT_SECRET_KEY_CLIENT to version control**
-   - Add `NOSTRGIT_SECRET_KEY_CLIENT` to your `.gitignore` if you store it in a file
+1. **Never commit your NOSTRGIT_SECRET_KEY to version control**
+   - Add `NOSTRGIT_SECRET_KEY` to your `.gitignore` if you store it in a file
    - Use environment variables instead of hardcoding
    - **Important:** This is YOUR user key for client-side operations
 

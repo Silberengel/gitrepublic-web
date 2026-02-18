@@ -1,0 +1,1 @@
+git config --global credential.http://localhost.helper '!node /absolute/path/to/gitrepublic-web/scripts/git-credential-nostr.js'
