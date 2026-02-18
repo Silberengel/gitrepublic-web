@@ -9,6 +9,34 @@
 
 import logger from '../logger.js';
 
+/**
+ * Check if we're running on the server (Node.js) or client (browser)
+ */
+function isServerSide(): boolean {
+  return typeof process !== 'undefined' && process.versions?.node !== undefined;
+}
+
+/**
+ * Get the base URL for API requests
+ * On server-side, call APIs directly. On client-side, use proxy to avoid CORS.
+ */
+function getApiBaseUrl(apiPath: string, baseUrl: string, searchParams: URLSearchParams): string {
+  if (isServerSide()) {
+    // Server-side: call API directly
+    const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+    const cleanApiPath = apiPath.startsWith('/') ? apiPath : `/${apiPath}`;
+    const queryString = searchParams.toString();
+    return `${cleanBaseUrl}${cleanApiPath}${queryString ? `?${queryString}` : ''}`;
+  } else {
+    // Client-side: use proxy to avoid CORS
+    const queryString = new URLSearchParams({
+      baseUrl,
+      ...Object.fromEntries(searchParams.entries())
+    }).toString();
+    return `/api/gitea-proxy/${apiPath}?${queryString}`;
+  }
+}
+
 export interface ApiRepoInfo {
   name: string;
   description?: string;
@@ -63,7 +91,7 @@ export function isGraspUrl(url: string): boolean {
 /**
  * Parse git URL to extract platform, owner, and repo
  */
-function parseGitUrl(url: string): { platform: GitPlatform; owner: string; repo: string; baseUrl: string } | null {
+export function parseGitUrl(url: string): { platform: GitPlatform; owner: string; repo: string; baseUrl: string } | null {
   // Handle GRASP URLs - they use Gitea-compatible API but with npub as owner
   if (isGraspUrl(url)) {
     const graspMatch = url.match(/(https?:\/\/[^/]+)\/(npub1[a-z0-9]+)\/([^/]+?)(?:\.git)?\/?$/i);
@@ -251,32 +279,139 @@ async function fetchFromGitHub(owner: string, repo: string): Promise<Partial<Api
 
 /**
  * Fetch repository metadata from GitLab API
- * Note: This is a simplified version. For full implementation, see aitherboard's git-repo-fetcher.ts
  */
 async function fetchFromGitLab(owner: string, repo: string, baseUrl: string): Promise<Partial<ApiRepoInfo> | null> {
   try {
     const projectPath = encodeURIComponent(`${owner}/${repo}`);
-    const repoResponse = await fetch(`${baseUrl}/projects/${projectPath}`);
+    
+    // Use proxy endpoint on client-side, direct API on server-side
+    const repoUrl = getApiBaseUrl(
+      `projects/${projectPath}`,
+      baseUrl,
+      new URLSearchParams()
+    );
+    const repoResponse = await fetch(repoUrl);
     
     if (!repoResponse.ok) {
       if (repoResponse.status === 404) {
         return null;
       }
+      logger.warn({ status: repoResponse.status, owner, repo }, 'GitLab API error');
       return null;
     }
 
     const repoData = await repoResponse.json();
     const defaultBranch = repoData.default_branch || 'master';
 
-    // For now, return basic info. Full implementation would fetch branches, commits, files
+    // Fetch branches and commits in parallel
+    const [branchesResponse, commitsResponse] = await Promise.all([
+      fetch(getApiBaseUrl(
+        `projects/${projectPath}/repository/branches`,
+        baseUrl,
+        new URLSearchParams()
+      )).catch(() => null),
+      fetch(getApiBaseUrl(
+        `projects/${projectPath}/repository/commits`,
+        baseUrl,
+        new URLSearchParams({ per_page: '10' })
+      )).catch(() => null)
+    ]);
+
+    let branchesData: any[] = [];
+    let commitsData: any[] = [];
+
+    if (branchesResponse && branchesResponse.ok) {
+      branchesData = await branchesResponse.json();
+      if (!Array.isArray(branchesData)) {
+        logger.warn({ owner, repo }, 'GitLab branches response is not an array');
+        branchesData = [];
+      }
+    }
+
+    if (commitsResponse && commitsResponse.ok) {
+      commitsData = await commitsResponse.json();
+      if (!Array.isArray(commitsData)) {
+        logger.warn({ owner, repo }, 'GitLab commits response is not an array');
+        commitsData = [];
+      }
+    }
+
+    const branches: ApiBranch[] = branchesData.map((b: any) => ({
+      name: b.name,
+      commit: {
+        sha: b.commit.id,
+        message: b.commit.message.split('\n')[0],
+        author: b.commit.author_name,
+        date: b.commit.committed_date
+      }
+    }));
+
+    const commits: ApiCommit[] = commitsData.map((c: any) => ({
+      sha: c.id,
+      message: c.message.split('\n')[0],
+      author: c.author_name,
+      date: c.committed_date
+    }));
+
+    // Fetch file tree (simplified - GitLab tree API is more complex)
+    let files: ApiFile[] = [];
+    try {
+      const treeResponse = await fetch(getApiBaseUrl(
+        `projects/${projectPath}/repository/tree`,
+        baseUrl,
+        new URLSearchParams({ recursive: 'true', per_page: '100' })
+      )).catch(() => null);
+      if (treeResponse && treeResponse.ok) {
+        const treeData = await treeResponse.json();
+        if (Array.isArray(treeData)) {
+          files = treeData.map((item: any) => ({
+            name: item.name,
+            path: item.path,
+            type: item.type === 'tree' ? 'dir' : 'file',
+            size: item.size
+          }));
+        }
+      }
+    } catch (error) {
+      logger.warn({ error, owner, repo }, 'Failed to fetch GitLab file tree');
+    }
+
+    // Try to fetch README
+    let readme: { path: string; content: string; format: 'markdown' | 'asciidoc' } | undefined;
+    const readmeFiles = ['README.adoc', 'README.md', 'README.rst', 'README.txt'];
+    for (const readmeFile of readmeFiles) {
+      try {
+        const readmeUrl = getApiBaseUrl(
+          `projects/${projectPath}/repository/files/${encodeURIComponent(readmeFile)}/raw`,
+          baseUrl,
+          new URLSearchParams({ ref: defaultBranch })
+        );
+        const fileData = await fetch(readmeUrl).then(r => {
+          if (!r.ok) {
+            throw new Error('Not found');
+          }
+          return r.text();
+        });
+        readme = {
+          path: readmeFile,
+          content: fileData,
+          format: readmeFile.toLowerCase().endsWith('.adoc') ? 'asciidoc' : 'markdown'
+        };
+        break; // Found a README, stop searching
+      } catch (error) {
+        continue; // Try next file
+      }
+    }
+
     return {
       name: repoData.name,
       description: repoData.description,
       url: repoData.web_url,
       defaultBranch,
-      branches: [],
-      commits: [],
-      files: [],
+      branches,
+      commits,
+      files,
+      readme,
       platform: 'gitlab'
     };
   } catch (error) {
@@ -290,28 +425,216 @@ async function fetchFromGitLab(owner: string, repo: string, baseUrl: string): Pr
  */
 async function fetchFromGitea(owner: string, repo: string, baseUrl: string): Promise<Partial<ApiRepoInfo> | null> {
   try {
+    // URL-encode owner and repo to handle special characters
     const encodedOwner = encodeURIComponent(owner);
     const encodedRepo = encodeURIComponent(repo);
-    const repoResponse = await fetch(`${baseUrl}/repos/${encodedOwner}/${encodedRepo}`);
     
+    // Use proxy endpoint on client-side, direct API on server-side
+    const repoUrl = getApiBaseUrl(
+      `repos/${encodedOwner}/${encodedRepo}`,
+      baseUrl,
+      new URLSearchParams()
+    );
+    const repoResponse = await fetch(repoUrl);
     if (!repoResponse.ok) {
       if (repoResponse.status === 404) {
         return null;
       }
+      logger.warn({ status: repoResponse.status, owner, repo }, 'Gitea API error');
       return null;
     }
-
     const repoData = await repoResponse.json();
+    
     const defaultBranch = repoData.default_branch || 'master';
+    
+    const [branchesResponse, commitsResponse] = await Promise.all([
+      fetch(getApiBaseUrl(
+        `repos/${encodedOwner}/${encodedRepo}/branches`,
+        baseUrl,
+        new URLSearchParams()
+      )).catch(() => null),
+      fetch(getApiBaseUrl(
+        `repos/${encodedOwner}/${encodedRepo}/commits`,
+        baseUrl,
+        new URLSearchParams({ limit: '10' })
+      )).catch(() => null)
+    ]);
+    
+    let branchesData: any[] = [];
+    let commitsData: any[] = [];
+    
+    if (branchesResponse && branchesResponse.ok) {
+      branchesData = await branchesResponse.json();
+      if (!Array.isArray(branchesData)) {
+        logger.warn({ owner, repo }, 'Gitea branches response is not an array');
+        branchesData = [];
+      }
+    } else {
+      logger.warn({ status: branchesResponse?.status, owner, repo }, 'Gitea API error for branches');
+    }
+    
+    if (commitsResponse && commitsResponse.ok) {
+      commitsData = await commitsResponse.json();
+      if (!Array.isArray(commitsData)) {
+        logger.warn({ owner, repo }, 'Gitea commits response is not an array');
+        commitsData = [];
+      }
+    } else {
+      logger.warn({ status: commitsResponse?.status, owner, repo }, 'Gitea API error for commits');
+    }
+
+    const branches: ApiBranch[] = branchesData.map((b: any) => {
+      const commitObj = b.commit || {};
+      return {
+        name: b.name || '',
+        commit: {
+          sha: commitObj.id || b.commit?.sha || '',
+          message: commitObj.message ? commitObj.message.split('\n')[0] : 'No commit message',
+          author: commitObj.author?.name || commitObj.author_name || 'Unknown',
+          date: commitObj.timestamp || commitObj.created || new Date().toISOString()
+        }
+      };
+    });
+
+    const commits: ApiCommit[] = commitsData.map((c: any) => {
+      const commitObj = c.commit || {};
+      return {
+        sha: c.sha || c.id || '',
+        message: commitObj.message ? commitObj.message.split('\n')[0] : 'No commit message',
+        author: commitObj.author?.name || commitObj.author_name || 'Unknown',
+        date: commitObj.timestamp || commitObj.created || new Date().toISOString()
+      };
+    });
+
+    // Fetch file tree - Gitea uses /git/trees API endpoint
+    let files: ApiFile[] = [];
+    const encodedBranch = encodeURIComponent(defaultBranch);
+    try {
+      // Try the git/trees endpoint first (more complete)
+      const treeResponse = await fetch(getApiBaseUrl(
+        `repos/${encodedOwner}/${encodedRepo}/git/trees/${encodedBranch}`,
+        baseUrl,
+        new URLSearchParams({ recursive: '1' })
+      )).catch(() => null);
+      if (treeResponse && treeResponse.ok) {
+        const treeData = await treeResponse.json();
+        if (treeData.tree && Array.isArray(treeData.tree)) {
+          files = treeData.tree
+            .filter((item: any) => item.type === 'blob' || item.type === 'tree')
+            .map((item: any) => ({
+              name: item.path.split('/').pop() || item.path,
+              path: item.path,
+              type: item.type === 'tree' ? 'dir' : 'file',
+              size: item.size
+            }));
+        }
+      } else {
+        // Fallback to contents endpoint (only root directory)
+        const contentsResponse = await fetch(getApiBaseUrl(
+          `repos/${encodedOwner}/${encodedRepo}/contents`,
+          baseUrl,
+          new URLSearchParams({ ref: encodedBranch })
+        )).catch(() => null);
+        if (contentsResponse && contentsResponse.ok) {
+          const contentsData = await contentsResponse.json();
+          if (Array.isArray(contentsData)) {
+            files = contentsData.map((item: any) => ({
+              name: item.name,
+              path: item.path || item.name,
+              type: item.type === 'dir' ? 'dir' : 'file',
+              size: item.size
+            }));
+          }
+        }
+      }
+    } catch (error) {
+      logger.warn({ error, owner, repo }, 'Failed to fetch Gitea file tree');
+    }
+
+    // Try to fetch README (prioritize .adoc over .md)
+    // First try root directory (most common case)
+    let readme: { path: string; content: string; format: 'markdown' | 'asciidoc' } | undefined;
+    const readmeFiles = ['README.adoc', 'README.md', 'README.rst', 'README.txt'];
+    for (const readmeFile of readmeFiles) {
+      try {
+        const encodedReadmeFile = encodeURIComponent(readmeFile);
+        const fileResponse = await fetch(getApiBaseUrl(
+          `repos/${encodedOwner}/${encodedRepo}/contents/${encodedReadmeFile}`,
+          baseUrl,
+          new URLSearchParams({ ref: defaultBranch })
+        ));
+        if (!fileResponse.ok) throw new Error('Not found');
+        const fileData = await fileResponse.json();
+        if (fileData.content) {
+          // Gitea returns base64 encoded content
+          const content = atob(fileData.content.replace(/\s/g, ''));
+          readme = {
+            path: readmeFile,
+            content,
+            format: readmeFile.toLowerCase().endsWith('.adoc') ? 'asciidoc' : 'markdown'
+          };
+          break; // Found a README, stop searching
+        }
+      } catch (error) {
+        // Try next file
+        continue;
+      }
+    }
+    
+    // If not found in root, search the file tree (case-insensitive)
+    if (!readme && files.length > 0) {
+      const readmePatterns = [/^readme\.adoc$/i, /^readme\.md$/i, /^readme\.rst$/i, /^readme\.txt$/i, /^readme$/i];
+      let readmePath: string | null = null;
+      for (const file of files) {
+        if (file.type === 'file') {
+          const fileName = file.name;
+          for (const pattern of readmePatterns) {
+            if (pattern.test(fileName)) {
+              readmePath = file.path;
+              break;
+            }
+          }
+          if (readmePath) break;
+        }
+      }
+      
+      // If found in tree, fetch it
+      if (readmePath) {
+        try {
+          // URL-encode the file path segments
+          const encodedReadmePath = readmePath.split('/').map(segment => encodeURIComponent(segment)).join('/');
+          const fileResponse = await fetch(getApiBaseUrl(
+            `repos/${encodedOwner}/${encodedRepo}/contents/${encodedReadmePath}`,
+            baseUrl,
+            new URLSearchParams({ ref: encodedBranch })
+          ));
+          if (!fileResponse.ok) throw new Error('Not found');
+          const fileData = await fileResponse.json();
+          if (fileData.content) {
+            // Gitea returns base64 encoded content
+            const content = atob(fileData.content.replace(/\s/g, ''));
+            const format = readmePath.toLowerCase().endsWith('.adoc') ? 'asciidoc' : 'markdown';
+            readme = {
+              path: readmePath,
+              content,
+              format
+            };
+          }
+        } catch (error) {
+          logger.warn({ error, readmePath, owner, repo }, 'Failed to fetch README from tree path');
+        }
+      }
+    }
 
     return {
-      name: repoData.name,
+      name: repoData.name || repoData.full_name?.split('/').pop() || repo,
       description: repoData.description,
-      url: repoData.html_url || repoData.clone_url,
-      defaultBranch,
-      branches: [],
-      commits: [],
-      files: [],
+      url: repoData.html_url || repoData.clone_url || `${baseUrl.replace('/api/v1', '')}/${owner}/${repo}`,
+      defaultBranch: repoData.default_branch || defaultBranch,
+      branches,
+      commits,
+      files,
+      readme,
       platform: 'gitea'
     };
   } catch (error) {

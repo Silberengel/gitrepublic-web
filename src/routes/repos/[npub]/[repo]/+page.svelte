@@ -539,6 +539,20 @@
     }
   }
 
+  // Helper function to count all replies recursively (including nested ones)
+  function countAllReplies(comments: Array<{ replies?: Array<any> }> | undefined): number {
+    if (!comments || comments.length === 0) {
+      return 0;
+    }
+    let count = comments.length;
+    for (const comment of comments) {
+      if (comment.replies && comment.replies.length > 0) {
+        count += countAllReplies(comment.replies);
+      }
+    }
+    return count;
+  }
+
   async function checkCloneStatus() {
     if (checkingCloneStatus || isRepoCloned !== null) return;
     
@@ -1265,8 +1279,12 @@
       return;
     }
     // Update currentBranch to first available branch if 'main' doesn't exist
-    if (branches.length > 0 && !branches.includes(currentBranch)) {
-      currentBranch = branches[0];
+    if (branches.length > 0) {
+      // Branches can be an array of objects with .name property or array of strings
+      const branchNames = branches.map((b: any) => typeof b === 'string' ? b : b.name);
+      if (!branchNames.includes(currentBranch)) {
+        currentBranch = branchNames[0];
+      }
     }
     await loadFiles();
     await checkAuth();
@@ -1529,8 +1547,12 @@
       });
       if (response.ok) {
         branches = await response.json();
-        if (branches.length > 0 && !branches.includes(currentBranch)) {
-          currentBranch = branches[0];
+        if (branches.length > 0) {
+          // Branches can be an array of objects with .name property or array of strings
+          const branchNames = branches.map((b: any) => typeof b === 'string' ? b : b.name);
+          if (!branchNames.includes(currentBranch)) {
+            currentBranch = branchNames[0];
+          }
         }
       } else if (response.status === 404) {
         // Repository not provisioned yet - set error message and flag
@@ -1585,7 +1607,13 @@
     loading = true;
     error = null;
     try {
-      const url = `/api/repos/${npub}/${repo}/file?path=${encodeURIComponent(filePath)}&ref=${currentBranch}`;
+      // Ensure currentBranch is a string (branch name), not an object
+      const branchName = typeof currentBranch === 'string' 
+        ? currentBranch 
+        : (typeof currentBranch === 'object' && currentBranch !== null && 'name' in currentBranch 
+          ? (currentBranch as { name: string }).name 
+          : 'main');
+      const url = `/api/repos/${npub}/${repo}/file?path=${encodeURIComponent(filePath)}&ref=${branchName}`;
       const response = await fetch(url);
       
       if (!response.ok) {
@@ -2877,7 +2905,8 @@
                       {#if discussion.type === 'thread'}
                         <span class="discussion-type">Thread</span>
                         {#if hasComments}
-                          <span class="comment-count">{discussion.comments!.length} {discussion.comments!.length === 1 ? 'reply' : 'replies'}</span>
+                          {@const totalReplies = countAllReplies(discussion.comments)}
+                          <span class="comment-count">{totalReplies} {totalReplies === 1 ? 'reply' : 'replies'}</span>
                         {/if}
                       {:else}
                         <span class="discussion-type">Comments</span>
@@ -2904,8 +2933,9 @@
                     </div>
                   {/if}
                   {#if discussion.type === 'thread' && isExpanded && hasComments}
+                    {@const totalReplies = countAllReplies(discussion.comments)}
                     <div class="comments-section">
-                      <h4>Replies ({discussion.comments!.length})</h4>
+                      <h4>Replies ({totalReplies})</h4>
                       {#each discussion.comments! as comment}
                         <div class="comment-item">
                           <div class="comment-meta">
@@ -2988,8 +3018,9 @@
                       {/each}
                     </div>
                   {:else if discussion.type === 'comments' && hasComments}
+                    {@const totalReplies = countAllReplies(discussion.comments)}
                     <div class="comments-section">
-                      <h4>Comments ({discussion.comments!.length})</h4>
+                      <h4>Comments ({totalReplies})</h4>
                       {#each discussion.comments! as comment}
                         <div class="comment-item">
                           <div class="comment-meta">
@@ -4768,8 +4799,10 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     background: var(--card-bg);
+    min-height: 0; /* Allows flex child to shrink below content size */
   }
 
   .discussions-header {

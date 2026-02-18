@@ -61,9 +61,15 @@ export const GET: RequestHandler = async ({ params, url, request }: { params: { 
 
         if (events.length > 0) {
           // Try API-based fetching first (no cloning)
-          // For file endpoint, we can't easily fetch individual files via API without cloning
-          // So we return 404 with helpful message
-          return error(404, 'Repository is not cloned locally. To view files, privileged users can clone this repository using the "Clone to Server" button.');
+          const { tryApiFetchFile } = await import('$lib/utils/api-repo-helper.js');
+          const fileContent = await tryApiFetchFile(events[0], npub, repo, filePath, ref);
+          
+          if (fileContent) {
+            return json(fileContent);
+          }
+          
+          // API fetch failed - repo is not cloned and API fetch didn't work
+          return error(404, 'Repository is not cloned locally and could not fetch file via API. Privileged users can clone this repository using the "Clone to Server" button.');
         } else {
           return error(404, 'Repository announcement not found in Nostr');
         }
