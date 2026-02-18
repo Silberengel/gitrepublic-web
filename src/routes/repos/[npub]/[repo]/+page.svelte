@@ -72,9 +72,12 @@
       if (wasDifferent) {
         checkMaintainerStatus().catch(err => console.warn('Failed to reload maintainer status after login:', err));
         loadBookmarkStatus().catch(err => console.warn('Failed to reload bookmark status after login:', err));
-        // Reload current tab data if needed
-        if (activeTab === 'files' && !loading) {
+        // Reload all repository data with the new user context
+        if (!loading) {
+          loadBranches().catch(err => console.warn('Failed to reload branches after login:', err));
           loadFiles().catch(err => console.warn('Failed to reload files after login:', err));
+          loadReadme().catch(err => console.warn('Failed to reload readme after login:', err));
+          loadTags().catch(err => console.warn('Failed to reload tags after login:', err));
         }
       }
     } else {
@@ -192,7 +195,9 @@
     if (repoNotFound) return;
     loadingReadme = true;
     try {
-      const response = await fetch(`/api/repos/${npub}/${repo}/readme?ref=${currentBranch}`);
+      const response = await fetch(`/api/repos/${npub}/${repo}/readme?ref=${currentBranch}`, {
+        headers: buildApiHeaders()
+      });
       if (response.ok) {
         const data = await response.json();
         if (data.found) {
@@ -470,7 +475,9 @@
 
   async function loadForkInfo() {
     try {
-      const response = await fetch(`/api/repos/${npub}/${repo}/fork`);
+      const response = await fetch(`/api/repos/${npub}/${repo}/fork`, {
+        headers: buildApiHeaders()
+      });
       if (response.ok) {
         forkInfo = await response.json();
       }
@@ -486,7 +493,9 @@
     try {
       // Check if repo exists locally by trying to fetch branches
       // If it returns 404, repo is not cloned
-      const response = await fetch(`/api/repos/${npub}/${repo}/branches`);
+      const response = await fetch(`/api/repos/${npub}/${repo}/branches`, {
+        headers: buildApiHeaders()
+      });
       isRepoCloned = response.ok;
     } catch (err) {
       isRepoCloned = false;
@@ -503,7 +512,8 @@
       const response = await fetch(`/api/repos/${npub}/${repo}/clone`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...buildApiHeaders()
         }
       });
 
@@ -546,7 +556,10 @@
       console.log(`[Fork UI] Starting fork of ${truncatedNpub}/${repo}...`);
       const response = await fetch(`/api/repos/${npub}/${repo}/fork`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildApiHeaders()
+        },
         body: JSON.stringify({ userPubkey })
       });
 
@@ -637,13 +650,16 @@
         }
       }
 
+      // If no chat relays are defined for the project, use default relays
+      const relaysToUse = chatRelays.length > 0 ? chatRelays : DEFAULT_NOSTR_RELAYS;
+
       const discussionsService = new DiscussionsService(combinedRelays);
       const discussionEntries = await discussionsService.getDiscussions(
         repoOwnerPubkey,
         repo,
         announcement.id,
         announcement.pubkey,
-        chatRelays,
+        relaysToUse,
         combinedRelays
       );
 
@@ -670,7 +686,9 @@
   }
 
   async function loadDocumentation() {
-    if (loadingDocs || documentationContent !== null) return;
+    if (loadingDocs) return;
+    // Only skip if we already have rendered HTML (successful load)
+    if (documentationHtml !== null) return;
     
     loadingDocs = true;
     try {
@@ -678,21 +696,9 @@
       const data = $page.data as typeof pageData;
       if (data.repoIsPrivate) {
         // Check access via API
-        const headers: Record<string, string> = {};
-        if (userPubkey) {
-          try {
-            const decoded = nip19.decode(userPubkey);
-            if (decoded.type === 'npub') {
-              headers['X-User-Pubkey'] = decoded.data as string;
-            } else {
-              headers['X-User-Pubkey'] = userPubkey;
-            }
-          } catch {
-            headers['X-User-Pubkey'] = userPubkey;
-          }
-        }
-        
-        const accessResponse = await fetch(`/api/repos/${npub}/${repo}/access`, { headers });
+        const accessResponse = await fetch(`/api/repos/${npub}/${repo}/access`, {
+          headers: buildApiHeaders()
+        });
         if (accessResponse.ok) {
           const accessData = await accessResponse.json();
           if (!accessData.canView) {
@@ -711,7 +717,9 @@
       if (decoded.type === 'npub') {
         const repoOwnerPubkey = decoded.data as string;
         const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
-        const events = await client.fetchEvents([
+        
+        // First, get the repo announcement to find the documentation tag
+        const announcementEvents = await client.fetchEvents([
           {
             kinds: [KIND.REPO_ANNOUNCEMENT],
             authors: [repoOwnerPubkey],
@@ -720,11 +728,72 @@
           }
         ]);
 
-        if (events.length > 0) {
-          documentationContent = events[0].content || null;
+        if (announcementEvents.length === 0) {
+          loadingDocs = false;
+          return;
+        }
+
+        const announcement = announcementEvents[0];
+        
+        // Look for documentation tag in the announcement
+        const documentationTag = announcement.tags.find(t => t[0] === 'documentation');
+        
+        let docKind: number | null = null;
+        
+        if (documentationTag && documentationTag[1]) {
+          // Parse the a-tag format: kind:pubkey:identifier
+          const docAddress = documentationTag[1];
+          const parts = docAddress.split(':');
           
-          // Render as markdown if content exists
-          if (documentationContent) {
+          if (parts.length >= 3) {
+            docKind = parseInt(parts[0]);
+            const docPubkey = parts[1];
+            const docIdentifier = parts.slice(2).join(':'); // In case identifier contains ':'
+            
+            // Fetch the documentation event
+            const docEvents = await client.fetchEvents([
+              {
+                kinds: [docKind],
+                authors: [docPubkey],
+                '#d': [docIdentifier],
+                limit: 1
+              }
+            ]);
+            
+            if (docEvents.length > 0) {
+              documentationContent = docEvents[0].content || null;
+            } else {
+              console.warn('Documentation event not found:', docAddress);
+              documentationContent = null;
+            }
+          } else {
+            console.warn('Invalid documentation tag format:', docAddress);
+            documentationContent = null;
+          }
+        } else {
+          // No documentation tag, try to use announcement content as fallback
+          documentationContent = announcement.content || null;
+        }
+        
+        // Render content based on kind: AsciiDoc for 30041 or 30818, Markdown otherwise
+        if (documentationContent) {
+          // Check if we should use AsciiDoc parser (kinds 30041 or 30818)
+          const useAsciiDoc = docKind === 30041 || docKind === 30818;
+          
+          if (useAsciiDoc) {
+            // Use AsciiDoc parser
+            const Asciidoctor = (await import('@asciidoctor/core')).default;
+            const asciidoctor = Asciidoctor();
+            const converted = asciidoctor.convert(documentationContent, {
+              safe: 'safe',
+              attributes: {
+                'source-highlighter': 'highlight.js'
+              }
+            });
+            // Convert to string if it's a Document object
+            documentationHtml = typeof converted === 'string' ? converted : String(converted);
+          } else {
+            // Use Markdown parser
             const MarkdownIt = (await import('markdown-it')).default;
             const hljsModule = await import('highlight.js');
             const hljs = hljsModule.default || hljsModule;
@@ -742,10 +811,14 @@
             
             documentationHtml = md.render(documentationContent);
           }
+        } else {
+          // No content found, clear HTML
+          documentationHtml = null;
         }
       }
     } catch (err) {
       console.error('Error loading documentation:', err);
+      documentationHtml = null;
     } finally {
       loadingDocs = false;
     }
@@ -1042,7 +1115,9 @@
     if (repoNotFound) return;
     loadingVerification = true;
     try {
-      const response = await fetch(`/api/repos/${npub}/${repo}/verify`);
+      const response = await fetch(`/api/repos/${npub}/${repo}/verify`, {
+        headers: buildApiHeaders()
+      });
       if (response.ok) {
         const data = await response.json();
         verificationStatus = data;
@@ -1112,9 +1187,26 @@
     URL.revokeObjectURL(url);
   }
 
+  // Helper function to build headers with user pubkey
+  function buildApiHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {};
+    // Use $userStore directly to ensure we get the latest value
+    const currentUserPubkeyHex = $userStore.userPubkeyHex || userPubkeyHex;
+    if (currentUserPubkeyHex) {
+      headers['X-User-Pubkey'] = currentUserPubkeyHex;
+      // Debug logging (remove in production)
+      console.debug('[API Headers] Sending X-User-Pubkey:', currentUserPubkeyHex.substring(0, 16) + '...');
+    } else {
+      console.debug('[API Headers] No user pubkey available, sending request without X-User-Pubkey header');
+    }
+    return headers;
+  }
+
   async function loadBranches() {
     try {
-      const response = await fetch(`/api/repos/${npub}/${repo}/branches`);
+      const response = await fetch(`/api/repos/${npub}/${repo}/branches`, {
+        headers: buildApiHeaders()
+      });
       if (response.ok) {
         branches = await response.json();
         if (branches.length > 0 && !branches.includes(currentBranch)) {
@@ -1138,7 +1230,9 @@
     error = null;
     try {
       const url = `/api/repos/${npub}/${repo}/tree?ref=${currentBranch}&path=${encodeURIComponent(path)}`;
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        headers: buildApiHeaders()
+      });
       
       if (!response.ok) {
         if (response.status === 404) {
@@ -1251,7 +1345,8 @@
       const response = await fetch(`/api/repos/${npub}/${repo}/file`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...buildApiHeaders()
         },
         body: JSON.stringify({
           path: currentFile,
@@ -1313,7 +1408,10 @@
       
       const response = await fetch(`/api/repos/${npub}/${repo}/file`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildApiHeaders()
+        },
         body: JSON.stringify({
           path: filePath,
           content: newFileContent,
@@ -1361,7 +1459,10 @@
       
       const response = await fetch(`/api/repos/${npub}/${repo}/file`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildApiHeaders()
+        },
         body: JSON.stringify({
           path: filePath,
           commitMessage: `Delete ${filePath}`,
@@ -1402,7 +1503,10 @@
     try {
       const response = await fetch(`/api/repos/${npub}/${repo}/branches`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildApiHeaders()
+        },
         body: JSON.stringify({
           branchName: newBranchName,
           fromBranch: newBranchFrom
@@ -1429,7 +1533,9 @@
     loadingCommits = true;
     error = null;
     try {
-      const response = await fetch(`/api/repos/${npub}/${repo}/commits?branch=${currentBranch}&limit=50`);
+      const response = await fetch(`/api/repos/${npub}/${repo}/commits?branch=${currentBranch}&limit=50`, {
+        headers: buildApiHeaders()
+      });
       if (response.ok) {
         commits = await response.json();
       }
@@ -1448,7 +1554,9 @@
         ? commits[commits.findIndex(c => c.hash === commitHash) + 1]?.hash || `${commitHash}^`
         : `${commitHash}^`;
       
-      const response = await fetch(`/api/repos/${npub}/${repo}/diff?from=${parentHash}&to=${commitHash}`);
+      const response = await fetch(`/api/repos/${npub}/${repo}/diff?from=${parentHash}&to=${commitHash}`, {
+        headers: buildApiHeaders()
+      });
       if (response.ok) {
         diffData = await response.json();
         selectedCommit = commitHash;
@@ -1464,7 +1572,9 @@
   async function loadTags() {
     if (repoNotFound) return;
     try {
-      const response = await fetch(`/api/repos/${npub}/${repo}/tags`);
+      const response = await fetch(`/api/repos/${npub}/${repo}/tags`, {
+        headers: buildApiHeaders()
+      });
       if (response.ok) {
         tags = await response.json();
       }
@@ -1490,7 +1600,10 @@
     try {
       const response = await fetch(`/api/repos/${npub}/${repo}/tags`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildApiHeaders()
+        },
         body: JSON.stringify({
           tagName: newTagName,
           ref: newTagRef,
@@ -1520,7 +1633,9 @@
     loadingIssues = true;
     error = null;
     try {
-      const response = await fetch(`/api/repos/${npub}/${repo}/issues`);
+      const response = await fetch(`/api/repos/${npub}/${repo}/issues`, {
+        headers: buildApiHeaders()
+      });
       if (response.ok) {
         const data = await response.json();
         issues = data.map((issue: { id: string; tags: string[][]; content: string; status?: string; pubkey: string; created_at: number }) => ({
@@ -1594,7 +1709,9 @@
     loadingPRs = true;
     error = null;
     try {
-      const response = await fetch(`/api/repos/${npub}/${repo}/prs`);
+      const response = await fetch(`/api/repos/${npub}/${repo}/prs`, {
+        headers: buildApiHeaders()
+      });
       if (response.ok) {
         const data = await response.json();
         prs = data.map((pr: { id: string; tags: string[][]; content: string; status?: string; pubkey: string; created_at: number; commitId?: string }) => ({
@@ -2350,6 +2467,26 @@
                   </div>
                 </div>
               {/each}
+            {/if}
+          </div>
+        {/if}
+
+        {#if activeTab === 'docs'}
+          <div class="docs-content">
+            {#if loadingDocs}
+              <div class="loading">Loading documentation...</div>
+            {:else if documentationHtml}
+              <div class="documentation-body">
+                {@html documentationHtml}
+              </div>
+            {:else if documentationContent === null}
+              <div class="empty-state">
+                <p>No documentation found for this repository.</p>
+              </div>
+            {:else}
+              <div class="empty-state">
+                <p>Documentation content is empty.</p>
+              </div>
             {/if}
           </div>
         {/if}
@@ -4088,6 +4225,73 @@
   }
 
   .readme-content :global(pre.hljs) {
+    margin: 1rem 0;
+  }
+
+  /* Documentation */
+  .docs-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--card-bg);
+  }
+
+  .documentation-body {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 1.5rem;
+    min-height: 0;
+  }
+
+  .documentation-body :global(h1),
+  .documentation-body :global(h2),
+  .documentation-body :global(h3),
+  .documentation-body :global(h4),
+  .documentation-body :global(h5),
+  .documentation-body :global(h6) {
+    margin-top: 1.5rem;
+    margin-bottom: 0.75rem;
+    color: var(--text-primary);
+  }
+
+  .documentation-body :global(p) {
+    margin-bottom: 1rem;
+    line-height: 1.6;
+  }
+
+  .documentation-body :global(code) {
+    background: var(--bg-secondary);
+    padding: 0.2rem 0.4rem;
+    border-radius: 3px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.9em;
+  }
+
+  .documentation-body :global(pre) {
+    background: var(--bg-secondary);
+    padding: 1rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    border: 1px solid var(--border-light);
+    margin: 1rem 0;
+  }
+
+  .documentation-body :global(pre code) {
+    background: none;
+    padding: 0;
+  }
+
+  .documentation-body :global(.hljs) {
+    background: var(--bg-secondary);
+    padding: 1rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    border: 1px solid var(--border-light);
+  }
+
+  .documentation-body :global(pre.hljs) {
     margin: 1rem 0;
   }
 
