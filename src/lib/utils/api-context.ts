@@ -56,8 +56,25 @@ export function extractRequestContext(
                      event.request.headers.get('x-user-pubkey') || 
                      null;
   
+  // Debug logging
+  if (userPubkey) {
+    console.debug('[API Context] Extracted userPubkey from request:', userPubkey.substring(0, 16) + '...');
+  } else {
+    console.debug('[API Context] No userPubkey found in request headers or query params');
+    // Log all headers for debugging
+    const allHeaders: Record<string, string> = {};
+    event.request.headers.forEach((value, key) => {
+      allHeaders[key] = value;
+    });
+    console.debug('[API Context] Request headers:', allHeaders);
+  }
+  
   // Convert to hex if needed
   const userPubkeyHex = userPubkey ? (decodeNpubToHex(userPubkey) || userPubkey) : null;
+  
+  if (userPubkeyHex) {
+    console.debug('[API Context] Converted to hex:', userPubkeyHex.substring(0, 16) + '...');
+  }
   
   // Extract client IP
   let clientIp: string;

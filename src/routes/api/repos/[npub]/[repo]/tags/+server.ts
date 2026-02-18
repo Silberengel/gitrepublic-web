@@ -8,10 +8,24 @@ import type { RequestHandler } from './$types';
 import { fileManager } from '$lib/services/service-registry.js';
 import { createRepoGetHandler, createRepoPostHandler } from '$lib/utils/api-handlers.js';
 import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
-import { handleValidationError } from '$lib/utils/error-handler.js';
+import { handleValidationError, handleNotFoundError } from '$lib/utils/error-handler.js';
+import { join } from 'path';
+import { existsSync } from 'fs';
+
+const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
+  ? process.env.GIT_REPO_ROOT
+  : '/repos';
 
 export const GET: RequestHandler = createRepoGetHandler(
   async (context: RepoRequestContext) => {
+    const repoPath = join(repoRoot, context.npub, `${context.repo}.git`);
+    
+    // If repo doesn't exist locally, return empty tags array
+    // Tags are only available for locally cloned repositories
+    if (!existsSync(repoPath)) {
+      return json([]);
+    }
+    
     const tags = await fileManager.getTags(context.npub, context.repo);
     return json(tags);
   },

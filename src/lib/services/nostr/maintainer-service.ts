@@ -132,15 +132,26 @@ export class MaintainerService {
    * Private repos: only owners and maintainers can view
    */
   async canView(userPubkey: string | null, repoOwnerPubkey: string, repoId: string): Promise<boolean> {
-    const { isPrivate, maintainers } = await this.getMaintainers(repoOwnerPubkey, repoId);
+    const { isPrivate, maintainers, owner } = await this.getMaintainers(repoOwnerPubkey, repoId);
+    
+    logger.debug({ 
+      isPrivate, 
+      repoOwnerPubkey: repoOwnerPubkey.substring(0, 16) + '...', 
+      currentOwner: owner.substring(0, 16) + '...',
+      repoId,
+      userPubkey: userPubkey ? userPubkey.substring(0, 16) + '...' : null,
+      maintainerCount: maintainers.length
+    }, 'canView check');
     
     // Public repos are viewable by anyone
     if (!isPrivate) {
+      logger.debug({ repoOwnerPubkey: repoOwnerPubkey.substring(0, 16) + '...', repoId }, 'Access granted: repo is public');
       return true;
     }
 
     // Private repos require authentication
     if (!userPubkey) {
+      logger.debug({ repoOwnerPubkey: repoOwnerPubkey.substring(0, 16) + '...', repoId }, 'Access denied: no user pubkey provided for private repo');
       return false;
     }
 
@@ -154,9 +165,38 @@ export class MaintainerService {
     } catch {
       // Assume it's already a hex pubkey
     }
+    
+    // Normalize to lowercase for comparison
+    userPubkeyHex = userPubkeyHex.toLowerCase();
+    const normalizedMaintainers = maintainers.map(m => m.toLowerCase());
+    const normalizedOwner = owner.toLowerCase();
+
+    logger.debug({ 
+      userPubkeyHex: userPubkeyHex.substring(0, 16) + '...', 
+      normalizedOwner: normalizedOwner.substring(0, 16) + '...',
+      maintainers: normalizedMaintainers.map(m => m.substring(0, 16) + '...')
+    }, 'Comparing pubkeys');
+
+    // Check if user is in maintainers list OR is the current owner
+    const hasAccess = normalizedMaintainers.includes(userPubkeyHex) || userPubkeyHex === normalizedOwner;
+    
+    if (!hasAccess) {
+      logger.debug({ 
+        userPubkeyHex: userPubkeyHex.substring(0, 16) + '...', 
+        currentOwner: normalizedOwner.substring(0, 16) + '...', 
+        repoId,
+        maintainers: normalizedMaintainers.map(m => m.substring(0, 16) + '...')
+      }, 'Access denied: user not in maintainers list and not current owner');
+    } else {
+      logger.debug({ 
+        userPubkeyHex: userPubkeyHex.substring(0, 16) + '...', 
+        currentOwner: normalizedOwner.substring(0, 16) + '...', 
+        repoId
+      }, 'Access granted: user is maintainer or current owner');
+    }
 
     // Check if user is owner or maintainer
-    return maintainers.includes(userPubkeyHex);
+    return hasAccess;
   }
 
   /**

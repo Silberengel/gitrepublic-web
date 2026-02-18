@@ -6,7 +6,7 @@
   import PRDetail from '$lib/components/PRDetail.svelte';
   import UserBadge from '$lib/components/UserBadge.svelte';
   import ForwardingConfig from '$lib/components/ForwardingConfig.svelte';
-  import { getPublicKeyWithNIP07, isNIP07Available } from '$lib/services/nostr/nip07-signer.js';
+  import { getPublicKeyWithNIP07, isNIP07Available, signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
   import { NostrClient } from '$lib/services/nostr/nostr-client.js';
   import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS, combineRelays } from '$lib/config.js';
   import { getUserRelays } from '$lib/services/nostr/user-relays.js';
@@ -70,6 +70,9 @@
       
       // Reload data when user logs in or pubkey changes
       if (wasDifferent) {
+        // Reset repoNotFound flag when user logs in, so we can retry loading
+        repoNotFound = false;
+        
         checkMaintainerStatus().catch(err => console.warn('Failed to reload maintainer status after login:', err));
         loadBookmarkStatus().catch(err => console.warn('Failed to reload bookmark status after login:', err));
         // Reload all repository data with the new user context
@@ -78,6 +81,8 @@
           loadFiles().catch(err => console.warn('Failed to reload files after login:', err));
           loadReadme().catch(err => console.warn('Failed to reload readme after login:', err));
           loadTags().catch(err => console.warn('Failed to reload tags after login:', err));
+          // Reload discussions when user logs in (needs user context for relay selection)
+          loadDiscussions().catch(err => console.warn('Failed to reload discussions after login:', err));
         }
       }
     } else {
@@ -162,8 +167,47 @@
   let documentationHtml = $state<string | null>(null);
   let loadingDocs = $state(false);
 
+  // Discussion threads
+  let showCreateThreadDialog = $state(false);
+  let newThreadTitle = $state('');
+  let newThreadContent = $state('');
+  let creatingThread = $state(false);
+  
+  // Thread replies
+  let expandedThreads = $state<Set<string>>(new Set());
+  let showReplyDialog = $state(false);
+  let replyingToThreadId = $state<string | null>(null);
+  let replyingToCommentId = $state<string | null>(null); // For replying to comments
+  let replyContent = $state('');
+  let creatingReply = $state(false);
+
   // Discussions
-  let discussions = $state<Array<{ type: 'thread' | 'comments'; id: string; title: string; content: string; author: string; createdAt: number; comments?: Array<{ id: string; content: string; author: string; createdAt: number }> }>>([]);
+  let discussions = $state<Array<{ 
+    type: 'thread' | 'comments'; 
+    id: string; 
+    title: string; 
+    content: string; 
+    author: string; 
+    createdAt: number; 
+    comments?: Array<{ 
+      id: string; 
+      content: string; 
+      author: string; 
+      createdAt: number;
+      replies?: Array<{
+        id: string;
+        content: string;
+        author: string;
+        createdAt: number;
+        replies?: Array<{
+          id: string;
+          content: string;
+          author: string;
+          createdAt: number;
+        }>;
+      }>;
+    }> 
+  }>>([]);
   let loadingDiscussions = $state(false);
 
   // README
@@ -640,28 +684,39 @@
       const { DiscussionsService } = await import('$lib/services/nostr/discussions-service.js');
       
       // Get user's relays if available
-      let combinedRelays = DEFAULT_NOSTR_RELAYS;
-      if (userPubkey) {
+      let userRelays: string[] = [];
+      const currentUserPubkey = $userStore.userPubkey || userPubkey;
+      if (currentUserPubkey) {
         try {
-          const { outbox } = await getUserRelays(userPubkey, client);
-          combinedRelays = combineRelays(outbox);
+          const { outbox } = await getUserRelays(currentUserPubkey, client);
+          userRelays = outbox;
         } catch (err) {
           console.warn('Failed to get user relays, using defaults:', err);
         }
       }
 
-      // If no chat relays are defined for the project, use default relays
-      const relaysToUse = chatRelays.length > 0 ? chatRelays : DEFAULT_NOSTR_RELAYS;
+      // Combine all available relays: default + search + chat + user relays
+      const allRelays = [...new Set([
+        ...DEFAULT_NOSTR_RELAYS,
+        ...DEFAULT_NOSTR_SEARCH_RELAYS,
+        ...chatRelays,
+        ...userRelays
+      ])];
+      
+      console.log('[Discussions] Using all available relays for threads:', allRelays);
+      console.log('[Discussions] Chat relays from announcement:', chatRelays);
 
-      const discussionsService = new DiscussionsService(combinedRelays);
+      const discussionsService = new DiscussionsService(allRelays);
       const discussionEntries = await discussionsService.getDiscussions(
         repoOwnerPubkey,
         repo,
         announcement.id,
         announcement.pubkey,
-        relaysToUse,
-        combinedRelays
+        allRelays, // Use all relays for threads
+        allRelays  // Use all relays for comments too
       );
+      
+      console.log('[Discussions] Found', discussionEntries.length, 'discussion entries');
 
       discussions = discussionEntries.map(entry => ({
         type: entry.type,
@@ -670,12 +725,7 @@
         content: entry.content,
         author: entry.author,
         createdAt: entry.createdAt,
-        comments: entry.comments?.map(c => ({
-          id: c.id,
-          content: c.content,
-          author: c.pubkey,
-          createdAt: c.created_at
-        }))
+        comments: entry.comments
       }));
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load discussions';
@@ -683,6 +733,303 @@
     } finally {
       loadingDiscussions = false;
     }
+  }
+
+  async function createDiscussionThread() {
+    if (!userPubkey || !userPubkeyHex) {
+      error = 'You must be logged in to create a discussion thread';
+      return;
+    }
+
+    if (!newThreadTitle.trim()) {
+      error = 'Thread title is required';
+      return;
+    }
+
+    creatingThread = true;
+    error = null;
+
+    try {
+      const decoded = nip19.decode(npub);
+      if (decoded.type !== 'npub') {
+        throw new Error('Invalid npub format');
+      }
+      const repoOwnerPubkey = decoded.data as string;
+
+      // Get repo announcement to get the repo address
+      const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
+      const events = await client.fetchEvents([
+        {
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          authors: [repoOwnerPubkey],
+          '#d': [repo],
+          limit: 1
+        }
+      ]);
+
+      if (events.length === 0) {
+        throw new Error('Repository announcement not found');
+      }
+
+      const announcement = events[0];
+      const repoAddress = `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkey}:${repo}`;
+
+      // Get chat relays from announcement, or use default relays
+      const chatRelays = announcement.tags
+        .filter(t => t[0] === 'chat-relay')
+        .flatMap(t => t.slice(1))
+        .filter(url => url && typeof url === 'string') as string[];
+
+      // Combine all available relays
+      let allRelays = [...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS, ...chatRelays];
+      if (userPubkey) {
+        try {
+          const { outbox } = await getUserRelays(userPubkey, client);
+          allRelays = [...allRelays, ...outbox];
+        } catch (err) {
+          console.warn('Failed to get user relays:', err);
+        }
+      }
+      allRelays = [...new Set(allRelays)]; // Deduplicate
+
+      // Create kind 11 thread event
+      const threadEventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
+        kind: KIND.THREAD,
+        pubkey: userPubkeyHex,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [
+          ['a', repoAddress],
+          ['title', newThreadTitle.trim()],
+          ['t', 'repo']
+        ],
+        content: newThreadContent.trim() || ''
+      };
+
+      // Sign the event using NIP-07
+      const signedEvent = await signEventWithNIP07(threadEventTemplate);
+
+      // Publish to all available relays
+      const publishClient = new NostrClient(allRelays);
+      const result = await publishClient.publishEvent(signedEvent, allRelays);
+
+      if (result.failed.length > 0 && result.success.length === 0) {
+        throw new Error('Failed to publish thread to all relays');
+      }
+
+      // Clear form and close dialog
+      newThreadTitle = '';
+      newThreadContent = '';
+      showCreateThreadDialog = false;
+
+      // Reload discussions
+      await loadDiscussions();
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to create discussion thread';
+      console.error('Error creating discussion thread:', err);
+    } finally {
+      creatingThread = false;
+    }
+  }
+
+  async function createThreadReply(threadId: string | null, commentId: string | null) {
+    if (!userPubkey || !userPubkeyHex) {
+      error = 'You must be logged in to reply';
+      return;
+    }
+
+    if (!replyContent.trim()) {
+      error = 'Reply content is required';
+      return;
+    }
+
+    if (!threadId && !commentId) {
+      error = 'Must reply to either a thread or a comment';
+      return;
+    }
+
+    creatingReply = true;
+    error = null;
+
+    try {
+      const decoded = nip19.decode(npub);
+      if (decoded.type !== 'npub') {
+        throw new Error('Invalid npub format');
+      }
+      const repoOwnerPubkey = decoded.data as string;
+
+      // Get repo announcement to get the repo address and relays
+      const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
+      const events = await client.fetchEvents([
+        {
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          authors: [repoOwnerPubkey],
+          '#d': [repo],
+          limit: 1
+        }
+      ]);
+
+      if (events.length === 0) {
+        throw new Error('Repository announcement not found');
+      }
+
+      const announcement = events[0];
+      
+      // Get chat relays from announcement, or use default relays
+      const chatRelays = announcement.tags
+        .filter(t => t[0] === 'chat-relay')
+        .flatMap(t => t.slice(1))
+        .filter(url => url && typeof url === 'string') as string[];
+
+      // Combine all available relays
+      let allRelays = [...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS, ...chatRelays];
+      if (userPubkey) {
+        try {
+          const { outbox } = await getUserRelays(userPubkey, client);
+          allRelays = [...allRelays, ...outbox];
+        } catch (err) {
+          console.warn('Failed to get user relays:', err);
+        }
+      }
+      allRelays = [...new Set(allRelays)]; // Deduplicate
+
+      let rootEventId: string;
+      let rootKind: number;
+      let rootPubkey: string;
+      let parentEventId: string;
+      let parentKind: number;
+      let parentPubkey: string;
+
+      if (commentId) {
+        // Replying to a comment - get the comment event
+        const commentEvents = await client.fetchEvents([
+          {
+            kinds: [KIND.COMMENT],
+            ids: [commentId],
+            limit: 1
+          }
+        ]);
+
+        if (commentEvents.length === 0) {
+          throw new Error('Comment not found');
+        }
+
+        const commentEvent = commentEvents[0];
+        
+        // Find root event (E tag) or use thread ID if replying to thread comment
+        const ETag = commentEvent.tags.find(t => t[0] === 'E');
+        const KTag = commentEvent.tags.find(t => t[0] === 'K');
+        const PTag = commentEvent.tags.find(t => t[0] === 'P');
+        
+        if (ETag && KTag) {
+          // Comment has root tags, use them
+          rootEventId = ETag[1];
+          rootKind = parseInt(KTag[1]);
+          rootPubkey = PTag?.[1] || commentEvent.pubkey;
+        } else if (threadId) {
+          // Replying to a comment in a thread, use thread as root
+          const threadEvents = await client.fetchEvents([
+            {
+              kinds: [KIND.THREAD],
+              ids: [threadId],
+              limit: 1
+            }
+          ]);
+          if (threadEvents.length === 0) {
+            throw new Error('Thread not found');
+          }
+          rootEventId = threadId;
+          rootKind = KIND.THREAD;
+          rootPubkey = threadEvents[0].pubkey;
+        } else {
+          throw new Error('Cannot determine root event');
+        }
+
+        // Parent is the comment we're replying to
+        parentEventId = commentId;
+        parentKind = KIND.COMMENT;
+        parentPubkey = commentEvent.pubkey;
+      } else if (threadId) {
+        // Replying directly to a thread
+        const threadEvents = await client.fetchEvents([
+          {
+            kinds: [KIND.THREAD],
+            ids: [threadId],
+            limit: 1
+          }
+        ]);
+
+        if (threadEvents.length === 0) {
+          throw new Error('Thread not found');
+        }
+
+        const threadEvent = threadEvents[0];
+        rootEventId = threadId;
+        rootKind = KIND.THREAD;
+        rootPubkey = threadEvent.pubkey;
+        parentEventId = threadId;
+        parentKind = KIND.THREAD;
+        parentPubkey = threadEvent.pubkey;
+      } else {
+        throw new Error('Must specify thread or comment to reply to');
+      }
+
+      // Create kind 1111 comment event
+      const commentEventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
+        kind: KIND.COMMENT,
+        pubkey: userPubkeyHex,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [
+          ['e', parentEventId, '', 'reply'], // Parent event
+          ['k', parentKind.toString()], // Parent kind
+          ['p', parentPubkey], // Parent pubkey
+          ['E', rootEventId], // Root event
+          ['K', rootKind.toString()], // Root kind
+          ['P', rootPubkey] // Root pubkey
+        ],
+        content: replyContent.trim()
+      };
+
+      // Sign the event using NIP-07
+      const signedEvent = await signEventWithNIP07(commentEventTemplate);
+
+      // Publish to all available relays
+      const publishClient = new NostrClient(allRelays);
+      const result = await publishClient.publishEvent(signedEvent, allRelays);
+
+      if (result.failed.length > 0 && result.success.length === 0) {
+        throw new Error('Failed to publish reply to all relays');
+      }
+
+      // Clear form and close dialog
+      replyContent = '';
+      showReplyDialog = false;
+      replyingToThreadId = null;
+      replyingToCommentId = null;
+
+      // Reload discussions to show the new reply
+      await loadDiscussions();
+      
+      // Expand the thread if we were replying to a thread
+      if (threadId) {
+        expandedThreads.add(threadId);
+        expandedThreads = new Set(expandedThreads); // Trigger reactivity
+      }
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to create reply';
+      console.error('Error creating reply:', err);
+    } finally {
+      creatingReply = false;
+    }
+  }
+
+  function toggleThread(threadId: string) {
+    if (expandedThreads.has(threadId)) {
+      expandedThreads.delete(threadId);
+    } else {
+      expandedThreads.add(threadId);
+    }
+    // Trigger reactivity
+    expandedThreads = new Set(expandedThreads);
   }
 
   async function loadDocumentation() {
@@ -1216,6 +1563,11 @@
         // Repository not provisioned yet - set error message and flag
         repoNotFound = true;
         error = `Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`;
+      } else if (response.status === 403) {
+        // Access denied - don't set repoNotFound, allow retry after login
+        const errorText = await response.text().catch(() => response.statusText);
+        error = `Access denied: ${errorText}. You may need to log in or you may not have permission to view this repository.`;
+        console.warn('[Branches] Access denied, user may need to log in');
       }
     } catch (err) {
       console.error('Failed to load branches:', err);
@@ -1238,6 +1590,10 @@
         if (response.status === 404) {
           repoNotFound = true;
           throw new Error(`Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`);
+        } else if (response.status === 403) {
+          // 403 means access denied - don't set repoNotFound, just show error
+          // This allows retry after login
+          throw new Error(`Access denied: ${response.statusText}. You may need to log in or you may not have permission to view this repository.`);
         }
         throw new Error(`Failed to load files: ${response.statusText}`);
       }
@@ -2493,24 +2849,74 @@
 
         {#if activeTab === 'discussions'}
           <div class="discussions-content">
+            <div class="discussions-header">
+              <h2>Discussions</h2>
+              <div class="discussions-actions">
+                <button 
+                  class="btn btn-secondary"
+                  onclick={() => loadDiscussions()}
+                  disabled={loadingDiscussions}
+                  title="Refresh discussions"
+                >
+                  {loadingDiscussions ? 'Refreshing...' : '↻ Refresh'}
+                </button>
+                {#if userPubkey}
+                  <button 
+                    class="btn btn-primary"
+                    onclick={() => showCreateThreadDialog = true}
+                    disabled={creatingThread}
+                  >
+                    {creatingThread ? 'Creating...' : 'New Discussion Thread'}
+                  </button>
+                {/if}
+              </div>
+            </div>
             {#if loadingDiscussions}
               <div class="loading">Loading discussions...</div>
             {:else if discussions.length === 0}
               <div class="empty-state">
-                <p>No discussions found. Check your repository settings to configure chat relays for kind 11 threads.</p>
+                <p>No discussions found. {#if userPubkey}Create a new discussion thread to get started!{:else}Log in to create a discussion thread.{/if}</p>
               </div>
             {:else}
               {#each discussions as discussion}
+                {@const isExpanded = discussion.type === 'thread' && expandedThreads.has(discussion.id)}
+                {@const hasComments = discussion.comments && discussion.comments.length > 0}
                 <div class="discussion-item">
                   <div class="discussion-header">
-                    <h3>{discussion.title}</h3>
+                    <div class="discussion-title-row">
+                      {#if discussion.type === 'thread'}
+                        <button 
+                          class="expand-button"
+                          onclick={() => toggleThread(discussion.id)}
+                          aria-expanded={isExpanded}
+                          aria-label={isExpanded ? 'Collapse thread' : 'Expand thread'}
+                        >
+                          {isExpanded ? '▼' : '▶'}
+                        </button>
+                      {/if}
+                      <h3>{discussion.title}</h3>
+                    </div>
                     <div class="discussion-meta">
                       {#if discussion.type === 'thread'}
                         <span class="discussion-type">Thread</span>
+                        {#if hasComments}
+                          <span class="comment-count">{discussion.comments!.length} {discussion.comments!.length === 1 ? 'reply' : 'replies'}</span>
+                        {/if}
                       {:else}
                         <span class="discussion-type">Comments</span>
                       {/if}
                       <span>Created {new Date(discussion.createdAt * 1000).toLocaleString()}</span>
+                      {#if discussion.type === 'thread' && userPubkey}
+                        <button 
+                          class="btn btn-small"
+                          onclick={() => {
+                            replyingToThreadId = discussion.id;
+                            showReplyDialog = true;
+                          }}
+                        >
+                          Reply
+                        </button>
+                      {/if}
                     </div>
                   </div>
                   {#if discussion.content}
@@ -2518,18 +2924,165 @@
                       <p>{discussion.content}</p>
                     </div>
                   {/if}
-                  {#if discussion.comments && discussion.comments.length > 0}
+                  {#if discussion.type === 'thread' && isExpanded && hasComments}
                     <div class="comments-section">
-                      <h4>Comments ({discussion.comments.length})</h4>
-                      {#each discussion.comments as comment}
+                      <h4>Replies ({discussion.comments!.length})</h4>
+                      {#each discussion.comments! as comment}
                         <div class="comment-item">
                           <div class="comment-meta">
                             <UserBadge pubkey={comment.author} />
                             <span>{new Date(comment.createdAt * 1000).toLocaleString()}</span>
+                            {#if userPubkey}
+                              <button 
+                                class="btn btn-small"
+                                onclick={() => {
+                                  replyingToThreadId = discussion.id;
+                                  replyingToCommentId = comment.id;
+                                  showReplyDialog = true;
+                                }}
+                              >
+                                Reply
+                              </button>
+                            {/if}
                           </div>
                           <div class="comment-content">
                             <p>{comment.content}</p>
                           </div>
+                          {#if comment.replies && comment.replies.length > 0}
+                            <div class="nested-replies">
+                              {#each comment.replies as reply}
+                                <div class="comment-item nested-comment">
+                                  <div class="comment-meta">
+                                    <UserBadge pubkey={reply.author} />
+                                    <span>{new Date(reply.createdAt * 1000).toLocaleString()}</span>
+                                    {#if userPubkey}
+                                      <button 
+                                        class="btn btn-small"
+                                        onclick={() => {
+                                          replyingToThreadId = discussion.id;
+                                          replyingToCommentId = reply.id;
+                                          showReplyDialog = true;
+                                        }}
+                                      >
+                                        Reply
+                                      </button>
+                                    {/if}
+                                  </div>
+                                  <div class="comment-content">
+                                    <p>{reply.content}</p>
+                                  </div>
+                                  {#if reply.replies && reply.replies.length > 0}
+                                    <div class="nested-replies">
+                                      {#each reply.replies as nestedReply}
+                                        <div class="comment-item nested-comment">
+                                          <div class="comment-meta">
+                                            <UserBadge pubkey={nestedReply.author} />
+                                            <span>{new Date(nestedReply.createdAt * 1000).toLocaleString()}</span>
+                                            {#if userPubkey}
+                                              <button 
+                                                class="btn btn-small"
+                                                onclick={() => {
+                                                  replyingToThreadId = discussion.id;
+                                                  replyingToCommentId = nestedReply.id;
+                                                  showReplyDialog = true;
+                                                }}
+                                              >
+                                                Reply
+                                              </button>
+                                            {/if}
+                                          </div>
+                                          <div class="comment-content">
+                                            <p>{nestedReply.content}</p>
+                                          </div>
+                                        </div>
+                                      {/each}
+                                    </div>
+                                  {/if}
+                                </div>
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                  {:else if discussion.type === 'comments' && hasComments}
+                    <div class="comments-section">
+                      <h4>Comments ({discussion.comments!.length})</h4>
+                      {#each discussion.comments! as comment}
+                        <div class="comment-item">
+                          <div class="comment-meta">
+                            <UserBadge pubkey={comment.author} />
+                            <span>{new Date(comment.createdAt * 1000).toLocaleString()}</span>
+                            {#if userPubkey}
+                              <button 
+                                class="btn btn-small"
+                                onclick={() => {
+                                  replyingToThreadId = null;
+                                  replyingToCommentId = comment.id;
+                                  showReplyDialog = true;
+                                }}
+                              >
+                                Reply
+                              </button>
+                            {/if}
+                          </div>
+                          <div class="comment-content">
+                            <p>{comment.content}</p>
+                          </div>
+                          {#if comment.replies && comment.replies.length > 0}
+                            <div class="nested-replies">
+                              {#each comment.replies as reply}
+                                <div class="comment-item nested-comment">
+                                  <div class="comment-meta">
+                                    <UserBadge pubkey={reply.author} />
+                                    <span>{new Date(reply.createdAt * 1000).toLocaleString()}</span>
+                                    {#if userPubkey}
+                                      <button 
+                                        class="btn btn-small"
+                                        onclick={() => {
+                                          replyingToThreadId = null;
+                                          replyingToCommentId = reply.id;
+                                          showReplyDialog = true;
+                                        }}
+                                      >
+                                        Reply
+                                      </button>
+                                    {/if}
+                                  </div>
+                                  <div class="comment-content">
+                                    <p>{reply.content}</p>
+                                  </div>
+                                  {#if reply.replies && reply.replies.length > 0}
+                                    <div class="nested-replies">
+                                      {#each reply.replies as nestedReply}
+                                        <div class="comment-item nested-comment">
+                                          <div class="comment-meta">
+                                            <UserBadge pubkey={nestedReply.author} />
+                                            <span>{new Date(nestedReply.createdAt * 1000).toLocaleString()}</span>
+                                            {#if userPubkey}
+                                              <button 
+                                                class="btn btn-small"
+                                                onclick={() => {
+                                                  replyingToThreadId = null;
+                                                  replyingToCommentId = nestedReply.id;
+                                                  showReplyDialog = true;
+                                                }}
+                                              >
+                                                Reply
+                                              </button>
+                                            {/if}
+                                          </div>
+                                          <div class="comment-content">
+                                            <p>{nestedReply.content}</p>
+                                          </div>
+                                        </div>
+                                      {/each}
+                                    </div>
+                                  {/if}
+                                </div>
+                              {/each}
+                            </div>
+                          {/if}
                         </div>
                       {/each}
                     </div>
@@ -2693,6 +3246,103 @@
           <button onclick={() => showCreateIssueDialog = false} class="cancel-button">Cancel</button>
           <button onclick={createIssue} disabled={!newIssueSubject.trim() || !newIssueContent.trim() || saving} class="save-button">
             {saving ? 'Creating...' : 'Create Issue'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Create Discussion Thread Dialog -->
+  {#if showCreateThreadDialog && userPubkey}
+    <div 
+      class="modal-overlay" 
+      role="dialog"
+      aria-modal="true"
+      aria-label="Create new discussion thread"
+      onclick={() => showCreateThreadDialog = false}
+      onkeydown={(e) => e.key === 'Escape' && (showCreateThreadDialog = false)}
+      tabindex="-1"
+    >
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div 
+        class="modal" 
+        role="document"
+        onclick={(e) => e.stopPropagation()}
+      >
+        <h3>Create New Discussion Thread</h3>
+        <label>
+          Title:
+          <input type="text" bind:value={newThreadTitle} placeholder="Thread title..." />
+        </label>
+        <label>
+          Content:
+          <textarea bind:value={newThreadContent} rows="10" placeholder="Start the discussion..."></textarea>
+        </label>
+        <div class="modal-actions">
+          <button onclick={() => showCreateThreadDialog = false} class="cancel-button">Cancel</button>
+          <button onclick={createDiscussionThread} disabled={!newThreadTitle.trim() || creatingThread} class="save-button">
+            {creatingThread ? 'Creating...' : 'Create Thread'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Reply to Thread/Comment Dialog -->
+  {#if showReplyDialog && userPubkey && (replyingToThreadId || replyingToCommentId)}
+    <div 
+      class="modal-overlay" 
+      role="dialog"
+      aria-modal="true"
+      aria-label="Reply to thread"
+      onclick={() => {
+        showReplyDialog = false;
+        replyingToThreadId = null;
+        replyingToCommentId = null;
+        replyContent = '';
+      }}
+      onkeydown={(e) => e.key === 'Escape' && (showReplyDialog = false)}
+      tabindex="-1"
+    >
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div 
+        class="modal" 
+        role="document"
+        onclick={(e) => e.stopPropagation()}
+      >
+        <h3>
+          {#if replyingToCommentId}
+            Reply to Comment
+          {:else if replyingToThreadId}
+            Reply to Thread
+          {:else}
+            Reply
+          {/if}
+        </h3>
+        <label>
+          Your Reply:
+          <textarea bind:value={replyContent} rows="8" placeholder="Write your reply..."></textarea>
+        </label>
+        <div class="modal-actions">
+          <button 
+            onclick={() => {
+              showReplyDialog = false;
+              replyingToThreadId = null;
+              replyingToCommentId = null;
+              replyContent = '';
+            }} 
+            class="cancel-button"
+          >
+            Cancel
+          </button>
+          <button 
+            onclick={() => createThreadReply(replyingToThreadId, replyingToCommentId)} 
+            disabled={!replyContent.trim() || creatingReply} 
+            class="save-button"
+          >
+            {creatingReply ? 'Posting...' : 'Post Reply'}
           </button>
         </div>
       </div>
@@ -4164,6 +4814,171 @@
     display: flex;
     gap: 1rem;
     align-items: center;
+  }
+
+  .discussions-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--card-bg);
+  }
+
+  .discussions-header {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .discussions-actions {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+  }
+
+  .btn-secondary {
+    padding: 0.5rem 1rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.25rem;
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: background 0.2s;
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--bg-tertiary);
+  }
+
+  .btn-secondary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .discussions-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    color: var(--text-primary);
+  }
+
+  .discussion-item {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .discussion-header {
+    margin-bottom: 0.5rem;
+  }
+
+  .discussion-header h3 {
+    margin: 0 0 0.25rem 0;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+  }
+
+  .discussion-meta {
+    display: flex;
+    gap: 1rem;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+  }
+
+  .discussion-type {
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.25rem;
+    background: var(--bg-secondary);
+    font-weight: 500;
+  }
+
+  .discussion-body {
+    margin-top: 0.5rem;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+  }
+
+  .discussion-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .expand-button {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.5rem;
+    transition: color 0.2s;
+  }
+
+  .expand-button:hover {
+    color: var(--text-primary);
+  }
+
+  .comment-count {
+    font-weight: 500;
+  }
+
+  .btn-small {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.875rem;
+  }
+
+  .comments-section {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
+  }
+
+  .comments-section h4 {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .comment-item {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--border-light);
+  }
+
+  .comment-item:last-child {
+    border-bottom: none;
+  }
+
+  .comment-meta {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    margin-bottom: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+  }
+
+  .comment-content {
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    line-height: 1.5;
+  }
+
+  .nested-replies {
+    margin-left: 2rem;
+    margin-top: 0.75rem;
+    padding-left: 1rem;
+    border-left: 2px solid var(--border-light);
+  }
+
+  .nested-comment {
+    margin-top: 0.75rem;
   }
 
   .readme-content {

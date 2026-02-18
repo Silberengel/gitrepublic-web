@@ -27,12 +27,21 @@ export async function requireRepoAccess(
   requestContext: RequestContext,
   operation?: string
 ): Promise<void> {
+  console.debug('[API Auth] requireRepoAccess check:', {
+    operation,
+    userPubkeyHex: requestContext.userPubkeyHex ? requestContext.userPubkeyHex.substring(0, 16) + '...' : null,
+    repoOwnerPubkey: repoContext.repoOwnerPubkey.substring(0, 16) + '...',
+    repo: repoContext.repo
+  });
+  
   // First check if user is owner/maintainer (or repo is public)
   const canView = await maintainerService.canView(
     requestContext.userPubkeyHex || null,
     repoContext.repoOwnerPubkey,
     repoContext.repo
   );
+  
+  console.debug('[API Auth] canView result:', canView);
   
   if (canView) {
     return; // User is owner/maintainer or repo is public, allow access
