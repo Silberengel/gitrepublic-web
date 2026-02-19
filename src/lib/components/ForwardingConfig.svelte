@@ -115,15 +115,15 @@
 
   function getPlatformIcon(platform: string): string {
     const icons: Record<string, string> = {
-      github: '🐙',
-      gitlab: '🦊',
-      gitea: '🐈',
-      codeberg: '🦫',
-      forgejo: '🔨',
-      onedev: '📦',
-      custom: '⚙️'
+      github: '/icons/github.svg',
+      gitlab: '/icons/gitlab.svg',
+      gitea: '/icons/git-branch.svg',
+      codeberg: '/icons/git-branch.svg',
+      forgejo: '/icons/hammer.svg',
+      onedev: '/icons/package.svg',
+      custom: '/icons/settings.svg'
     };
-    return icons[platform.toLowerCase()] || '📦';
+    return icons[platform.toLowerCase()] || '/icons/package.svg';
   }
 
   function getPlatformName(platform: string): string {
@@ -179,21 +179,21 @@
     <div class="platforms">
       {#if summary.platforms.telegram}
         <div class="platform-item">
-          <span class="platform-icon">📱</span>
+          <img src="/icons/smartphone.svg" alt="Telegram" class="platform-icon" />
           <span class="platform-name">Telegram</span>
         </div>
       {/if}
 
       {#if summary.platforms.simplex}
         <div class="platform-item">
-          <span class="platform-icon">💬</span>
+          <img src="/icons/message-circle.svg" alt="SimpleX" class="platform-icon" />
           <span class="platform-name">SimpleX</span>
         </div>
       {/if}
 
       {#if summary.platforms.email}
         <div class="platform-item">
-          <span class="platform-icon">📧</span>
+          <img src="/icons/mail.svg" alt="Email" class="platform-icon" />
           <span class="platform-name">Email</span>
         </div>
       {/if}
@@ -201,7 +201,7 @@
       {#if summary.platforms.gitPlatforms && summary.platforms.gitPlatforms.length > 0}
         {#each summary.platforms.gitPlatforms as gitPlatform}
           <div class="platform-item">
-            <span class="platform-icon">{getPlatformIcon(gitPlatform.platform)}</span>
+            <img src={getPlatformIcon(gitPlatform.platform)} alt={getPlatformName(gitPlatform.platform)} class="platform-icon" />
             <span class="platform-name">
               {getPlatformName(gitPlatform.platform)}
               {#if !compact}
@@ -282,7 +282,9 @@
   }
 
   .platform-icon {
-    font-size: 1.2rem;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
   }
 
   .platform-name {

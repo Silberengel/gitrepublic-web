@@ -87,10 +87,7 @@
     title="Theme settings"
     bind:this={buttonElement}
   >
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="3"></circle>
-      <path d="M12 1v6m0 6v6M5.64 5.64l4.24 4.24m4.24 4.24l4.24 4.24M1 12h6m6 0h6M5.64 18.36l4.24-4.24m4.24-4.24l4.24-4.24"></path>
-    </svg>
+    <img src="/icons/palette.svg" alt="Theme" class="theme-icon" />
   </button>
   
   {#if dropdownOpen}
@@ -100,7 +97,7 @@
         class:active={currentTheme === 'gitrepublic-light'}
         onclick={() => selectTheme('gitrepublic-light')}
       >
-        <span class="theme-circle">⚪</span>
+        <img src="/icons/sun.svg" alt="Light theme" class="theme-icon-option" />
         <span class="theme-name">Light</span>
       </button>
       <button 
@@ -108,7 +105,7 @@
         class:active={currentTheme === 'gitrepublic-dark'}
         onclick={() => selectTheme('gitrepublic-dark')}
       >
-        <span class="theme-circle">🟣</span>
+        <img src="/icons/palette.svg" alt="Purple theme" class="theme-icon-option" />
         <span class="theme-name">Purple</span>
       </button>
       <button 
@@ -116,7 +113,7 @@
         class:active={currentTheme === 'gitrepublic-black'}
         onclick={() => selectTheme('gitrepublic-black')}
       >
-        <span class="theme-circle">⚫</span>
+        <img src="/icons/moon.svg" alt="Black theme" class="theme-icon-option" />
         <span class="theme-name">Black</span>
       </button>
     </div>
@@ -156,9 +153,10 @@
     transform: scale(0.98);
   }
 
-  .theme-toggle svg {
+  .theme-toggle .theme-icon {
     width: 16px;
     height: 16px;
+    display: block;
   }
 
   .theme-dropdown {
@@ -211,13 +209,14 @@
     font-weight: 600;
   }
 
-  .theme-option .theme-circle {
-    font-size: 1.25rem;
-    line-height: 1;
+  .theme-option .theme-icon-option {
+    width: 18px;
+    height: 18px;
     display: inline-block;
+    flex-shrink: 0;
   }
 
-  .theme-option.active .theme-circle {
+  .theme-option.active .theme-icon-option {
     transform: scale(1.1);
   }
 

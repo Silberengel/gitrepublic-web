@@ -542,7 +542,7 @@
               {#if repoImage}
                 <img src={repoImage} alt={getRepoName(repo)} class="repo-badge-image" />
               {:else}
-                <div class="repo-badge-icon">📦</div>
+                <img src="/icons/package.svg" alt="Repository" class="repo-badge-icon" />
               {/if}
               <span class="repo-badge-name">{getRepoName(repo)}</span>
             </a>

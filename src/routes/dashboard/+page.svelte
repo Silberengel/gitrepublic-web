@@ -107,15 +107,15 @@
 
   function getPlatformIcon(platform: string): string {
     const icons: Record<string, string> = {
-      github: '🐙',
-      gitlab: '🦊',
-      gitea: '🐈',
-      codeberg: '🦫',
-      forgejo: '🔨',
-      onedev: '📦',
-      custom: '⚙️'
+      github: '/icons/github.svg',
+      gitlab: '/icons/gitlab.svg',
+      gitea: '/icons/git-branch.svg',
+      codeberg: '/icons/git-branch.svg',
+      forgejo: '/icons/hammer.svg',
+      onedev: '/icons/package.svg',
+      custom: '/icons/settings.svg'
     };
-    return icons[platform] || '📦';
+    return icons[platform] || '/icons/package.svg';
   }
 
   function formatDate(dateString: string): string {
@@ -164,7 +164,12 @@
     <p class="dashboard-subtitle">Aggregated issues and pull requests from all your configured git platforms</p>
     {#if userPubkeyHex}
       <button onclick={loadDashboard} class="refresh-button" disabled={loading}>
-        {loading ? 'Refreshing...' : '🔄 Refresh'}
+        {#if loading}
+          Refreshing...
+        {:else}
+          <img src="/icons/refresh-cw.svg" alt="Refresh" class="icon-inline" />
+          Refresh
+        {/if}
       </button>
     {/if}
   </header>
@@ -220,7 +225,13 @@
           <div class="item-header">
             <div class="item-title-row">
               <span class="item-type-badge" class:pr={isPR} class:issue={!isPR}>
-                {isPR ? '🔀 PR' : '📋 Issue'}
+                {#if isPR}
+                  <img src="/icons/git-pull-request.svg" alt="PR" class="icon-inline" />
+                  PR
+                {:else}
+                  <img src="/icons/clipboard-list.svg" alt="Issue" class="icon-inline" />
+                  Issue
+                {/if}
               </span>
               <a 
                 href={item.html_url} 
@@ -233,7 +244,8 @@
             </div>
             <div class="item-meta">
               <span class="platform-badge" title={item.apiUrl || ''}>
-                {getPlatformIcon(item.platform)} {getPlatformName(item.platform)}
+                <img src={getPlatformIcon(item.platform)} alt={getPlatformName(item.platform)} class="icon-inline" />
+                {getPlatformName(item.platform)}
               </span>
               <span class="repo-name">{getRepoDisplay(item)}</span>
               {#if item.number}
@@ -263,7 +275,10 @@
               {/if}
               <span class="item-date">Updated {formatDate(item.updated_at)}</span>
               {#if item.comments_count !== undefined && item.comments_count > 0}
-                <span class="comments-count">💬 {item.comments_count}</span>
+                <span class="comments-count">
+                  <img src="/icons/message-circle.svg" alt="Comments" class="icon-inline" />
+                  {item.comments_count}
+                </span>
               {/if}
             </div>
             {#if item.labels && item.labels.length > 0}
@@ -331,6 +346,9 @@
     cursor: pointer;
     font-size: 0.9rem;
     transition: background 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
   }
 
   .refresh-button:hover:not(:disabled) {
@@ -415,6 +433,9 @@
     font-size: 0.75rem;
     font-weight: 600;
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
   }
 
   .item-type-badge.pr {
@@ -454,6 +475,9 @@
     background: var(--bg-secondary);
     border-radius: 4px;
     font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
   }
 
   .repo-name {
@@ -533,6 +557,13 @@
     display: flex;
     align-items: center;
     gap: 0.25rem;
+  }
+
+  .icon-inline {
+    width: 14px;
+    height: 14px;
+    display: inline-block;
+    vertical-align: middle;
   }
 
   .item-labels {

@@ -198,7 +198,7 @@
         </button>
       {/if}
       <button class="mobile-menu-toggle" onclick={toggleMobileMenu} aria-label="Toggle menu">
-        <span class="hamburger-icon">☰</span>
+        <img src="/icons/menu.svg" alt="Menu" class="hamburger-icon" />
       </button>
     </div>
   </div>
@@ -334,6 +334,8 @@
   }
 
   .hamburger-icon {
+    width: 20px;
+    height: 20px;
     display: block;
   }
 

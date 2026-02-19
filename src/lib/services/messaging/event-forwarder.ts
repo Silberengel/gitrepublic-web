@@ -195,7 +195,7 @@ function formatEventMessage(event: NostrEvent, userPubkeyHex: string): string {
       .filter(tag => tag[0] === 'p' && tag[1])
       .map(tag => tag[1].slice(0, 16) + '...');
     
-    let message = `💬 Public Message from ${userShort}`;
+    let message = `Public Message from ${userShort}`;
     if (recipients.length > 0) {
       message += ` to ${recipients.join(', ')}`;
     }
@@ -204,7 +204,7 @@ function formatEventMessage(event: NostrEvent, userPubkeyHex: string): string {
     return message;
   }
   
-  let message = `🔔 ${kindName} published by ${userShort}\n\n`;
+  let message = `${kindName} published by ${userShort}\n\n`;
   
   if (event.content) {
     const content = event.content.length > 500 
