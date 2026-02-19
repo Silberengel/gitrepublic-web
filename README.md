@@ -134,7 +134,7 @@ These are not part of any NIP but are used by this application:
 ### Git Operations Flow
 
 1. **Clone/Fetch**:
-   - User runs `git clone https://{domain}/{npub}/{repo}.git`
+   - User runs `git clone https://{domain}/api/git/{npub}/{repo}.git` (or `/repos/` path)
    - Server handles GET requests to `info/refs?service=git-upload-pack`
    - For private repos, verifies NIP-98 authentication
    - Proxies request to `git-http-backend` which serves the repository
@@ -351,7 +351,7 @@ See `docs/SECURITY.md` and `docs/SECURITY_IMPLEMENTATION.md` for detailed inform
 
 ## Environment Variables
 
-- `NOSTRGIT_SECRET_KEY`: User's Nostr private key (nsec bech32 or hex) for git command-line operations via credential helper. Required for `git clone`, `git push`, and `git pull` operations from the command line. See [Git Command Line Setup](#git-command-line-setup) above.
+- `NOSTRGIT_SECRET_KEY`: User's Nostr private key (nsec bech32 or hex) for git command-line operations via credential helper. Required for `git clone`, `git push`, and `git pull` operations from the command line. See [Git Command Line Setup](#git-command-line-setup) above. **Note**: Install the [GitRepublic CLI](https://github.com/your-org/gitrepublic-cli) package to use this.
 - `GIT_REPO_ROOT`: Path to store git repositories (default: `/repos`)
 - `GIT_DOMAIN`: Domain for git repositories (default: `localhost:6543`)
 - `NOSTR_RELAYS`: Comma-separated list of Nostr relays (default: `wss://theforest.nostr1.com`)
@@ -448,59 +448,84 @@ The server will automatically provision the repository.
 
 ### Git Command Line Setup
 
-To use git from the command line with GitRepublic, you need to configure the credential helper. This enables automatic NIP-98 authentication for all git operations (clone, push, pull).
+To use git from the command line with GitRepublic, install the [GitRepublic CLI](https://github.com/your-org/gitrepublic-cli) tools. This lightweight package provides the credential helper and commit signing hook.
 
 **Quick Setup:**
 
-1. **Set your Nostr private key**:
+1. **Install via npm** (recommended):
+   ```bash
+   npm install -g gitrepublic-cli
+   ```
+   
+   Or clone from GitHub:
+   ```bash
+   git clone https://github.com/your-org/gitrepublic-cli.git
+   cd gitrepublic-cli
+   npm install
+   ```
+
+2. **Set your Nostr private key**:
    ```bash
    export NOSTRGIT_SECRET_KEY="nsec1..."
    # Or add to ~/.bashrc or ~/.zshrc for persistence
    echo 'export NOSTRGIT_SECRET_KEY="nsec1..."' >> ~/.bashrc
    ```
 
-2. **Configure git credential helper**:
+3. **Run automatic setup**:
    ```bash
-   # For a specific domain (recommended)
-   git config --global credential.https://your-domain.com.helper '!node /absolute/path/to/gitrepublic-web/scripts/git-credential-nostr.js'
+   # Setup everything automatically
+   gitrepublic-setup
    
-   # For localhost development
-   git config --global credential.http://localhost:5173.helper '!node /absolute/path/to/gitrepublic-web/scripts/git-credential-nostr.js'
+   # Or with options:
+   gitrepublic-setup --domain your-domain.com    # Configure for specific domain
+   gitrepublic-setup --global-hook               # Install hook globally
    ```
-
-3. **Make the script executable**:
-   ```bash
-   chmod +x /absolute/path/to/gitrepublic-web/scripts/git-credential-nostr.js
-   ```
+   
+   The setup script automatically:
+   - Finds the scripts (works with npm install or git clone)
+   - Configures git credential helper
+   - Installs commit signing hook
+   - Checks if `NOSTRGIT_SECRET_KEY` is set
 
 **Important Notes:**
 - The `NOSTRGIT_SECRET_KEY` must match the repository owner or you must have maintainer permissions
 - The credential helper generates fresh NIP-98 tokens for each request (per-request authentication)
+- The commit signing hook only signs commits for GitRepublic repositories (detects `/api/git/npub` or `/repos/npub` URL patterns)
 - Never commit your private key to version control
 
-For complete setup instructions and troubleshooting, see [docs/GIT_CREDENTIAL_HELPER.md](./docs/GIT_CREDENTIAL_HELPER.md).
+**CLI Features:**
+- Full API access: `gitrepublic repos list`, `gitrepublic file get`, etc.
+- Server configuration: `gitrepublic config server`
+- JSON output support: `gitrepublic --json repos get <npub> <repo>`
+
+For complete setup instructions, API commands, and troubleshooting, see the [GitRepublic CLI README](https://github.com/your-org/gitrepublic-cli).
 
 ### Cloning a Repository
 
 ```bash
-# Public repository
-git clone https://{domain}/{npub}/{repo-name}.git
+# Using GitRepublic API endpoint (recommended for commit signing detection)
+git clone https://{domain}/api/git/{npub}/{repo-name}.git
 
-# Private repository (requires credential helper setup)
+# Or using repos endpoint
+git clone https://{domain}/repos/{npub}/{repo-name}.git
+
+# Direct path (also works, but may conflict with GRASP servers)
 git clone https://{domain}/{npub}/{repo-name}.git
 ```
+
+**Note**: Use `/api/git/` or `/repos/` paths to ensure proper detection by the commit signing hook and to distinguish from GRASP servers.
 
 ### Pushing to a Repository
 
 ```bash
-# Add remote
-git remote add origin https://{domain}/{npub}/{repo-name}.git
+# Add remote (use /api/git/ or /repos/ path for best compatibility)
+git remote add origin https://{domain}/api/git/{npub}/{repo-name}.git
 
 # Push (requires credential helper setup)
 git push origin main
 ```
 
-The credential helper will automatically generate NIP-98 authentication tokens for push operations.
+The credential helper will automatically generate NIP-98 authentication tokens for push operations. The commit signing hook will automatically sign commits for GitRepublic repositories.
 
 ### Viewing Repositories
 

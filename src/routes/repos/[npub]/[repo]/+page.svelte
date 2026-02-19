@@ -35,6 +35,7 @@
     repoTopics?: string[];
     repoWebsite?: string;
     repoIsPrivate?: boolean;
+    gitDomain?: string;
   });
 
   const npub = ($page.params as { npub?: string; repo?: string }).npub || '';
@@ -148,10 +149,51 @@
   let isRepoCloned = $state<boolean | null>(null); // null = unknown, true = cloned, false = not cloned
   let checkingCloneStatus = $state(false);
   let cloning = $state(false);
+  let copyingCloneUrl = $state(false);
   
   // Helper: Check if repo needs to be cloned for write operations
   const needsClone = $derived(isRepoCloned === false);
   const cloneTooltip = 'Please clone this repo to use this feature.';
+  
+  // Copy clone URL to clipboard
+  async function copyCloneUrl() {
+    if (copyingCloneUrl) return;
+    
+    copyingCloneUrl = true;
+    try {
+      // Use the current page URL to get the correct host and port
+      // This ensures we use the same domain/port the user is currently viewing
+      const currentUrl = $page.url;
+      const host = currentUrl.host; // Includes port if present (e.g., "localhost:5173")
+      const protocol = currentUrl.protocol.slice(0, -1); // Remove trailing ":"
+      
+      // Use /api/git/ format for better compatibility with commit signing hook
+      const cloneUrl = `${protocol}://${host}/api/git/${npub}/${repo}.git`;
+      const cloneCommand = `git clone ${cloneUrl}`;
+      
+      // Try to use the Clipboard API
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(cloneCommand);
+        alert(`Clone command copied to clipboard!\n\n${cloneCommand}`);
+      } else {
+        // Fallback: create a temporary textarea
+        const textarea = document.createElement('textarea');
+        textarea.value = cloneCommand;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        alert(`Clone command copied to clipboard!\n\n${cloneCommand}`);
+      }
+    } catch (err) {
+      console.error('Failed to copy clone command:', err);
+      alert('Failed to copy clone command to clipboard');
+    } finally {
+      copyingCloneUrl = false;
+    }
+  }
   
   // Verification status
   let verificationStatus = $state<{ 
@@ -2983,6 +3025,22 @@
       </div>
       <div class="header-actions">
         <div style="display: flex; align-items: center; gap: 0.5rem;">
+          {#if isRepoCloned === true}
+            <button 
+              onclick={copyCloneUrl} 
+              disabled={copyingCloneUrl}
+              class="clone-url-button"
+              title="Copy clone URL to clipboard"
+              style="padding: 0.5rem 1rem; font-size: 0.875rem; background: var(--primary, #3b82f6); color: white; border: none; border-radius: 0.25rem; cursor: pointer; display: flex; align-items: center; gap: 0.5rem;"
+            >
+              {#if copyingCloneUrl}
+                <span>Copying...</span>
+              {:else}
+                <img src="/icons/copy.svg" alt="" class="icon-inline" style="width: 1rem; height: 1rem;" />
+                <span>Clone</span>
+              {/if}
+            </button>
+          {/if}
           <select bind:value={currentBranch} onchange={handleBranchChange} class="branch-select" disabled={branches.length === 0 && loading}>
             {#if branches.length === 0}
               <!-- Show current branch even if branches haven't loaded yet -->

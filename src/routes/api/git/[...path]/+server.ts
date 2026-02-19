@@ -471,19 +471,45 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       
       // For info/refs requests, git-http-backend includes HTTP headers in the body
       // We need to strip them and only send the git protocol data
-      // The format is: HTTP headers + blank line (\r\n\r\n) + git protocol data
-      if (pathInfo.includes('info/refs')) {
-        const bodyStr = body.toString('binary');
-        const headerEnd = bodyStr.indexOf('\r\n\r\n');
-        if (headerEnd !== -1) {
+      // The format is: HTTP headers + blank line (\r\n\r\n or \n\n) + git protocol data
+      // Also check for headers in POST responses (some git-http-backend versions include them)
+      const bodyStr = body.toString('binary');
+      const hasHttpHeaders = bodyStr.match(/^(Expires|Content-Type|Cache-Control|Pragma):/i);
+      
+      if (hasHttpHeaders || pathInfo.includes('info/refs')) {
+        // Try to find header end with \r\n\r\n first (standard HTTP)
+        let headerEnd = bodyStr.indexOf('\r\n\r\n');
+        if (headerEnd === -1) {
+          // Fallback to \n\n (some systems use just \n)
+          headerEnd = bodyStr.indexOf('\n\n');
+          if (headerEnd !== -1) {
+            // Extract only the git protocol data (after the blank line)
+            body = Buffer.from(bodyStr.slice(headerEnd + 2), 'binary');
+          }
+        } else {
           // Extract only the git protocol data (after the blank line)
           body = Buffer.from(bodyStr.slice(headerEnd + 4), 'binary');
-          logger.debug({ 
-            originalLength: Buffer.concat(chunks).length,
-            protocolDataLength: body.length,
-            headerEnd
-          }, 'Stripped HTTP headers from info/refs response');
         }
+        
+        // Additional safety: ensure body starts with git protocol format
+        // Git protocol should start with a length prefix (hex) or service line
+        const bodyStart = body.toString('utf-8', 0, Math.min(100, body.length));
+        if (headerEnd !== -1 && !bodyStart.match(/^[0-9a-f]{4}|^# service=/i)) {
+          logger.warn({ 
+            bodyStart: bodyStart.substring(0, 50),
+            headerEnd,
+            pathInfo
+          }, 'Warning: Stripped headers but body does not start with git protocol format');
+        }
+        
+        logger.debug({ 
+          originalLength: Buffer.concat(chunks).length,
+          protocolDataLength: body.length,
+          headerEnd,
+          bodyStart: bodyStart.substring(0, 50),
+          pathInfo,
+          hasHttpHeaders: !!hasHttpHeaders
+        }, 'Stripped HTTP headers from git-http-backend response');
       }
       
       // Determine content type based on request type
@@ -644,7 +670,7 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     // This ensures git calls the credential helper proactively
     // Git requires WWW-Authenticate header on ALL 401 responses, otherwise it won't retry
     if (!rawAuthHeader) {
-      return new Response('Authentication required. Please configure the git credential helper. See docs/GIT_CREDENTIAL_HELPER.md for setup instructions.', {
+      return new Response('Authentication required. Please configure the git credential helper. See https://github.com/your-org/gitrepublic-cli for setup instructions.', {
         status: 401,
         headers: {
           'WWW-Authenticate': 'Basic realm="GitRepublic"',
@@ -699,7 +725,60 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     );
     
     if (authResult.pubkey !== currentOwnerPubkey && !isMaintainer) {
-      return error(403, 'Event pubkey does not match repository owner or maintainer');
+      const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+      const authPubkey = authResult.pubkey || '';
+      
+      logger.warn({ 
+        authPubkey,
+        currentOwnerPubkey,
+        isMaintainer,
+        repoName: `${npub}/${repoName}`
+      }, 'Push denied: insufficient permissions');
+      
+      auditLogger.logRepoAccess(
+        authPubkey,
+        clientIp,
+        'push',
+        `${npub}/${repoName}`,
+        'denied',
+        'Not repository owner or maintainer'
+      );
+      
+      // Get list of maintainers for the error message
+      const { maintainers } = await maintainerService.getMaintainers(currentOwnerPubkey, repoName);
+      const maintainerList = maintainers
+        .filter(m => m !== currentOwnerPubkey) // Exclude owner from maintainer list
+        .map(m => m.substring(0, 16) + '...')
+        .join(', ');
+      
+      // Return user-friendly error message as plain text
+      // Note: Git doesn't display response bodies for 403 errors, but the message is here
+      // for debugging and for tools that do read response bodies (like curl)
+      let errorMessage = `Permission denied: You are not the repository owner or a maintainer.\n` +
+        `Repository: ${npub}/${repoName}\n` +
+        `Your pubkey: ${authPubkey.substring(0, 16)}...\n` +
+        `Owner pubkey: ${currentOwnerPubkey.substring(0, 16)}...\n`;
+      
+      if (maintainerList) {
+        errorMessage += `Maintainers: ${maintainerList}\n`;
+      } else {
+        errorMessage += `Maintainers: (none - only owner can push)\n`;
+      }
+      
+      errorMessage += `\nTo push, use the private key (nsec) that matches the repository owner, or be added as a maintainer.\n` +
+        `Set NOSTRGIT_SECRET_KEY to the correct private key.\n` +
+        `\nNote: Use 'gitrepublic-push' instead of 'git push' to see this detailed error message.`;
+      
+      // Return plain text response so git can display it
+      // Git will show this in the terminal when verbose mode is enabled
+      return new Response(errorMessage, {
+        status: 403,
+        statusText: 'Forbidden',
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Length': Buffer.byteLength(errorMessage, 'utf-8').toString()
+        }
+      });
     }
 
     // Check branch protection rules
@@ -900,7 +979,35 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
         return;
       }
 
-      const responseBody = Buffer.concat(chunks);
+      let responseBody = Buffer.concat(chunks);
+      
+      // Check if git-http-backend included HTTP headers in POST response body
+      // Some versions include headers that need to be stripped
+      const bodyStr = responseBody.toString('binary');
+      const hasHttpHeaders = bodyStr.match(/^(Expires|Content-Type|Cache-Control|Pragma):/i);
+      
+      if (hasHttpHeaders) {
+        // Try to find header end with \r\n\r\n first (standard HTTP)
+        let headerEnd = bodyStr.indexOf('\r\n\r\n');
+        if (headerEnd === -1) {
+          // Fallback to \n\n (some systems use just \n)
+          headerEnd = bodyStr.indexOf('\n\n');
+          if (headerEnd !== -1) {
+            // Extract only the git protocol data (after the blank line)
+            responseBody = Buffer.from(bodyStr.slice(headerEnd + 2), 'binary');
+          }
+        } else {
+          // Extract only the git protocol data (after the blank line)
+          responseBody = Buffer.from(bodyStr.slice(headerEnd + 4), 'binary');
+        }
+        
+        logger.debug({ 
+          originalLength: Buffer.concat(chunks).length,
+          protocolDataLength: responseBody.length,
+          headerEnd,
+          pathInfo
+        }, 'Stripped HTTP headers from POST response');
+      }
       
       // Determine content type
       let contentType = 'application/x-git-receive-pack-result';
