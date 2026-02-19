@@ -12,7 +12,7 @@ Welcome to GitRepublic! This comprehensive guide will walk you through everythin
 6. [Pull Requests](#pull-requests)
 7. [Issues](#issues)
 8. [Forking Repositories](#forking-repositories)
-9. [Repository Settings](#repository-settings)
+9. [Updating Repository Information](#updating-repository-information)
 10. [Collaboration Features](#collaboration-features)
 11. [Best Practices](#best-practices)
 12. [Troubleshooting](#troubleshooting)
@@ -392,14 +392,22 @@ To keep your fork up to date with the original repository:
 
 ---
 
-## Repository Settings
+## Updating Repository Information
 
-Access repository settings by clicking "Settings" on your repository page.
+To update your repository information, navigate to the signup page with your repository details pre-filled.
+
+### Accessing the Update Form
+
+1. Navigate to your repository page
+2. Click "Settings" (if you're the owner or a maintainer)
+3. You'll be redirected to the signup page with all current repository information pre-filled
 
 ### Privacy Settings
 
 - **Public**: Anyone can view and clone your repository
 - **Private**: Only owners and maintainers can access
+
+You can change the privacy setting by checking or unchecking the "Private Repository" option in the update form.
 
 ### Maintainer Management
 
@@ -407,42 +415,48 @@ Add maintainers who can:
 - Push to the repository
 - Merge pull requests
 - Manage issues
-- Update repository settings
+- Update repository information
 
 **To add a maintainer**:
-1. Go to Settings
-2. Enter the maintainer's npub
-3. Click "Add Maintainer"
+1. Access the update form (via Settings link)
+2. Enter the maintainer's npub in the maintainers field
+3. Click "Add Maintainer" to add additional maintainer fields
+4. Save changes
 
 **To remove a maintainer**:
-1. Go to Settings
-2. Find the maintainer in the list
-3. Click "Remove"
+1. Access the update form
+2. Remove the maintainer's npub from the maintainers field
+3. Save changes
 
 ### Repository Description
 
 Update your repository description:
-1. Go to Settings
+1. Access the update form
 2. Edit the description field
 3. Save changes
 
 ### Clone URLs
 
 Add multiple clone URLs to sync your repository to other git hosts:
-1. Go to Settings
-2. Add clone URLs (one per line)
+1. Access the update form
+2. Add clone URLs (one per field)
 3. Save changes
 
 When you push, GitRepublic will automatically sync to all configured remotes.
 
 ### Ownership Transfer
 
-Transfer repository ownership to another user:
-1. Go to Settings
-2. Enter the new owner's npub
-3. Confirm the transfer
+Transfer repository ownership to another user using the transfer workflow:
 
-**Important**: Ownership transfers are permanent and create a chain of ownership events. The new owner will have full control.
+1. **Initiate Transfer**: On your repository page, click "Transfer Ownership"
+2. **Enter New Owner**: Provide the new owner's npub
+3. **Sign and Publish**: The transfer event is signed and published to Nostr relays
+4. **Save to Repository**: The transfer event is saved to your repository for offline papertrail
+5. **New Owner Notification**: The new owner will be notified when they log into GitRepublic web
+6. **Complete Transfer**: The new owner completes the transfer by publishing a new repository announcement
+7. **Verification**: The transfer is complete and the repository is verified
+
+**Important**: Ownership transfers are permanent and create a chain of ownership events. The new owner will have full control. Both the transfer event and the new repository announcement are published to relays and saved to the repository for both online and offline papertrail.
 
 ---
 
@@ -677,4 +691,4 @@ Congratulations! You now know how to use GitRepublic for decentralized git hosti
 - Collaboration happens through Nostr events
 - Security is handled via NIP-07 and NIP-98
 
-Happy coding! 🚀
+Happy coding!
