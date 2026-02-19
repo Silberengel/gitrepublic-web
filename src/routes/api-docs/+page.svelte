@@ -1,6 +1,41 @@
 <script lang="ts">
   import { onMount } from 'svelte';
 
+  const browserExample = `// Get user's pubkey (hex format) from NIP-07 extension
+const userPubkey = await window.nostr.getPublicKey();
+// Convert npub to hex if needed
+const userPubkeyHex = /* convert npub to hex */;
+
+// Make API request
+const response = await fetch('/api/repos/list', {
+  headers: {
+    'X-User-Pubkey': userPubkeyHex
+  }
+});
+const data = await response.json();`;
+
+  const nip98Example = `// Create NIP-98 auth event
+import { finalizeEvent } from 'nostr-tools';
+const authEvent = finalizeEvent({
+  kind: 27235, // NIP-98 auth kind
+  created_at: Math.floor(Date.now() / 1000),
+  tags: [
+    ['u', 'https://gitrepublic.com/api/repos/list'],
+    ['method', 'GET']
+  ],
+  content: ''
+}, privateKey);
+
+// Encode to base64
+const base64Event = btoa(JSON.stringify(authEvent));
+
+// Make API request
+const response = await fetch('https://gitrepublic.com/api/repos/list', {
+  headers: {
+    'Authorization': \`Nostr \${base64Event}\`
+  }
+});`;
+
   onMount(() => {
     // Load Swagger UI from local static files
     const link = document.createElement('link');
@@ -58,10 +93,24 @@
 <div class="api-docs-container">
   <div class="api-docs-header">
     <h1>GitRepublic API Documentation</h1>
-    <p>Interactive API documentation with Swagger UI. All endpoints use NIP-98 HTTP authentication.</p>
+    <p>Interactive API documentation with Swagger UI. The API can be used from both browsers and command-line tools.</p>
+    
+    <div class="auth-methods">
+      <div class="auth-method">
+        <h3>Browser Usage (Simplified)</h3>
+        <p>For browser-based applications, you can use the simpler <code>X-User-Pubkey</code> header method:</p>
+        <pre class="code-example"><code>{browserExample}</code></pre>
+      </div>
+
+      <div class="auth-method">
+        <h3>External Clients / CLI (NIP-98)</h3>
+        <p>For external clients, command-line tools, or cross-origin requests, use NIP-98 HTTP authentication:</p>
+        <pre class="code-example"><code>{nip98Example}</code></pre>
+      </div>
+    </div>
+
     <p class="note">
-      <strong>Note:</strong> To authenticate, you need to provide a NIP-98 Authorization header.
-      The format is: <code>Authorization: Nostr &lt;base64-encoded-event-json&gt;</code>
+      <strong>Note:</strong> The Swagger UI below uses NIP-98 authentication. For browser usage, you can also use the simpler <code>X-User-Pubkey</code> header method shown above.
     </p>
   </div>
   <div id="swagger-ui"></div>
@@ -106,6 +155,61 @@
     font-family: 'IBM Plex Mono', monospace;
     font-size: 0.875rem;
     border: 1px solid var(--border-light);
+  }
+
+  .auth-methods {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin: 1.5rem 0;
+  }
+
+  .auth-method {
+    padding: 1rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+  }
+
+  .auth-method h3 {
+    margin: 0 0 0.75rem 0;
+    color: var(--text-primary);
+    font-size: 1rem;
+    font-weight: 600;
+  }
+
+  .auth-method p {
+    margin: 0.5rem 0;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+  }
+
+  .code-example {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.375rem;
+    padding: 1rem;
+    margin: 0.75rem 0;
+    overflow-x: auto;
+  }
+
+  .code-example code {
+    display: block;
+    background: transparent;
+    border: none;
+    padding: 0;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: var(--text-primary);
+    white-space: pre;
+  }
+
+  @media (max-width: 768px) {
+    .auth-methods {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+    }
   }
 
   .api-docs-header .note strong {
@@ -508,6 +612,34 @@
     background: var(--button-secondary-hover);
   }
 
+  /* Authorize button and other control buttons */
+  :global(.swagger-ui .btn.authorize),
+  :global(.swagger-ui .authorize button) {
+    background: var(--accent) !important;
+    color: var(--accent-text, #ffffff) !important;
+    border: 1px solid var(--accent) !important;
+  }
+
+  :global(.swagger-ui .btn.authorize:hover),
+  :global(.swagger-ui .authorize button:hover) {
+    background: var(--accent-hover) !important;
+    border-color: var(--accent-hover) !important;
+  }
+
+  /* Expand/collapse controls */
+  :global(.swagger-ui .opblock-summary-control),
+  :global(.swagger-ui .opblock-summary-control:hover) {
+    color: var(--text-primary) !important;
+    background: transparent !important;
+  }
+
+  /* Arrow icons in expand/collapse */
+  :global(.swagger-ui .opblock-summary-control::after),
+  :global(.swagger-ui .opblock-summary-control::before) {
+    color: var(--text-primary) !important;
+    opacity: 1 !important;
+  }
+
   /* Response sections */
   :global(.swagger-ui .responses-wrapper) {
     background: var(--bg-secondary) !important;
@@ -623,13 +755,34 @@
     background: var(--bg-secondary) !important;
   }
 
-  :global(.swagger-ui .model-container .model-toggle) {
+  :global(.swagger-ui .model-container .model-toggle),
+  :global(.swagger-ui .model-toggle) {
     background: var(--bg-tertiary) !important;
     color: var(--text-primary) !important;
+    border: 1px solid var(--border-color) !important;
+    padding: 0.25rem 0.5rem !important;
+    border-radius: 0.25rem !important;
+    cursor: pointer !important;
+    display: inline-block !important;
+    font-weight: 500 !important;
+    transition: all 0.2s ease !important;
   }
 
-  :global(.swagger-ui .model-container .model-toggle:hover) {
+  :global(.swagger-ui .model-container .model-toggle:hover),
+  :global(.swagger-ui .model-toggle:hover) {
     background: var(--bg-secondary) !important;
+    border-color: var(--accent) !important;
+    color: var(--accent) !important;
+  }
+
+  :global(.swagger-ui .model-toggle.collapsed::before),
+  :global(.swagger-ui .model-toggle::before) {
+    color: var(--text-primary) !important;
+    opacity: 1 !important;
+  }
+
+  :global(.swagger-ui .model-toggle:hover::before) {
+    color: var(--accent) !important;
   }
 
   /* Tables */
