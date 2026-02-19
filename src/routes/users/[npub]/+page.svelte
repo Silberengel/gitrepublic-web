@@ -12,7 +12,7 @@
   import { PublicMessagesService, type PublicMessage } from '$lib/services/nostr/public-messages-service.js';
   import { getUserRelays } from '$lib/services/nostr/user-relays.js';
   import UserBadge from '$lib/components/UserBadge.svelte';
-  import { forwardEventIfEnabled } from '$lib/services/messaging/event-forwarder.js';
+  // forwardEventIfEnabled is server-side only - import dynamically if needed
   import { userStore } from '$lib/stores/user-store.js';
 
   const npub = ($page.params as { npub?: string }).npub || '';
@@ -256,12 +256,8 @@
       }
 
       // Forward to messaging platforms if user has unlimited access and preferences configured
-      if (result.success.length > 0 && viewerPubkeyHex) {
-        forwardEventIfEnabled(signedEvent, viewerPubkeyHex)
-          .catch(err => {
-            console.error('Failed to forward message to messaging platforms:', err);
-          });
-      }
+      // This is done server-side via API endpoints, not from client
+      // The server-side API endpoints (issues, prs, highlights) handle forwarding automatically
 
       // Reload messages
       await loadMessages();

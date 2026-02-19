@@ -29,14 +29,15 @@
             // @ts-ignore
             window.SwaggerUIBundle.presets.standalone
           ],
-          layout: 'StandaloneLayout',
-          deepLinking: true,
+          deepLinking: false, // Disabled to avoid conflict with SvelteKit's router
           displayRequestDuration: true,
           tryItOutEnabled: true,
           supportedSubmitMethods: ['get', 'post', 'put', 'delete', 'patch'],
           validatorUrl: null,
           docExpansion: 'list',
           filter: true,
+          defaultModelsExpandDepth: 1,
+          defaultModelExpandDepth: 1,
           showExtensions: true,
           showCommonExtensions: true
         });

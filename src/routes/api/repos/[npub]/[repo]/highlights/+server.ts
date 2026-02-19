@@ -14,6 +14,7 @@ import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js
 import { handleApiError, handleValidationError } from '$lib/utils/error-handler.js';
 import { decodeNpubToHex } from '$lib/utils/npub-utils.js';
 import { forwardEventIfEnabled } from '$lib/services/messaging/event-forwarder.js';
+import logger from '$lib/services/logger.js';
 
 /**
  * GET - Get highlights for a pull request
@@ -93,7 +94,7 @@ export const POST: RequestHandler = withRepoValidation(
       forwardEventIfEnabled(highlightEvent as NostrEvent, userPubkeyHex)
         .catch(err => {
           // Log but don't fail the request - forwarding is optional
-          console.error('Failed to forward event to messaging platforms:', err);
+          logger.warn({ error: err, npub: repoContext.npub, repo: repoContext.repo }, 'Failed to forward event to messaging platforms');
         });
     }
 

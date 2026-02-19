@@ -10,6 +10,7 @@ import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js
 import { handleValidationError, handleApiError } from '$lib/utils/error-handler.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { forwardEventIfEnabled } from '$lib/services/messaging/event-forwarder.js';
+import logger from '$lib/services/logger.js';
 
 export const GET: RequestHandler = createRepoGetHandler(
   async (context: RepoRequestContext) => {
@@ -45,7 +46,7 @@ export const POST: RequestHandler = withRepoValidation(
       forwardEventIfEnabled(issueEvent, requestContext.userPubkeyHex)
         .catch(err => {
           // Log but don't fail the request - forwarding is optional
-          console.error('Failed to forward event to messaging platforms:', err);
+          logger.warn({ error: err, npub: repoContext.npub, repo: repoContext.repo }, 'Failed to forward event to messaging platforms');
         });
     }
 

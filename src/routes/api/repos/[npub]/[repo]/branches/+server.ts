@@ -16,6 +16,7 @@ import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
 import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS } from '$lib/config.js';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { eventCache } from '$lib/services/nostr/event-cache.js';
+import logger from '$lib/services/logger.js';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
@@ -86,7 +87,7 @@ export const GET: RequestHandler = createRepoGetHandler(
           repoCache.delete(RepoCache.repoExistsKey(context.npub, context.repo));
         } else {
           // Log the error for debugging
-          console.error('[Branches] Error fetching repository:', err);
+          logger.error({ error: err, npub: context.npub, repo: context.repo }, '[Branches] Error fetching repository');
           // If fetching fails, return 404 with more context
           const errorMessage = err instanceof Error ? err.message : 'Repository not found';
           throw handleNotFoundError(
@@ -110,7 +111,7 @@ export const GET: RequestHandler = createRepoGetHandler(
       return json(branches);
     } catch (err) {
       // Log the actual error for debugging
-      console.error('[Branches] Error getting branches:', err);
+      logger.error({ error: err, npub: context.npub, repo: context.repo }, '[Branches] Error getting branches');
       // Check if it's a "not found" error
       if (err instanceof Error && err.message.includes('not found')) {
         throw handleNotFoundError(

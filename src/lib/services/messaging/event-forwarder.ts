@@ -18,9 +18,10 @@ async function getPreferencesLazy() {
     return null;
   }
   if (!getPreferences) {
-    // Use dynamic path construction to prevent Vite from statically analyzing the import
-    const storagePath = './preferences-storage' + '.server.js';
-    const module = await import(storagePath);
+    // Use static import path with vite-ignore to prevent static analysis
+    // This is intentional - we only want to import this server-side
+    // @ts-ignore - Dynamic import for server-side only code
+    const module = await import(/* @vite-ignore */ './preferences-storage.server.js');
     getPreferences = module.getPreferences;
   }
   return getPreferences;

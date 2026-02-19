@@ -12,6 +12,7 @@ import { KIND } from '$lib/types/nostr.js';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
+import logger from '$lib/services/logger.js';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
@@ -96,7 +97,7 @@ export const GET: RequestHandler = createRepoGetHandler(
       return json(commits);
     } catch (err) {
       // Log the actual error for debugging
-      console.error('[Commits] Error getting commit history:', err);
+      logger.error({ error: err, npub: context.npub, repo: context.repo }, '[Commits] Error getting commit history');
       // Check if it's a "not found" error
       if (err instanceof Error && err.message.includes('not found')) {
         throw handleNotFoundError(

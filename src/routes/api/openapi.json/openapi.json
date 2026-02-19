@@ -23,6 +23,36 @@
       "description": "Production server"
     }
   ],
+  "tags": [
+    {
+      "name": "Repositories",
+      "description": "Repository management endpoints"
+    },
+    {
+      "name": "Files",
+      "description": "File operations (read, write, list)"
+    },
+    {
+      "name": "Pull Requests",
+      "description": "Pull request operations (NIP-34 kind 1618)"
+    },
+    {
+      "name": "Issues",
+      "description": "Issue operations (NIP-34 kind 1621)"
+    },
+    {
+      "name": "Search",
+      "description": "Search repositories and code"
+    },
+    {
+      "name": "User",
+      "description": "User account and preferences"
+    },
+    {
+      "name": "Infrastructure",
+      "description": "Infrastructure and server information"
+    }
+  ],
   "components": {
     "securitySchemes": {
       "NIP98": {
@@ -1100,6 +1130,1108 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/SearchResult"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/tree": {
+      "get": {
+        "summary": "List files and directories",
+        "description": "Get directory listing for a repository",
+        "tags": ["Files"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {"type": "string"},
+            "description": "Directory path (empty for root)"
+          },
+          {
+            "name": "ref",
+            "in": "query",
+            "schema": {"type": "string", "default": "HEAD"},
+            "description": "Git reference"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Directory listing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {"type": "string"},
+                      "path": {"type": "string"},
+                      "type": {"type": "string", "enum": ["file", "directory"]},
+                      "size": {"type": "integer"}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/commits": {
+      "get": {
+        "summary": "Get commit history",
+        "description": "Get commit history for a repository",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "schema": {"type": "string"},
+            "description": "Branch name"
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {"type": "string"},
+            "description": "Filter by file path"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {"type": "integer", "default": 50},
+            "description": "Maximum number of commits"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Commit history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "hash": {"type": "string"},
+                      "message": {"type": "string"},
+                      "author": {"type": "string"},
+                      "date": {"type": "string"}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/raw": {
+      "get": {
+        "summary": "Get raw file content",
+        "description": "Get raw file content (no JSON wrapper)",
+        "tags": ["Files"],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "ref",
+            "in": "query",
+            "schema": {"type": "string", "default": "HEAD"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw file content",
+            "content": {
+              "text/plain": {"schema": {"type": "string"}},
+              "application/javascript": {"schema": {"type": "string"}},
+              "text/html": {"schema": {"type": "string"}}
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/readme": {
+      "get": {
+        "summary": "Get README file",
+        "description": "Get README file content if available",
+        "tags": ["Files"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "ref",
+            "in": "query",
+            "schema": {"type": "string", "default": "HEAD"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "README content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "found": {"type": "boolean"},
+                    "content": {"type": "string"},
+                    "path": {"type": "string"},
+                    "isMarkdown": {"type": "boolean"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/download": {
+      "get": {
+        "summary": "Download repository as archive",
+        "description": "Download repository as ZIP or tar.gz archive",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "ref",
+            "in": "query",
+            "schema": {"type": "string", "default": "HEAD"},
+            "description": "Git reference to download"
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {"type": "string", "enum": ["zip", "tar.gz"], "default": "zip"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Archive file",
+            "content": {
+              "application/zip": {"schema": {"type": "string", "format": "binary"}},
+              "application/gzip": {"schema": {"type": "string", "format": "binary"}}
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/fork": {
+      "get": {
+        "summary": "Get fork information",
+        "description": "Check if repository is a fork and get original repo info",
+        "tags": ["Repositories"],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fork information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "isFork": {"type": "boolean"},
+                    "originalRepo": {
+                      "type": "object",
+                      "properties": {
+                        "npub": {"type": "string"},
+                        "repo": {"type": "string"}
+                      }
+                    },
+                    "forkCount": {"type": "integer"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Fork repository",
+        "description": "Create a fork of a repository. Requires unlimited access.",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["userPubkey"],
+                "properties": {
+                  "userPubkey": {"type": "string"},
+                  "forkName": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fork created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {"type": "boolean"},
+                    "fork": {
+                      "type": "object",
+                      "properties": {
+                        "npub": {"type": "string"},
+                        "repo": {"type": "string"},
+                        "url": {"type": "string"}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/highlights": {
+      "get": {
+        "summary": "Get highlights and comments",
+        "description": "Get highlights (NIP-84) and comments (NIP-22) for a pull request",
+        "tags": ["Pull Requests"],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "prId",
+            "in": "query",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "prAuthor",
+            "in": "query",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Highlights and comments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "highlights": {"type": "array"},
+                    "comments": {"type": "array"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create highlight or comment",
+        "description": "Create a highlight (NIP-84) or comment (NIP-22)",
+        "tags": ["Pull Requests"],
+        "security": [{"NIP98": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["type", "event", "userPubkey"],
+                "properties": {
+                  "type": {"type": "string", "enum": ["highlight", "comment"]},
+                  "event": {"$ref": "#/components/schemas/NostrEvent"},
+                  "userPubkey": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Highlight/comment created"
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/transfer": {
+      "get": {
+        "summary": "Get ownership transfer history",
+        "description": "Get ownership transfer history for a repository",
+        "tags": ["Repositories"],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ownership information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "originalOwner": {"type": "string"},
+                    "currentOwner": {"type": "string"},
+                    "transferred": {"type": "boolean"},
+                    "transfers": {"type": "array"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Transfer repository ownership",
+        "description": "Transfer repository ownership to another user. Requires current owner authentication.",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["transferEvent"],
+                "properties": {
+                  "transferEvent": {"$ref": "#/components/schemas/NostrEvent"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ownership transferred"
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/verify": {
+      "get": {
+        "summary": "Verify repository ownership",
+        "description": "Verify repository ownership by checking announcement file",
+        "tags": ["Repositories"],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verification result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "verified": {"type": "boolean"},
+                    "ownerPubkey": {"type": "string"},
+                    "cloneVerifications": {"type": "array"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/clone": {
+      "post": {
+        "summary": "Clone repository to server",
+        "description": "Clone a repository to the server. Requires unlimited access.",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Repository cloned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {"type": "boolean"},
+                    "message": {"type": "string"},
+                    "alreadyExists": {"type": "boolean"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/delete": {
+      "delete": {
+        "summary": "Delete local repository clone",
+        "description": "Delete a local repository clone. Requires owner or admin authentication.",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Repository deleted"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/access": {
+      "get": {
+        "summary": "Check repository access",
+        "description": "Check if current user can view the repository",
+        "tags": ["Repositories"],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Access information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "canView": {"type": "boolean"},
+                    "isPrivate": {"type": "boolean"},
+                    "isMaintainer": {"type": "boolean"},
+                    "isOwner": {"type": "boolean"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/default-branch": {
+      "get": {
+        "summary": "Get default branch",
+        "description": "Get the default branch name for a repository",
+        "tags": ["Repositories"],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default branch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "defaultBranch": {"type": "string"},
+                    "branch": {"type": "string"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/branch-protection": {
+      "get": {
+        "summary": "Get branch protection rules",
+        "description": "Get branch protection rules for a repository",
+        "tags": ["Repositories"],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Branch protection rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rules": {"type": "array"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Update branch protection rules",
+        "description": "Update branch protection rules. Requires owner authentication.",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["rules"],
+                "properties": {
+                  "rules": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "branch": {"type": "string"},
+                        "requirePullRequest": {"type": "boolean"},
+                        "requireReviewers": {"type": "array", "items": {"type": "string"}},
+                        "allowForcePush": {"type": "boolean"}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rules updated"
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/diff": {
+      "get": {
+        "summary": "Get diff between commits",
+        "description": "Get diff between two git references",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {"type": "string", "default": "HEAD"}
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {"type": "string"},
+            "description": "Filter by file path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Diff content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "file": {"type": "string"},
+                      "diff": {"type": "string"}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/user/level": {
+      "post": {
+        "summary": "Verify user level",
+        "description": "Verify user's access level (relay write proof). Requires NIP-98 authentication.",
+        "tags": ["User"],
+        "security": [{"NIP98": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["proofEvent", "userPubkeyHex"],
+                "properties": {
+                  "proofEvent": {"$ref": "#/components/schemas/NostrEvent"},
+                  "userPubkeyHex": {"type": "string", "format": "hex"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "User level",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "level": {"type": "string", "enum": ["unlimited", "rate_limited"]},
+                    "verified": {"type": "boolean"},
+                    "cached": {"type": "boolean"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/user/ssh-keys": {
+      "get": {
+        "summary": "Get SSH key attestations",
+        "description": "Get all SSH key attestations for authenticated user",
+        "tags": ["User"],
+        "security": [{"NIP98": []}],
+        "responses": {
+          "200": {
+            "description": "SSH key attestations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "attestations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "eventId": {"type": "string"},
+                          "fingerprint": {"type": "string"},
+                          "keyType": {"type": "string"},
+                          "createdAt": {"type": "integer"},
+                          "revoked": {"type": "boolean"}
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Submit SSH key attestation",
+        "description": "Submit an SSH key attestation event. Requires unlimited access.",
+        "tags": ["User"],
+        "security": [{"NIP98": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["event"],
+                "properties": {
+                  "event": {"$ref": "#/components/schemas/NostrEvent"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Attestation stored"
+          }
+        }
+      }
+    },
+    "/api/users/{npub}/repos": {
+      "get": {
+        "summary": "List user repositories",
+        "description": "List repositories for a user (with privacy filtering)",
+        "tags": ["Repositories"],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "domain",
+            "in": "query",
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User repositories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "repos": {
+                      "type": "array",
+                      "items": {"$ref": "#/components/schemas/Repository"}
+                    },
+                    "total": {"type": "integer"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tor/onion": {
+      "get": {
+        "summary": "Get Tor .onion address",
+        "description": "Get the Tor hidden service .onion address for this server",
+        "tags": ["Infrastructure"],
+        "responses": {
+          "200": {
+            "description": "Tor address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "onion": {"type": "string"},
+                    "available": {"type": "boolean"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/user/git-dashboard": {
+      "get": {
+        "summary": "Get git dashboard data",
+        "description": "Get aggregated issues and PRs from external git platforms. Requires unlimited access.",
+        "tags": ["User"],
+        "security": [{"NIP98": []}],
+        "responses": {
+          "200": {
+            "description": "Dashboard data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "issues": {"type": "array"},
+                    "pullRequests": {"type": "array"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/user/messaging-preferences": {
+      "get": {
+        "summary": "Get messaging preferences status",
+        "description": "Get messaging preferences configuration status. Requires unlimited access.",
+        "tags": ["User"],
+        "security": [{"NIP98": []}],
+        "responses": {
+          "200": {
+            "description": "Preferences status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "configured": {"type": "boolean"},
+                    "rateLimit": {
+                      "type": "object",
+                      "properties": {
+                        "remaining": {"type": "integer"},
+                        "resetAt": {"type": "integer"}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Save messaging preferences",
+        "description": "Save messaging preferences. Requires unlimited access and signed proof event.",
+        "tags": ["User"],
+        "security": [{"NIP98": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["preferences", "proofEvent"],
+                "properties": {
+                  "preferences": {
+                    "type": "object",
+                    "properties": {
+                      "enabled": {"type": "boolean"}
+                    }
+                  },
+                  "proofEvent": {"$ref": "#/components/schemas/NostrEvent"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Preferences saved"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete messaging preferences",
+        "description": "Delete messaging preferences. Requires unlimited access.",
+        "tags": ["User"],
+        "security": [{"NIP98": []}],
+        "responses": {
+          "200": {
+            "description": "Preferences deleted"
+          }
+        }
+      }
+    },
+    "/api/user/ssh-keys/verify": {
+      "post": {
+        "summary": "Verify SSH key fingerprint",
+        "description": "Verify an SSH key fingerprint against stored attestations",
+        "tags": ["User"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["fingerprint"],
+                "properties": {
+                  "fingerprint": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verification result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "valid": {"type": "boolean"},
+                    "attestation": {
+                      "type": "object",
+                      "properties": {
+                        "userPubkey": {"type": "string"},
+                        "fingerprint": {"type": "string"},
+                        "keyType": {"type": "string"}
+                      }
+                    }
                   }
                 }
               }
