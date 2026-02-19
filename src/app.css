@@ -18,8 +18,8 @@
   --bg-secondary: var(--lavender-blush);
   --bg-tertiary: var(--thistle);
   --text-primary: #0a0a0a; /* Darker for better contrast */
-  --text-secondary: #2a2a2a; /* Darker for better contrast */
-  --text-muted: #4a4a4a; /* Darker for better contrast */
+  --text-secondary: #1a1a1a; /* Darker for better contrast on light backgrounds */
+  --text-muted: #3a3a3a; /* Darker for better contrast on light backgrounds */
   --border-color: var(--thistle);
   --border-light: var(--lavender-blush);
   --accent: var(--royal-plum);
@@ -60,8 +60,8 @@
   --bg-secondary: var(--lavender-blush);
   --bg-tertiary: var(--thistle);
   --text-primary: #ffffff; /* Brighter for better contrast */
-  --text-secondary: #e0e0e0; /* Brighter for better contrast */
-  --text-muted: #b0b0b0; /* Brighter for better contrast */
+  --text-secondary: #e8e8e8; /* Brighter for better contrast on dark backgrounds */
+  --text-muted: #c0c0c0; /* Brighter for better contrast on dark backgrounds */
   --border-color: var(--thistle);
   --border-light: var(--lavender-blush);
   --accent: var(--royal-plum);
@@ -74,12 +74,12 @@
   --card-border: var(--border-color);
   --button-primary: var(--royal-plum);
   --button-primary-hover: var(--accent-hover);
-  --button-secondary: #7a5a6a; /* Adjusted for dark theme */
-  --button-secondary-hover: #8a6a7a; /* Lighter for hover */
+  --button-secondary: #8a6a7a; /* Lighter for better contrast with white text */
+  --button-secondary-hover: #9a7a8a; /* Even lighter for hover */
   --input-bg: var(--lavender-blush);
   --input-border: var(--border-color);
   --input-focus: var(--royal-plum);
-  --input-placeholder: #a0a0a0; /* Lighter gray for placeholder on dark bg */
+  --input-placeholder: #b0b0b0; /* Lighter gray for better contrast on dark bg */
   --error-bg: #4a1f1f;
   --error-text: #ff8a8a; /* Brighter for better contrast */
   --success-bg: #1a3a2a;
@@ -116,8 +116,8 @@
   --card-border: #30363d; /* GitHub's card border */
   --button-primary: var(--royal-plum);
   --button-primary-hover: #b84a8a;
-  --button-secondary: #21262d; /* GitHub's secondary button */
-  --button-secondary-hover: #30363d; /* GitHub's secondary button hover */
+  --button-secondary: #30363d; /* GitHub's secondary button - lighter for contrast */
+  --button-secondary-hover: #484f58; /* GitHub's secondary button hover - even lighter */
   --input-bg: #0d1117; /* GitHub's input background */
   --input-border: #30363d; /* GitHub's input border */
   --input-focus: var(--royal-plum);
@@ -564,6 +564,45 @@ textarea:disabled::placeholder {
   color: inherit;
 }
 
+/* Make icon images theme-aware using filters */
+.icon-small img,
+.icon-inline img,
+.hamburger-icon img,
+.platform-icon img,
+.repo-badge-icon img,
+.btn-icon img {
+  filter: var(--icon-filter, brightness(0) saturate(100%) invert(var(--icon-invert, 0)));
+  transition: filter 0.3s ease;
+  opacity: 0.9;
+}
+
+/* Theme icons - handled separately for better control */
+.theme-icon img:not(.theme-toggle .theme-icon img),
+.theme-icon-option img:not(.theme-option .theme-icon-option img) {
+  filter: var(--icon-filter, brightness(0) saturate(100%) invert(var(--icon-invert, 0)));
+  transition: filter 0.3s ease;
+  opacity: 0.9;
+}
+
+/* Light theme: icons should be dark (black) */
+:root,
+[data-theme="light"] {
+  --icon-filter: brightness(0) saturate(100%);
+  --icon-invert: 0;
+}
+
+/* Dark theme: icons should be light (white/light gray) */
+[data-theme="dark"] {
+  --icon-filter: brightness(0) saturate(100%) invert(1);
+  --icon-invert: 1;
+}
+
+/* Black theme: icons should be light (white/light gray) */
+[data-theme="black"] {
+  --icon-filter: brightness(0) saturate(100%) invert(1);
+  --icon-invert: 1;
+}
+
 .icon-inline {
   width: 14px;
   height: 14px;
@@ -576,6 +615,115 @@ textarea:disabled::placeholder {
   width: 100%;
   height: 100%;
   color: inherit;
+}
+
+/* Ensure icons in buttons and interactive elements have proper contrast */
+button .icon-inline img,
+button .icon-small img,
+.button .icon-inline img,
+.button .icon-small img {
+  filter: var(--icon-filter, brightness(0) saturate(100%) invert(var(--icon-invert, 0)));
+}
+
+/* Icons on accent backgrounds should be white */
+button[class*="primary"] .icon-inline img,
+button[class*="primary"] .icon-small img,
+.button[class*="primary"] .icon-inline img,
+.button[class*="primary"] .icon-small img,
+.theme-toggle:hover .theme-icon img {
+  filter: brightness(0) saturate(100%) invert(1);
+}
+
+/* Theme toggle icons - ensure high contrast with maximum specificity */
+button.theme-toggle img.theme-icon,
+.theme-toggle img.theme-icon,
+button.theme-option img.theme-icon-option,
+.theme-option img.theme-icon-option {
+  filter: brightness(0) saturate(100%) invert(1) !important; /* Default to white for dark backgrounds */
+  opacity: 1 !important;
+  transition: filter 0.3s ease, opacity 0.3s ease;
+}
+
+/* Light theme: pure black */
+:root button.theme-toggle img.theme-icon,
+:root .theme-toggle img.theme-icon,
+[data-theme="light"] button.theme-toggle img.theme-icon,
+[data-theme="light"] .theme-toggle img.theme-icon,
+:root button.theme-option img.theme-icon-option,
+:root .theme-option img.theme-icon-option,
+[data-theme="light"] button.theme-option img.theme-icon-option,
+[data-theme="light"] .theme-option img.theme-icon-option {
+  filter: brightness(0) saturate(100%) !important; /* Pure black in light theme */
+  opacity: 1 !important;
+}
+
+/* Dark themes: pure white */
+[data-theme="dark"] button.theme-toggle img.theme-icon,
+[data-theme="dark"] .theme-toggle img.theme-icon,
+[data-theme="black"] button.theme-toggle img.theme-icon,
+[data-theme="black"] .theme-toggle img.theme-icon,
+[data-theme="dark"] button.theme-option img.theme-icon-option,
+[data-theme="dark"] .theme-option img.theme-icon-option,
+[data-theme="black"] button.theme-option img.theme-icon-option,
+[data-theme="black"] .theme-option img.theme-icon-option {
+  filter: brightness(0) saturate(100%) invert(1) !important; /* Pure white in dark themes */
+  opacity: 1 !important;
+}
+
+/* Hover state: always white for maximum visibility */
+button.theme-toggle:hover img.theme-icon,
+.theme-toggle:hover img.theme-icon {
+  filter: brightness(0) saturate(100%) invert(1) !important; /* White on hover for visibility */
+  opacity: 1 !important;
+}
+
+/* Light theme hover: keep black */
+[data-theme="light"] button.theme-toggle:hover img.theme-icon,
+[data-theme="light"] .theme-toggle:hover img.theme-icon {
+  filter: brightness(0) saturate(100%) !important; /* Black in light theme on hover */
+  opacity: 1 !important;
+}
+
+/* Dropdown option icons - always visible */
+button.theme-option:hover img.theme-icon-option,
+.theme-option:hover img.theme-icon-option,
+button.theme-option.active img.theme-icon-option,
+.theme-option.active img.theme-icon-option {
+  filter: brightness(0) saturate(100%) invert(1) !important; /* White for visibility */
+  opacity: 1 !important;
+}
+
+/* Light theme: dropdown icons should be black */
+[data-theme="light"] button.theme-option:hover img.theme-icon-option,
+[data-theme="light"] .theme-option:hover img.theme-icon-option,
+[data-theme="light"] button.theme-option.active img.theme-icon-option,
+[data-theme="light"] .theme-option.active img.theme-icon-option {
+  filter: brightness(0) saturate(100%) !important; /* Black in light theme */
+  opacity: 1 !important;
+}
+
+/* Verification badge icons - maintain color while ensuring visibility */
+.verification-badge .icon-inline img {
+  filter: var(--icon-filter, brightness(0) saturate(100%) invert(var(--icon-invert, 0)));
+}
+
+/* Verified badge: green checkmark - adjust based on theme */
+[data-theme="light"] .verification-badge.verified .icon-inline img {
+  filter: brightness(0) saturate(100%) invert(0.4) sepia(1) saturate(3) hue-rotate(90deg);
+}
+
+[data-theme="dark"] .verification-badge.verified .icon-inline img,
+[data-theme="black"] .verification-badge.verified .icon-inline img {
+  filter: brightness(0) saturate(100%) invert(0.6) sepia(1) saturate(3) hue-rotate(90deg);
+}
+
+[data-theme="dark"] .verification-badge.unverified .icon-inline img,
+[data-theme="black"] .verification-badge.unverified .icon-inline img {
+  filter: brightness(0) saturate(100%) invert(0.5) sepia(1) saturate(3) hue-rotate(0deg);
+}
+
+[data-theme="light"] .verification-badge.unverified .icon-inline img {
+  filter: brightness(0) saturate(100%) invert(0.3) sepia(1) saturate(3) hue-rotate(0deg);
 }
 
 .clear-lookup-button img,
