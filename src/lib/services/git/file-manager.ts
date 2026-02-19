@@ -4,7 +4,7 @@
  */
 
 import simpleGit, { type SimpleGit } from 'simple-git';
-import { readFile, readdir, stat } from 'fs/promises';
+import { readdir } from 'fs/promises';
 import { join, dirname, normalize, resolve } from 'path';
 import { existsSync } from 'fs';
 import { spawn } from 'child_process';

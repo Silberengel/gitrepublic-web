@@ -4,14 +4,23 @@
 
   // Get theme and toggle function from layout context
   const themeContext = getContext<{
-    theme: { value: 'light' | 'dark' };
+    theme: { value: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black' };
     toggleTheme: () => void;
   }>('theme');
 
-  let currentTheme: 'light' | 'dark' = 'dark';
+  let currentTheme = $state<'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black'>('gitrepublic-dark');
+  let dropdownOpen = $state(false);
+  let buttonElement: HTMLButtonElement | null = $state(null);
 
   function updateTheme() {
-    currentTheme = document.documentElement.hasAttribute('data-theme') ? 'dark' : 'light';
+    const themeAttr = document.documentElement.getAttribute('data-theme');
+    if (themeAttr === 'light') {
+      currentTheme = 'gitrepublic-light';
+    } else if (themeAttr === 'black') {
+      currentTheme = 'gitrepublic-black';
+    } else {
+      currentTheme = 'gitrepublic-dark'; // default to dark/purple
+    }
   }
 
   onMount(() => {
@@ -28,51 +37,98 @@
       attributeFilter: ['data-theme']
     });
     
-    return () => observer.disconnect();
+    // Close dropdown when clicking outside
+    function handleClickOutside(event: MouseEvent) {
+      if (buttonElement && !buttonElement.contains(event.target as Node) && 
+          !(event.target as Element)?.closest('.theme-dropdown')) {
+        dropdownOpen = false;
+      }
+    }
+    
+    document.addEventListener('click', handleClickOutside);
+    
+    return () => {
+      observer.disconnect();
+      document.removeEventListener('click', handleClickOutside);
+    };
   });
 
-  function handleToggle() {
-    if (themeContext) {
-      themeContext.toggleTheme();
+  function toggleDropdown() {
+    dropdownOpen = !dropdownOpen;
+  }
+
+  function selectTheme(theme: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black') {
+    // Set theme directly
+    if (theme === 'gitrepublic-light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+      localStorage.setItem('theme', 'gitrepublic-light');
+    } else if (theme === 'gitrepublic-black') {
+      document.documentElement.setAttribute('data-theme', 'black');
+      localStorage.setItem('theme', 'gitrepublic-black');
     } else {
-      // Fallback: toggle manually
-      const isDark = document.documentElement.hasAttribute('data-theme');
-      if (isDark) {
-        document.documentElement.removeAttribute('data-theme');
-      } else {
-        document.documentElement.setAttribute('data-theme', 'dark');
-      }
-      localStorage.setItem('theme', isDark ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', 'dark');
+      localStorage.setItem('theme', 'gitrepublic-dark');
     }
     updateTheme();
+    dropdownOpen = false;
+  }
+
+  function getThemeName(theme: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black'): string {
+    if (theme === 'gitrepublic-light') return 'Light';
+    if (theme === 'gitrepublic-black') return 'Black';
+    return 'Purple';
   }
 </script>
 
-<button class="theme-toggle" onclick={handleToggle} title={currentTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
-  <span class="theme-toggle-icon">
-    {#if currentTheme === 'dark'}
-      <!-- Sun icon for light mode -->
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="5"></circle>
-        <line x1="12" y1="1" x2="12" y2="3"></line>
-        <line x1="12" y1="21" x2="12" y2="23"></line>
-        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-        <line x1="1" y1="12" x2="3" y2="12"></line>
-        <line x1="21" y1="12" x2="23" y2="12"></line>
-        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
-        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-      </svg>
-    {:else}
-      <!-- Moon icon for dark mode -->
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-      </svg>
-    {/if}
-  </span>
-</button>
+<div class="theme-toggle-container">
+  <button 
+    class="theme-toggle" 
+    onclick={toggleDropdown} 
+    title="Theme settings"
+    bind:this={buttonElement}
+  >
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"></circle>
+      <path d="M12 1v6m0 6v6M5.64 5.64l4.24 4.24m4.24 4.24l4.24 4.24M1 12h6m6 0h6M5.64 18.36l4.24-4.24m4.24-4.24l4.24-4.24"></path>
+    </svg>
+  </button>
+  
+  {#if dropdownOpen}
+    <div class="theme-dropdown">
+      <button 
+        class="theme-option" 
+        class:active={currentTheme === 'gitrepublic-light'}
+        onclick={() => selectTheme('gitrepublic-light')}
+      >
+        <span class="theme-circle">⚪</span>
+        <span class="theme-name">Light</span>
+      </button>
+      <button 
+        class="theme-option" 
+        class:active={currentTheme === 'gitrepublic-dark'}
+        onclick={() => selectTheme('gitrepublic-dark')}
+      >
+        <span class="theme-circle">🟣</span>
+        <span class="theme-name">Purple</span>
+      </button>
+      <button 
+        class="theme-option" 
+        class:active={currentTheme === 'gitrepublic-black'}
+        onclick={() => selectTheme('gitrepublic-black')}
+      >
+        <span class="theme-circle">⚫</span>
+        <span class="theme-name">Black</span>
+      </button>
+    </div>
+  {/if}
+</div>
 
 <style>
+  .theme-toggle-container {
+    position: relative;
+    display: inline-block;
+  }
+
   .theme-toggle {
     cursor: pointer;
     padding: 0.5rem;
@@ -100,16 +156,72 @@
     transform: scale(0.98);
   }
 
-  .theme-toggle-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+  .theme-toggle svg {
     width: 16px;
     height: 16px;
   }
 
-  .theme-toggle-icon svg {
+  .theme-dropdown {
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    right: 0;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 0.375rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    min-width: 150px;
+    z-index: 1000;
+    overflow: hidden;
+    animation: slideDown 0.2s ease;
+  }
+
+  @keyframes slideDown {
+    from {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .theme-option {
     width: 100%;
-    height: 100%;
+    padding: 0.75rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.2s ease;
+    font-family: 'IBM Plex Serif', serif;
+    font-size: 0.875rem;
+    text-align: left;
+  }
+
+  .theme-option:hover {
+    background: var(--bg-secondary);
+  }
+
+  .theme-option.active {
+    background: var(--bg-tertiary);
+    font-weight: 600;
+  }
+
+  .theme-option .theme-circle {
+    font-size: 1.25rem;
+    line-height: 1;
+    display: inline-block;
+  }
+
+  .theme-option.active .theme-circle {
+    transform: scale(1.1);
+  }
+
+  .theme-name {
+    flex: 1;
   }
 </style>

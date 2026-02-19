@@ -14,8 +14,8 @@
   // Accept children as a snippet prop (Svelte 5)
   let { children }: { children: Snippet } = $props();
 
-  // Theme management - default to dark
-  let theme: 'light' | 'dark' = 'dark';
+  // Theme management - default to gitrepublic-dark (purple)
+  let theme: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black' = 'gitrepublic-dark';
   
   // User level checking state
   let checkingUserLevel = $state(false);
@@ -24,23 +24,15 @@
     // Only run client-side code
     if (typeof window === 'undefined') return;
     
-    // Check for saved theme preference or default to dark
-    const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | null;
-    if (savedTheme === 'light' || savedTheme === 'dark') {
+    // Check for saved theme preference or default to gitrepublic-dark
+    const savedTheme = localStorage.getItem('theme') as 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black' | null;
+    if (savedTheme === 'gitrepublic-light' || savedTheme === 'gitrepublic-dark' || savedTheme === 'gitrepublic-black') {
       theme = savedTheme;
     } else {
-      // Default to dark
-      theme = 'dark';
+      // Default to gitrepublic-dark (purple)
+      theme = 'gitrepublic-dark';
     }
     applyTheme();
-
-    // Watch for system theme changes (only if user hasn't set a preference)
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-      if (!localStorage.getItem('theme')) {
-        theme = e.matches ? 'dark' : 'light';
-        applyTheme();
-      }
-    });
     
     // Check for session expiry (24 hours)
     if (isSessionExpired()) {
@@ -133,16 +125,31 @@
   }
 
   function applyTheme() {
-    if (theme === 'dark') {
+    // Remove all theme attributes first
+    document.documentElement.removeAttribute('data-theme');
+    document.documentElement.removeAttribute('data-theme-light');
+    document.documentElement.removeAttribute('data-theme-black');
+    
+    // Apply the selected theme
+    if (theme === 'gitrepublic-light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+    } else if (theme === 'gitrepublic-dark') {
       document.documentElement.setAttribute('data-theme', 'dark');
-    } else {
-      document.documentElement.removeAttribute('data-theme');
+    } else if (theme === 'gitrepublic-black') {
+      document.documentElement.setAttribute('data-theme', 'black');
     }
     localStorage.setItem('theme', theme);
   }
 
   function toggleTheme() {
-    theme = theme === 'light' ? 'dark' : 'light';
+    // Cycle through themes: gitrepublic-dark -> gitrepublic-light -> gitrepublic-black -> gitrepublic-dark
+    if (theme === 'gitrepublic-dark') {
+      theme = 'gitrepublic-light';
+    } else if (theme === 'gitrepublic-light') {
+      theme = 'gitrepublic-black';
+    } else {
+      theme = 'gitrepublic-dark';
+    }
     applyTheme();
   }
 

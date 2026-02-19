@@ -56,7 +56,8 @@
   "overrides": {
     "ajv": "^8.17.1",
     "cookie": "^0.7.2",
-    "esbuild": "^0.24.0"
+    "esbuild": "^0.24.0",
+    "minimatch": "^10.0.0"
   },
   "repository": {
     "type": "git",

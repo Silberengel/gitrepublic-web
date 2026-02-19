@@ -9,10 +9,12 @@
       // Apply theme immediately to prevent flash
       (function() {
         const savedTheme = localStorage.getItem('theme');
-        if (savedTheme === 'light') {
-          // Light theme is default, no attribute needed
+        if (savedTheme === 'gitrepublic-light') {
+          document.documentElement.setAttribute('data-theme', 'light');
+        } else if (savedTheme === 'gitrepublic-black') {
+          document.documentElement.setAttribute('data-theme', 'black');
         } else {
-          // Default to dark
+          // Default to gitrepublic-dark (purple)
           document.documentElement.setAttribute('data-theme', 'dark');
         }
       })();

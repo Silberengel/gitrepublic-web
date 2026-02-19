@@ -160,6 +160,7 @@
         <a href="/search" class:active={isActive('/search')} onclick={closeMobileMenu}>Search</a>
         <a href="/signup" class:active={isActive('/signup')} onclick={closeMobileMenu}>Register</a>
         <a href="/docs" class:active={isActive('/docs')} onclick={closeMobileMenu}>Docs</a>
+        <a href="/api-docs" class:active={isActive('/api-docs')} onclick={closeMobileMenu}>API Docs</a>
       </div>
     </nav>
     <div class="auth-section">

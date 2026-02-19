@@ -127,7 +127,9 @@ export const handle: Handle = async ({ event, resolve }) => {
     const csp = [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline' 'unsafe-eval'", // unsafe-eval needed for Svelte
+      "script-src-elem 'self' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "img-src 'self' data: https:",
       "font-src 'self' data: https://fonts.gstatic.com",
       "connect-src 'self' wss: https:",

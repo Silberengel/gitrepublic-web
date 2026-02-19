@@ -1,0 +1,1112 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "GitRepublic API",
+    "version": "1.0.0",
+    "description": "Nostr-based git server API with NIP-34 repository announcements. All endpoints use NIP-98 HTTP authentication.",
+    "contact": {
+      "name": "GitCitadel LLC",
+      "url": "https://gitcitadel.com"
+    },
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5173",
+      "description": "Development server"
+    },
+    {
+      "url": "https://gitrepublic.com",
+      "description": "Production server"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "NIP98": {
+        "type": "http",
+        "scheme": "Nostr",
+        "description": "NIP-98 HTTP Authentication using Nostr events. The Authorization header should be: 'Nostr <base64-encoded-event-json>'"
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Error message"
+          },
+          "operation": {
+            "type": "string",
+            "description": "Operation that failed"
+          }
+        }
+      },
+      "Repository": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/NostrEvent"
+          },
+          "npub": {
+            "type": "string",
+            "description": "Repository owner's npub"
+          },
+          "repoName": {
+            "type": "string",
+            "description": "Repository name"
+          },
+          "isRegistered": {
+            "type": "boolean",
+            "description": "Whether this repository is registered with this server"
+          }
+        }
+      },
+      "NostrEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "hex"
+          },
+          "pubkey": {
+            "type": "string",
+            "format": "hex"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "integer"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "content": {
+            "type": "string"
+          },
+          "sig": {
+            "type": "string",
+            "format": "hex"
+          }
+        }
+      },
+      "RepositorySettings": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "cloneUrls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "maintainers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "chatRelays": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "isPrivate": {
+            "type": "boolean"
+          },
+          "owner": {
+            "type": "string",
+            "format": "hex"
+          },
+          "npub": {
+            "type": "string"
+          }
+        }
+      },
+      "FileContent": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "encoding": {
+            "type": "string"
+          }
+        }
+      },
+      "Branch": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string",
+            "format": "hex"
+          }
+        }
+      },
+      "Tag": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string",
+            "format": "hex"
+          }
+        }
+      },
+      "PullRequest": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/NostrEvent"
+          },
+          "title": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string",
+            "format": "hex"
+          }
+        }
+      },
+      "Issue": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/NostrEvent"
+          },
+          "title": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string",
+            "format": "hex"
+          }
+        }
+      },
+      "SearchResult": {
+        "type": "object",
+        "properties": {
+          "npub": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/repos/list": {
+      "get": {
+        "summary": "List repositories",
+        "description": "Returns all repositories the current user can view, separated into registered and unregistered",
+        "tags": ["Repositories"],
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Git domain to filter registered repositories"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of repositories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "registered": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Repository"
+                      }
+                    },
+                    "unregistered": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Repository"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/local": {
+      "get": {
+        "summary": "List local repositories",
+        "description": "Returns repositories that are cloned on this server",
+        "tags": ["Repositories"],
+        "responses": {
+          "200": {
+            "description": "List of local repositories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Repository"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/settings": {
+      "get": {
+        "summary": "Get repository settings",
+        "description": "Get repository settings. Requires owner authentication.",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository owner's npub"
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Repository name"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Repository settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositorySettings"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Update repository settings",
+        "description": "Update repository settings. Requires owner authentication.",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "cloneUrls": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "maintainers": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "chatRelays": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "isPrivate": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Settings updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "event": {
+                      "$ref": "#/components/schemas/NostrEvent"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/file": {
+      "get": {
+        "summary": "Get file content",
+        "description": "Read a file from a repository",
+        "tags": ["Files"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "File path relative to repository root"
+          },
+          {
+            "name": "ref",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "HEAD"
+            },
+            "description": "Git reference (branch, tag, or commit)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileContent"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Repository is private",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File or repository not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create or update file",
+        "description": "Write a file to a repository. Requires maintainer authentication.",
+        "tags": ["Files"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["path", "content", "commitMessage", "authorName", "authorEmail", "userPubkey"],
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "commitMessage": {
+                    "type": "string"
+                  },
+                  "authorName": {
+                    "type": "string"
+                  },
+                  "authorEmail": {
+                    "type": "string"
+                  },
+                  "branch": {
+                    "type": "string",
+                    "default": "main"
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": ["create", "write", "delete"]
+                  },
+                  "userPubkey": {
+                    "type": "string",
+                    "description": "User's npub or hex pubkey"
+                  },
+                  "commitSignatureEvent": {
+                    "$ref": "#/components/schemas/NostrEvent",
+                    "description": "Optional pre-signed commit signature event (kind 1640)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/branches": {
+      "get": {
+        "summary": "List branches",
+        "description": "Get all branches in a repository",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of branches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Branch"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/tags": {
+      "get": {
+        "summary": "List tags",
+        "description": "Get all tags in a repository",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of tags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Tag"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/maintainers": {
+      "get": {
+        "summary": "List maintainers",
+        "description": "Get all maintainers for a repository",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of maintainers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "owner": {
+                      "type": "string",
+                      "format": "hex"
+                    },
+                    "maintainers": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "hex"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Add maintainer",
+        "description": "Add a maintainer to a repository. Requires owner authentication.",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["maintainer"],
+                "properties": {
+                  "maintainer": {
+                    "type": "string",
+                    "description": "Maintainer's npub or hex pubkey"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Maintainer added"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove maintainer",
+        "description": "Remove a maintainer from a repository. Requires owner authentication.",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["maintainer"],
+                "properties": {
+                  "maintainer": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Maintainer removed"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/prs": {
+      "get": {
+        "summary": "List pull requests",
+        "description": "Get all pull requests for a repository (NIP-34 kind 1618)",
+        "tags": ["Pull Requests"],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of pull requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PullRequest"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create pull request",
+        "description": "Create a new pull request (NIP-34 kind 1618)",
+        "tags": ["Pull Requests"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["event"],
+                "properties": {
+                  "event": {
+                    "$ref": "#/components/schemas/NostrEvent",
+                    "description": "Signed Nostr event (kind 1618)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Pull request created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "event": {
+                      "$ref": "#/components/schemas/NostrEvent"
+                    },
+                    "published": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/repos/{npub}/{repo}/issues": {
+      "get": {
+        "summary": "List issues",
+        "description": "Get all issues for a repository (NIP-34 kind 1621)",
+        "tags": ["Issues"],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of issues",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Issue"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create issue",
+        "description": "Create a new issue (NIP-34 kind 1621)",
+        "tags": ["Issues"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["event"],
+                "properties": {
+                  "event": {
+                    "$ref": "#/components/schemas/NostrEvent",
+                    "description": "Signed Nostr event (kind 1621)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Issue created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "event": {
+                      "$ref": "#/components/schemas/NostrEvent"
+                    },
+                    "published": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/search": {
+      "get": {
+        "summary": "Search repositories and code",
+        "description": "Search for repositories or code content",
+        "tags": ["Search"],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search query"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["repos", "code", "all"],
+              "default": "repos"
+            },
+            "description": "Search type"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            },
+            "description": "Maximum number of results"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SearchResult"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
