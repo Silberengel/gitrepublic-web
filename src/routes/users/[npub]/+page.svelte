@@ -508,7 +508,7 @@
     height: 80px;
     border-radius: 50%;
     background: var(--accent);
-    color: white;
+    color: var(--accent-text, #ffffff);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -585,7 +585,7 @@
   .send-message-button {
     padding: 0.5rem 1rem;
     background: var(--accent);
-    color: white;
+    color: var(--accent-text, #ffffff);
     border: none;
     border-radius: 6px;
     cursor: pointer;
@@ -726,7 +726,7 @@
 
   .send-button {
     background: var(--accent);
-    color: white;
+    color: var(--accent-text, #ffffff);
   }
 
   .send-button:hover:not(:disabled) {
@@ -748,7 +748,7 @@
     gap: 0.5rem;
     padding: 0.75rem 1.5rem;
     background: var(--accent);
-    color: white;
+    color: var(--accent-text, #ffffff);
     text-decoration: none;
     border-radius: 6px;
     font-size: 0.95rem;

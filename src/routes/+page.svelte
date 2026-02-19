@@ -382,7 +382,7 @@
 
   .splash-button-primary {
     background: var(--accent, #007bff);
-    color: white;
+    color: var(--accent-text, #ffffff);
     box-shadow: 0 4px 6px rgba(0, 123, 255, 0.3);
   }
 
@@ -393,14 +393,14 @@
   }
 
   .splash-button-secondary {
-    background: white;
+    background: var(--card-bg, #ffffff);
     color: var(--accent, #007bff);
     border: 2px solid var(--accent, #007bff);
   }
 
   .splash-button-secondary:hover {
     background: var(--accent, #007bff);
-    color: white;
+    color: var(--accent-text, #ffffff);
     transform: translateY(-2px);
   }
 

@@ -38,7 +38,7 @@
 
   .back-to-top-button {
     background: var(--button-primary);
-    color: white;
+    color: var(--accent-text, #ffffff);
     border: none;
     padding: 0.5rem 1rem;
     border-radius: 0.375rem;

@@ -406,7 +406,7 @@
 
     .nav-links a.active {
       background: var(--accent);
-      color: white;
+      color: var(--accent-text, #ffffff);
     }
 
     .nav-links a.active::after {

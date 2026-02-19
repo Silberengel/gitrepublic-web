@@ -3004,7 +3004,7 @@
               disabled={deletingAnnouncement}
               class="delete-announcement-button"
               title="Send deletion request for repository announcement (NIP-09)"
-              style="background: var(--danger, #dc2626); color: white; border: none; padding: 0.5rem 1rem; border-radius: 0.25rem; cursor: pointer; font-size: 0.875rem;"
+              style="background: var(--error-text, #dc2626); color: #ffffff; border: none; padding: 0.5rem 1rem; border-radius: 0.25rem; cursor: pointer; font-size: 0.875rem;"
             >
               {deletingAnnouncement ? 'Deleting...' : 'Delete Announcement'}
             </button>
@@ -3031,7 +3031,7 @@
               disabled={copyingCloneUrl}
               class="clone-url-button"
               title="Copy clone URL to clipboard"
-              style="padding: 0.5rem 1rem; font-size: 0.875rem; background: var(--primary, #3b82f6); color: white; border: none; border-radius: 0.25rem; cursor: pointer; display: flex; align-items: center; gap: 0.5rem;"
+              style="padding: 0.5rem 1rem; font-size: 0.875rem; background: var(--button-primary, #3b82f6); color: var(--accent-text, #ffffff); border: none; border-radius: 0.25rem; cursor: pointer; display: flex; align-items: center; gap: 0.5rem;"
             >
               {#if copyingCloneUrl}
                 <span>Copying...</span>
@@ -3060,7 +3060,7 @@
                 class="delete-branch-button"
                 disabled={saving}
                 title="Delete current branch"
-                style="padding: 0.25rem 0.5rem; font-size: 0.875rem; background: var(--danger, #dc2626); color: white; border: none; border-radius: 0.25rem; cursor: pointer;"
+                style="padding: 0.25rem 0.5rem; font-size: 0.875rem; background: var(--error-text, #dc2626); color: #ffffff; border: none; border-radius: 0.25rem; cursor: pointer;"
               >×</button>
             {/if}
           {/if}
@@ -4802,18 +4802,18 @@
   }
 
   .contributor-badge.owner {
-    /* High contrast colors for light mode */
-    background: #4a5568;
-    color: #ffffff;
-    border-color: #2d3748;
+    /* High contrast colors for all themes */
+    background: var(--bg-tertiary, #4a5568);
+    color: var(--text-primary, #ffffff);
+    border-color: var(--border-color, #2d3748);
   }
 
 
   .contributor-badge.maintainer {
-    /* High contrast colors for light mode */
-    background: #22543d;
-    color: #ffffff;
-    border-color: #1a202c;
+    /* High contrast colors for all themes */
+    background: var(--success-bg, #22543d);
+    color: var(--success-text, #ffffff);
+    border-color: var(--border-color, #1a202c);
   }
 
 
@@ -4987,7 +4987,7 @@
   .save-button {
     padding: 0.5rem 1rem;
     background: var(--button-primary);
-    color: white;
+    color: var(--accent-text, #ffffff);
     border: none;
     border-radius: 0.25rem;
     cursor: pointer;

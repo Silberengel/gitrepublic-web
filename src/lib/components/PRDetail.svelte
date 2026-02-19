@@ -572,7 +572,7 @@
   .add-comment-btn, .reply-btn {
     padding: 0.4rem 0.8rem;
     background: var(--button-primary);
-    color: white;
+    color: var(--accent-text, #ffffff);
     border: none;
     border-radius: 4px;
     cursor: pointer;

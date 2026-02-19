@@ -37,6 +37,7 @@
   --input-bg: #ffffff;
   --input-border: var(--border-color);
   --input-focus: var(--royal-plum);
+  --input-placeholder: #6a6a6a; /* Medium gray for placeholder text */
   --error-bg: #fee2e2;
   --error-text: #7a0a0a; /* Darker for better contrast */
   --success-bg: #d1fae5;
@@ -78,6 +79,7 @@
   --input-bg: var(--lavender-blush);
   --input-border: var(--border-color);
   --input-focus: var(--royal-plum);
+  --input-placeholder: #a0a0a0; /* Lighter gray for placeholder on dark bg */
   --error-bg: #4a1f1f;
   --error-text: #ff8a8a; /* Brighter for better contrast */
   --success-bg: #1a3a2a;
@@ -119,6 +121,7 @@
   --input-bg: #0d1117; /* GitHub's input background */
   --input-border: #30363d; /* GitHub's input border */
   --input-focus: var(--royal-plum);
+  --input-placeholder: #6e7681; /* GitHub's placeholder color */
   --error-bg: #3d1f1f;
   --error-text: #f85149; /* GitHub's error color */
   --success-bg: #1a3a2a;
@@ -299,7 +302,7 @@ button:disabled, .button:disabled {
 
 .btn-primary, .login-button, .save-button, .search-button, .create-file-button, .create-branch-button, .create-tag-button, .create-issue-button, .create-pr-button, .add-comment-btn, .reply-btn {
   background: var(--button-primary);
-  color: white;
+  color: var(--accent-text, #ffffff); /* Use theme-aware text color */
   border: none;
 }
 
@@ -309,7 +312,7 @@ button:disabled, .button:disabled {
 
 .btn-secondary, .logout-button {
   background: var(--button-secondary);
-  color: #ffffff; /* Ensure white text for contrast */
+  color: var(--accent-text, #ffffff); /* Use theme-aware text color */
 }
 
 .btn-secondary:hover, .logout-button:hover {
@@ -326,7 +329,7 @@ button:disabled, .button:disabled {
 
 .btn-danger {
   background: var(--error-text);
-  color: white;
+  color: #ffffff; /* Always white on error background for maximum contrast */
 }
 
 .btn-danger:hover {
@@ -415,6 +418,13 @@ input, textarea, select {
   transition: border-color 0.2s ease;
 }
 
+/* Placeholder styling with proper contrast for all themes */
+input::placeholder,
+textarea::placeholder {
+  color: var(--input-placeholder, var(--text-muted));
+  opacity: 1; /* Ensure full opacity for better contrast */
+}
+
 input:focus, textarea:focus, select:focus {
   outline: none;
   border-color: var(--input-focus);
@@ -422,7 +432,14 @@ input:focus, textarea:focus, select:focus {
 
 input:disabled, textarea:disabled, select:disabled {
   background: var(--bg-secondary);
+  color: var(--text-muted);
   cursor: not-allowed;
+  opacity: 0.7;
+}
+
+input:disabled::placeholder,
+textarea:disabled::placeholder {
+  color: var(--text-muted);
   opacity: 0.6;
 }
 
@@ -518,7 +535,7 @@ input:disabled, textarea:disabled, select:disabled {
   padding: 0.5rem 0.75rem;
   font-size: 0.9rem;
   background: var(--button-secondary);
-  color: white;
+  color: var(--accent-text, #ffffff); /* Use theme-aware text color */
   border: none;
   border-radius: 4px;
   cursor: pointer;
@@ -983,7 +1000,8 @@ input:disabled, textarea:disabled, select:disabled {
 
 .pr-status.open, .issue-status.open {
   background: var(--accent-light);
-  color: var(--text-primary); /* Better contrast */
+  color: var(--accent); /* Use accent color for better contrast on light background */
+  font-weight: 600;
 }
 
 .pr-status.closed, .issue-status.closed {

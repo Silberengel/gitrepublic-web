@@ -340,7 +340,7 @@
   .refresh-button {
     padding: 0.5rem 1rem;
     background: var(--button-primary);
-    color: white;
+    color: var(--accent-text, #ffffff);
     border: none;
     border-radius: 6px;
     cursor: pointer;
