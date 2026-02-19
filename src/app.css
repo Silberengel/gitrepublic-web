@@ -209,6 +209,71 @@ a:hover {
   .container-wide {
     padding: 1rem;
   }
+
+  /* Repo cards - make more responsive on mobile */
+  .repo-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1rem;
+  }
+
+  .repo-header-text {
+    flex: 1;
+    min-width: 0; /* Allow text to shrink */
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .repo-header-text h3 {
+    margin: 0 0 0.5rem 0;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+  }
+
+  .repo-header-text .description {
+    width: 100%;
+    max-width: 100%;
+    margin: 0.5rem 0;
+    line-height: 1.5;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+  }
+
+  .repo-card-image {
+    align-self: flex-start;
+    margin-bottom: 0.5rem;
+  }
+
+  .register-button {
+    align-self: flex-start;
+    margin-top: 0.5rem;
+  }
+
+  .repo-actions {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .repo-actions .register-button,
+  .repo-actions .delete-button {
+    width: 100%;
+    text-align: center;
+  }
+
+  .repo-card-content {
+    padding: 1rem;
+  }
+
+  .clone-urls {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .clone-urls code {
+    word-break: break-all;
+    display: block;
+  }
 }
 
 /* Header and Navigation */
@@ -1282,6 +1347,13 @@ pre code {
   color: inherit;
 }
 
+.clone-urls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
 .clone-urls code {
   display: block;
   background: var(--bg-secondary);
@@ -1292,6 +1364,8 @@ pre code {
   font-size: 0.875rem;
   color: var(--text-primary);
   border: 1px solid var(--border-light);
+  word-break: break-all;
+  overflow-wrap: break-word;
 }
 
 /* Utility classes */
@@ -1672,6 +1746,13 @@ label.filter-checkbox > span,
 
 .repo-header-text {
   flex: 1;
+  min-width: 0; /* Allow text to shrink and wrap */
+}
+
+.repo-header-text .description {
+  max-width: 100%;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .header-left {

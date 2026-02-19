@@ -4721,15 +4721,47 @@
       line-height: 1.3;
     }
 
-    /* Make tabs more compact on mobile */
+    /* Make tabs more readable and responsive on mobile */
     .tabs {
-      padding: 0.4rem 0.5rem;
-      gap: 0.2rem;
+      padding: 0.5rem 0.75rem;
+      gap: 0.5rem;
+      -webkit-overflow-scrolling: touch;
+      scroll-behavior: smooth;
+      scroll-padding: 0.5rem;
     }
 
     .tab-button {
-      padding: 0.35rem 0.6rem;
-      font-size: 0.75rem;
+      padding: 0.5rem 0.875rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      min-height: 2.5rem;
+      border-bottom-width: 3px;
+      touch-action: manipulation; /* Better touch response */
+    }
+
+    .tab-button.active {
+      font-weight: 600;
+      border-bottom-width: 3px;
+    }
+
+    /* Better visual feedback for touch */
+    .tab-button:active {
+      transform: scale(0.98);
+      transition: transform 0.1s ease;
+    }
+  }
+
+  /* Extra small screens - make tabs even more readable */
+  @media (max-width: 480px) {
+    .tabs {
+      padding: 0.5rem;
+      gap: 0.375rem;
+    }
+
+    .tab-button {
+      padding: 0.625rem 0.75rem;
+      font-size: 0.875rem;
+      min-height: 2.75rem;
     }
   }
 
@@ -5095,23 +5127,37 @@
     gap: 0.5rem;
     font-size: 0.875rem;
     color: var(--text-primary);
-    transition: background 0.2s ease;
+    font-weight: 500;
+    transition: background 0.2s ease, color 0.2s ease;
     box-sizing: border-box;
   }
 
   .file-button:hover {
     background: var(--bg-tertiary);
+    color: var(--text-primary);
   }
 
   .file-item.selected .file-button {
-    background: var(--accent-light);
-    color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-text, #ffffff);
+    font-weight: 600;
+  }
+
+  .file-item.selected .file-button:hover {
+    background: var(--accent-hover);
+    color: var(--accent-text, #ffffff);
   }
 
   .file-size {
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-size: 0.75rem;
     margin-left: auto;
+    opacity: 0.9;
+  }
+
+  .file-item.selected .file-size {
+    color: var(--accent-text, #ffffff);
+    opacity: 0.9;
   }
 
   .editor-area {
@@ -5403,10 +5449,12 @@
     overflow-y: hidden;
     scrollbar-width: thin;
     -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+    position: relative;
   }
 
   .tabs::-webkit-scrollbar {
-    height: 4px;
+    height: 6px;
   }
 
   .tabs::-webkit-scrollbar-track {
@@ -5415,30 +5463,39 @@
 
   .tabs::-webkit-scrollbar-thumb {
     background: var(--border-color);
-    border-radius: 2px;
+    border-radius: 3px;
+  }
+
+  .tabs::-webkit-scrollbar-thumb:hover {
+    background: var(--accent);
   }
 
   .tab-button {
-    padding: 0.4rem 0.75rem;
+    padding: 0.5rem 0.875rem;
     background: none;
     border: none;
     border-bottom: 2px solid transparent;
     cursor: pointer;
-    font-size: 0.8rem;
-    color: var(--text-muted);
+    font-size: 0.875rem;
+    color: var(--text-secondary);
     font-family: 'IBM Plex Serif', serif;
-    transition: color 0.2s ease, border-color 0.2s ease;
+    transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
     white-space: nowrap;
     flex-shrink: 0;
+    font-weight: 500;
+    border-radius: 0.25rem 0.25rem 0 0;
   }
 
   .tab-button:hover {
     color: var(--text-primary);
+    background: var(--bg-secondary);
   }
 
   .tab-button.active {
     color: var(--accent);
     border-bottom-color: var(--accent);
+    font-weight: 600;
+    background: var(--bg-secondary);
   }
 
   /* File tree actions */
