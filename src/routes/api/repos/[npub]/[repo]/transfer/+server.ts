@@ -4,16 +4,17 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { ownershipTransferService, nostrClient } from '$lib/services/service-registry.js';
+import { ownershipTransferService, nostrClient, fileManager } from '$lib/services/service-registry.js';
 import { combineRelays } from '$lib/config.js';
 import { KIND } from '$lib/types/nostr.js';
-import { verifyEvent } from 'nostr-tools';
+import { verifyEvent, nip19 } from 'nostr-tools';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import { createRepoGetHandler, withRepoValidation } from '$lib/utils/api-handlers.js';
 import type { RepoRequestContext } from '$lib/utils/api-context.js';
 import type { RequestEvent } from '@sveltejs/kit';
 import { handleApiError, handleValidationError, handleAuthorizationError } from '$lib/utils/error-handler.js';
+import logger from '$lib/services/logger.js';
 
 /**
  * GET - Get current owner and transfer history
@@ -119,6 +120,35 @@ export const POST: RequestHandler = withRepoValidation(
       throw handleApiError(new Error('Failed to publish transfer event to any relays'), { operation: 'transferOwnership', npub: repoContext.npub, repo: repoContext.repo }, 'Failed to publish transfer event to any relays');
     }
 
+    // Save transfer event to repo (offline papertrail - step 1 requirement)
+    try {
+      const transferEventContent = JSON.stringify(transferEvent, null, 2) + '\n';
+      // Use consistent filename pattern: .nostr-ownership-transfer-{eventId}.json
+      const transferFileName = `.nostr-ownership-transfer-${transferEvent.id}.json`;
+      
+      // Save to repo if it exists locally
+      if (fileManager.repoExists(repoContext.npub, repoContext.repo)) {
+        await fileManager.writeFile(
+          repoContext.npub,
+          repoContext.repo,
+          transferFileName,
+          transferEventContent,
+          `Add ownership transfer event: ${transferEvent.id.slice(0, 16)}...`,
+          'Nostr',
+          `${requestContext.userPubkeyHex}@nostr`,
+          'main'
+        ).catch(err => {
+          // Log but don't fail - publishing to relays is more important
+          logger.warn({ error: err, npub: repoContext.npub, repo: repoContext.repo }, 'Failed to save transfer event to repo');
+        });
+      } else {
+        logger.debug({ npub: repoContext.npub, repo: repoContext.repo }, 'Repo does not exist locally, skipping transfer event save to repo');
+      }
+    } catch (err) {
+      // Log but don't fail - publishing to relays is more important
+      logger.warn({ error: err, npub: repoContext.npub, repo: repoContext.repo }, 'Failed to save transfer event to repo');
+    }
+
     // Clear cache so new owner is recognized immediately
     ownershipTransferService.clearCache(repoContext.repoOwnerPubkey, repoContext.repo);
 
@@ -126,7 +156,9 @@ export const POST: RequestHandler = withRepoValidation(
       success: true,
       event: transferEvent,
       published: result,
-      message: 'Ownership transfer initiated successfully'
+      message: 'Ownership transfer initiated successfully',
+      // Signal to client that page should refresh
+      refresh: true
     });
   },
   { operation: 'transferOwnership', requireRepoAccess: false } // Override to check owner instead

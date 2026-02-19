@@ -58,12 +58,110 @@
   onMount(async () => {
     nip07Available = isNIP07Available();
     
-    // Check for query params to pre-fill form (for registering local clones)
+    // Check for query params to pre-fill form (for registering local clones or transfers)
     const urlParams = $page.url.searchParams;
-    const npubParam = urlParams.get('npub');
+    const transferParam = urlParams.get('transfer');
+    const transferEventId = urlParams.get('transferEventId');
+    const originalOwnerParam = urlParams.get('originalOwner');
     const repoParam = urlParams.get('repo');
+    const repoTagParam = urlParams.get('repoTag');
+    const npubParam = urlParams.get('npub') || originalOwnerParam;
     
-    if (npubParam && repoParam) {
+    // Handle transfer flow (step 4)
+    if (transferParam === 'true' && originalOwnerParam && repoParam && repoTagParam) {
+      try {
+        // Fetch the original repo announcement to preload data
+        const decoded = nip19.decode(originalOwnerParam);
+        if (decoded.type === 'npub') {
+          const pubkey = decoded.data as string;
+          const events = await nostrClient.fetchEvents([
+            {
+              kinds: [KIND.REPO_ANNOUNCEMENT],
+              authors: [pubkey],
+              '#d': [repoParam],
+              limit: 1
+            }
+          ]);
+          
+          if (events.length > 0) {
+            const event = events[0];
+            
+            // Pre-fill repo name
+            repoName = repoParam;
+            
+            // Pre-fill description
+            const descTag = event.tags.find(t => t[0] === 'description')?.[1];
+            if (descTag) description = descTag;
+            
+            // Pre-fill clone URLs (add current domain URL)
+            const existingCloneUrls = event.tags
+              .filter(t => t[0] === 'clone')
+              .flatMap(t => t.slice(1))
+              .filter(url => url && typeof url === 'string');
+            
+            const gitDomain = $page.data.gitDomain || 'localhost:6543';
+            const protocol = gitDomain.startsWith('localhost') ? 'http' : 'https';
+            const currentDomainUrl = `${protocol}://${gitDomain}/${originalOwnerParam}/${repoParam}.git`;
+            
+            // Check if current domain URL already exists
+            const hasCurrentDomain = existingCloneUrls.some(url => url.includes(gitDomain));
+            
+            if (!hasCurrentDomain) {
+              cloneUrls = [...existingCloneUrls, currentDomainUrl];
+            } else {
+              cloneUrls = existingCloneUrls.length > 0 ? existingCloneUrls : [currentDomainUrl];
+            }
+            
+            // Pre-fill other fields
+            const nameTag = event.tags.find(t => t[0] === 'name')?.[1];
+            if (nameTag && !repoName) repoName = nameTag;
+            
+            const imageTag = event.tags.find(t => t[0] === 'image')?.[1];
+            if (imageTag) imageUrl = imageTag;
+            
+            const bannerTag = event.tags.find(t => t[0] === 'banner')?.[1];
+            if (bannerTag) bannerUrl = bannerTag;
+            
+            const webTags = event.tags.filter(t => t[0] === 'web');
+            if (webTags.length > 0) {
+              webUrls = webTags.flatMap(t => t.slice(1)).filter(url => url && typeof url === 'string');
+            }
+            
+            const maintainerTags = event.tags.filter(t => t[0] === 'maintainers');
+            if (maintainerTags.length > 0) {
+              maintainers = maintainerTags.flatMap(t => t.slice(1)).filter(m => m && typeof m === 'string');
+            }
+            
+            const relayTags = event.tags.filter(t => t[0] === 'relays');
+            if (relayTags.length > 0) {
+              relays = relayTags.flatMap(t => t.slice(1)).filter(r => r && typeof r === 'string');
+            }
+            
+            const isPrivateTag = event.tags.find(t => 
+              (t[0] === 'private' && t[1] === 'true') || 
+              (t[0] === 't' && t[1] === 'private')
+            );
+            if (isPrivateTag) isPrivate = true;
+            
+            // Set existing repo ref for updating
+            existingRepoRef = event.id;
+          } else {
+            // No announcement found, just set the clone URL with current domain
+            repoName = repoParam;
+            const gitDomain = $page.data.gitDomain || 'localhost:6543';
+            const protocol = gitDomain.startsWith('localhost') ? 'http' : 'https';
+            cloneUrls = [`${protocol}://${gitDomain}/${originalOwnerParam}/${repoParam}.git`];
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to pre-fill form from transfer data:', err);
+        // Still set basic info
+        repoName = repoParam;
+        const gitDomain = $page.data.gitDomain || 'localhost:6543';
+        const protocol = gitDomain.startsWith('localhost') ? 'http' : 'https';
+        cloneUrls = [`${protocol}://${originalOwnerParam}/${repoParam}.git`];
+      }
+    } else if (npubParam && repoParam) {
       // Pre-fill repo name
       repoName = repoParam;
       
@@ -1478,9 +1576,19 @@
         // Redirect to the newly created repository page
         // Use invalidateAll to ensure the repos list refreshes
         const userNpub = nip19.npubEncode(pubkey);
+        
+        // Check if this is a transfer completion (from query params)
+        const urlParams = $page.url.searchParams;
+        const isTransfer = urlParams.get('transfer') === 'true';
+        
         setTimeout(() => {
           // Invalidate all caches and redirect
-          goto(`/repos/${userNpub}/${dTag}`, { invalidateAll: true, replaceState: false });
+          if (isTransfer) {
+            // After transfer, redirect to repos page to see updated state
+            goto('/repos', { invalidateAll: true, replaceState: false });
+          } else {
+            goto(`/repos/${userNpub}/${dTag}`, { invalidateAll: true, replaceState: false });
+          }
         }, 2000);
       } else {
         // Show detailed error information

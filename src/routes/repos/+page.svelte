@@ -31,7 +31,8 @@
   let deletingRepo = $state<{ npub: string; repo: string } | null>(null);
   
   // User's own repositories (where they are owner or maintainer)
-  let myRepos = $state<Array<{ event: NostrEvent; npub: string; repoName: string }>>([]);
+  // Also includes repos they transferred away (marked as transferred)
+  let myRepos = $state<Array<{ event: NostrEvent; npub: string; repoName: string; transferred?: boolean; currentOwner?: string }>>([]);
   let loadingMyRepos = $state(false);
 
   import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
@@ -57,6 +58,13 @@
       };
       document.addEventListener('visibilitychange', handleVisibilityChange);
       return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }
+  });
+
+  // Reload my repos when navigating to repos page (e.g., after transfer)
+  $effect(() => {
+    if ($page.url.pathname === '/repos' && userPubkeyHex) {
+      loadMyRepos().catch(err => console.warn('Failed to reload my repos on page navigation:', err));
     }
   });
 
@@ -202,7 +210,7 @@
 
     loadingMyRepos = true;
     try {
-      // Fetch all repos where user is owner
+      // Fetch all repos where user is current owner
       const ownerRepos = await nostrClient.fetchEvents([
         {
           kinds: [KIND.REPO_ANNOUNCEMENT],
@@ -211,8 +219,9 @@
         }
       ]);
 
-      const repos: Array<{ event: NostrEvent; npub: string; repoName: string }> = [];
+      const repos: Array<{ event: NostrEvent; npub: string; repoName: string; transferred?: boolean; currentOwner?: string }> = [];
       
+      // Add repos where user is current owner
       for (const event of ownerRepos) {
         const dTag = event.tags.find(t => t[0] === 'd')?.[1];
         if (!dTag) continue;
@@ -222,10 +231,61 @@
           repos.push({
             event,
             npub,
-            repoName: dTag
+            repoName: dTag,
+            transferred: false
           });
         } catch (err) {
           console.warn('Failed to encode npub for repo:', err);
+        }
+      }
+
+      // Fetch repos that were transferred FROM this user (where they were original owner)
+      // Search for transfer events where this user is the 'from' pubkey
+      const { OwnershipTransferService } = await import('$lib/services/nostr/ownership-transfer-service.js');
+      const ownershipService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
+      
+      // Get all repos where user was original owner
+      const originalOwnerRepos = await nostrClient.fetchEvents([
+        {
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          authors: [userPubkeyHex],
+          limit: 100
+        }
+      ]);
+
+      for (const originalEvent of originalOwnerRepos) {
+        const dTag = originalEvent.tags.find(t => t[0] === 'd')?.[1];
+        if (!dTag) continue;
+
+        // Check current owner
+        const currentOwner = await ownershipService.getCurrentOwner(userPubkeyHex, dTag);
+        
+        // If current owner is different, this repo was transferred
+        if (currentOwner !== userPubkeyHex) {
+          // Fetch the current announcement from the new owner
+          const currentAnnouncements = await nostrClient.fetchEvents([
+            {
+              kinds: [KIND.REPO_ANNOUNCEMENT],
+              authors: [currentOwner],
+              '#d': [dTag],
+              limit: 1
+            }
+          ]);
+
+          if (currentAnnouncements.length > 0) {
+            try {
+              const npub = nip19.npubEncode(userPubkeyHex); // Original owner npub
+              repos.push({
+                event: currentAnnouncements[0], // Use current announcement
+                npub,
+                repoName: dTag,
+                transferred: true,
+                currentOwner
+              });
+            } catch (err) {
+              console.warn('Failed to encode npub for transferred repo:', err);
+            }
+          }
         }
       }
 
@@ -538,13 +598,22 @@
           {#each myRepos as item}
             {@const repo = item.event}
             {@const repoImage = getRepoImage(repo)}
-            <a href="/repos/{item.npub}/{item.repoName}" class="repo-badge">
+            {@const isTransferred = item.transferred || false}
+            <a 
+              href="/repos/{item.npub}/{item.repoName}" 
+              class="repo-badge"
+              class:transferred={isTransferred}
+              title={isTransferred ? 'Transferred to another owner' : ''}
+            >
               {#if repoImage}
                 <img src={repoImage} alt={getRepoName(repo)} class="repo-badge-image" />
               {:else}
                 <img src="/icons/package.svg" alt="Repository" class="repo-badge-icon" />
               {/if}
               <span class="repo-badge-name">{getRepoName(repo)}</span>
+              {#if isTransferred}
+                <span class="transferred-badge" title="Transferred">↗</span>
+              {/if}
             </a>
           {/each}
         </div>

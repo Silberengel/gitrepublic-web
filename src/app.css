@@ -1030,6 +1030,24 @@ button.theme-option.active img.theme-icon-option,
   max-width: 200px;
 }
 
+.repo-badge.transferred {
+  opacity: 0.6;
+  filter: grayscale(0.5);
+  position: relative;
+}
+
+.repo-badge.transferred:hover {
+  opacity: 0.8;
+  filter: grayscale(0.3);
+}
+
+.transferred-badge {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-left: 0.25rem;
+  opacity: 0.7;
+}
+
 @media (max-width: 768px) {
   .my-repos-section {
     padding: 1rem;

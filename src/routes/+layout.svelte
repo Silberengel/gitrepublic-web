@@ -5,6 +5,7 @@
   import { goto } from '$app/navigation';
   import Footer from '$lib/components/Footer.svelte';
   import NavBar from '$lib/components/NavBar.svelte';
+  import TransferNotification from '$lib/components/TransferNotification.svelte';
   import type { Snippet } from 'svelte';
   import { getPublicKeyWithNIP07, isNIP07Available } from '$lib/services/nostr/nip07-signer.js';
   import { determineUserLevel, decodePubkey } from '$lib/services/nostr/user-level-service.js';
@@ -19,6 +20,21 @@
   
   // User level checking state
   let checkingUserLevel = $state(false);
+
+  // Transfer notification state
+  type PendingTransfer = {
+    eventId: string;
+    fromPubkey: string;
+    toPubkey: string;
+    repoTag: string;
+    repoName: string;
+    originalOwner: string;
+    timestamp: number;
+    createdAt: string;
+    event: any;
+  };
+  let pendingTransfers = $state<PendingTransfer[]>([]);
+  let dismissedTransfers = $state<Set<string>>(new Set());
 
   onMount(() => {
     // Only run client-side code
@@ -111,8 +127,10 @@
       );
       
       // Update activity if user is logged in
-      if (levelResult.userPubkey) {
+      if (levelResult.userPubkey && levelResult.userPubkeyHex) {
         updateActivity();
+        // Check for pending transfers
+        checkPendingTransfers(levelResult.userPubkeyHex);
       }
     } catch (err) {
       console.error('Failed to check user level:', err);
@@ -122,6 +140,33 @@
       checkingUserLevel = false;
       userStore.setChecking(false);
     }
+  }
+
+  async function checkPendingTransfers(userPubkeyHex: string) {
+    try {
+      const response = await fetch('/api/transfers/pending', {
+        headers: {
+          'X-User-Pubkey': userPubkeyHex
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.pendingTransfers && data.pendingTransfers.length > 0) {
+          // Filter out dismissed transfers
+          pendingTransfers = data.pendingTransfers.filter(
+            (t: { eventId: string }) => !dismissedTransfers.has(t.eventId)
+          );
+        }
+      }
+    } catch (err) {
+      console.error('Failed to check for pending transfers:', err);
+    }
+  }
+
+  function dismissTransfer(eventId: string) {
+    dismissedTransfers.add(eventId);
+    pendingTransfers = pendingTransfers.filter(t => t.eventId !== eventId);
   }
 
   function applyTheme() {
@@ -164,11 +209,28 @@
   
   // Subscribe to user store
   const userState = $derived($userStore);
+
+  // Check for transfers when user logs in
+  $effect(() => {
+    const currentUser = $userStore;
+    if (currentUser.userPubkeyHex && !checkingUserLevel) {
+      checkPendingTransfers(currentUser.userPubkeyHex);
+    } else if (!currentUser.userPubkeyHex) {
+      // Clear transfers when user logs out
+      pendingTransfers = [];
+      dismissedTransfers.clear();
+    }
+  });
 </script>
 
 {#if !isSplashPage}
   <NavBar />
 {/if}
+
+<!-- Transfer notifications -->
+{#each pendingTransfers as transfer (transfer.eventId)}
+  <TransferNotification {transfer} on:dismiss={(e) => dismissTransfer(e.detail.eventId)} />
+{/each}
 
 {#if !isSplashPage && checkingUserLevel}
   <div class="user-level-check">

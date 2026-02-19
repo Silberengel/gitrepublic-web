@@ -362,6 +362,33 @@ export const POST: RequestHandler = async ({ params, request }) => {
     logger.info({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}` }, 'Provisioning fork repository...');
     await repoManager.provisionRepo(signedForkAnnouncement, signedOwnershipEvent, false);
 
+    // Save fork announcement to repo (offline papertrail)
+    try {
+      const { generateVerificationFile, VERIFICATION_FILE_PATH } = await import('$lib/services/nostr/repo-verification.js');
+      const { fileManager } = await import('$lib/services/service-registry.js');
+      const announcementFileContent = generateVerificationFile(signedForkAnnouncement, userPubkeyHex);
+      
+      // Save to repo if it exists locally (should exist after provisioning)
+      if (fileManager.repoExists(userNpub, forkRepoName)) {
+        await fileManager.writeFile(
+          userNpub,
+          forkRepoName,
+          VERIFICATION_FILE_PATH,
+          announcementFileContent,
+          `Add fork repository announcement: ${signedForkAnnouncement.id.slice(0, 16)}...`,
+          'Nostr',
+          `${userPubkeyHex}@nostr`,
+          'main'
+        ).catch(err => {
+          // Log but don't fail - publishing to relays is more important
+          logger.warn({ error: err, npub: userNpub, repo: forkRepoName }, 'Failed to save fork announcement to repo');
+        });
+      }
+    } catch (err) {
+      // Log but don't fail - publishing to relays is more important
+      logger.warn({ error: err, npub: userNpub, repo: forkRepoName }, 'Failed to save fork announcement to repo');
+    }
+
     logger.info({
       operation: 'fork',
       originalRepo: `${npub}/${repo}`,

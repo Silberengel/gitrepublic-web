@@ -240,6 +240,14 @@
     margin: 0 !important;
   }
 
+  /* Schemes section - server URL row */
+  :global(.swagger-ui .schemes) {
+    margin-top: 1.5rem !important;
+    margin-bottom: 1.5rem !important;
+    padding-top: 1rem !important;
+    padding-bottom: 1rem !important;
+  }
+
   /* Scheme container and filter */
   :global(.swagger-ui .scheme-container),
   :global(.swagger-ui .filter-container) {
@@ -247,7 +255,8 @@
     border: 1px solid var(--border-color) !important;
     border-radius: 0.375rem;
     padding: 1rem;
-    margin-bottom: 2rem;
+    margin-top: 1.5rem;
+    margin-bottom: 1.5rem;
   }
 
   :global(.swagger-ui .scheme-container label),

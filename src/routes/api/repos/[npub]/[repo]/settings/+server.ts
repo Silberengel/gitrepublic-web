@@ -4,7 +4,7 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { nostrClient, maintainerService, ownershipTransferService } from '$lib/services/service-registry.js';
+import { nostrClient, maintainerService, ownershipTransferService, fileManager } from '$lib/services/service-registry.js';
 import { DEFAULT_NOSTR_RELAYS, combineRelays } from '$lib/config.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import { KIND } from '$lib/types/nostr.js';
@@ -12,6 +12,9 @@ import { signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
 import { createRepoGetHandler, withRepoValidation } from '$lib/utils/api-handlers.js';
 import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
 import { handleApiError, handleValidationError, handleNotFoundError, handleAuthorizationError } from '$lib/utils/error-handler.js';
+import { generateVerificationFile, VERIFICATION_FILE_PATH } from '$lib/services/nostr/repo-verification.js';
+import { nip19 } from 'nostr-tools';
+import logger from '$lib/services/logger.js';
 
 /**
  * GET - Get repository settings
@@ -186,6 +189,31 @@ export const POST: RequestHandler = withRepoValidation(
 
     if (result.success.length === 0) {
       throw error(500, 'Failed to publish updated announcement to relays');
+    }
+
+    // Save updated announcement to repo (offline papertrail)
+    try {
+      const announcementFileContent = generateVerificationFile(signedEvent, currentOwner);
+      
+      // Save to repo if it exists locally
+      if (fileManager.repoExists(repoContext.npub, repoContext.repo)) {
+        await fileManager.writeFile(
+          repoContext.npub,
+          repoContext.repo,
+          VERIFICATION_FILE_PATH,
+          announcementFileContent,
+          `Update repository announcement: ${signedEvent.id.slice(0, 16)}...`,
+          'Nostr',
+          `${currentOwner}@nostr`,
+          'main'
+        ).catch(err => {
+          // Log but don't fail - publishing to relays is more important
+          logger.warn({ error: err, npub: repoContext.npub, repo: repoContext.repo }, 'Failed to save updated announcement to repo');
+        });
+      }
+    } catch (err) {
+      // Log but don't fail - publishing to relays is more important
+      logger.warn({ error: err, npub: repoContext.npub, repo: repoContext.repo }, 'Failed to save updated announcement to repo');
     }
 
     return json({ success: true, event: signedEvent });
