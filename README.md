@@ -328,9 +328,11 @@ src/
 ### Setup
 
 ```bash
-npm install
+npm install  # Installs dependencies for both web and CLI (workspace)
 npm run dev
 ```
+
+**Note**: This repository uses npm workspaces. The CLI (`gitrepublic-cli`) is included as a workspace package but can also be published independently. See `gitrepublic-cli/SYNC.md` for details on syncing to a separate repository.
 
 ### Security Features
 

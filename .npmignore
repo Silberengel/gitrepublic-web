@@ -1,0 +1,12 @@
+# Ignore these when publishing (if this were a package, but it's private)
+# This file is here for reference
+
+repos/
+.git/
+node_modules/
+build/
+.svelte-kit/
+package/
+.env
+.env.*
+!.env.example

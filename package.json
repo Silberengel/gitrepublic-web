@@ -6,13 +6,20 @@
   "license": "MIT",
   "website": "https://gitcitadel.com",
   "description": "Nostr-based git server with NIP-34 repo announcements",
+  "private": true,
+  "workspaces": [
+    "gitrepublic-cli"
+  ],
   "scripts": {
     "dev": "GIT_REPO_ROOT=./repos vite dev",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "lint": "prettier --check . && eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "cli:sync": "./scripts/sync-cli.sh",
+    "cli:install": "cd gitrepublic-cli && npm install",
+    "cli:test": "cd gitrepublic-cli && npm test"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.0",
