@@ -249,9 +249,10 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   // Even with GIT_HTTP_EXPORT_ALL=1, the repository config must allow it
   if (service === 'git-receive-pack') {
     try {
-      const { execSync } = await import('child_process');
+      // Security: Use spawnSync with argument arrays instead of execSync
+      const { spawnSync } = await import('child_process');
       // Set http.receivepack to true if not already set
-      execSync('git config http.receivepack true', { 
+      spawnSync('git', ['config', 'http.receivepack', 'true'], { 
         cwd: resolvedPath,
         stdio: 'ignore',
         timeout: 5000
@@ -636,9 +637,10 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
   // Even with GIT_HTTP_EXPORT_ALL=1, the repository config must allow it
   if (gitPath === 'git-receive-pack' || path.includes('git-receive-pack')) {
     try {
-      const { execSync } = await import('child_process');
+      // Security: Use spawnSync with argument arrays instead of execSync
+      const { spawnSync } = await import('child_process');
       // Set http.receivepack to true if not already set
-      execSync('git config http.receivepack true', { 
+      spawnSync('git', ['config', 'http.receivepack', 'true'], { 
         cwd: resolvedPath,
         stdio: 'ignore',
         timeout: 5000
