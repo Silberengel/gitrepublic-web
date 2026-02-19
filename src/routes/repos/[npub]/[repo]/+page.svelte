@@ -2987,7 +2987,7 @@
             </button>
           {/if}
           {#if isMaintainer}
-            <a href={`/repos/${npub}/${repo}/settings`} class="settings-button">Settings</a>
+            <a href={`/signup?npub=${npub}&repo=${repo}`} class="settings-button">Settings</a>
           {/if}
           {#if pageData.repoOwnerPubkey && userPubkeyHex === pageData.repoOwnerPubkey}
             {#if verificationStatus?.verified !== true}

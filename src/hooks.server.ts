@@ -73,7 +73,6 @@ export const handle: Handle = async ({ event, resolve }) => {
                                  !url.pathname.includes('/file') && // File operations are rate limited separately
                                  !url.pathname.includes('/delete') &&
                                  !url.pathname.includes('/transfer') &&
-                                 !url.pathname.includes('/settings') && // Settings might be write operations
                                  (url.pathname.endsWith('/fork') || // GET /fork is read-only
                                   url.pathname.endsWith('/verify') || // GET /verify is read-only
                                   url.pathname.endsWith('/readme') || // GET /readme is read-only
