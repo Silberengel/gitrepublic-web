@@ -337,6 +337,33 @@
     width: 20px;
     height: 20px;
     display: block;
+    filter: brightness(0) saturate(100%) invert(1) !important; /* Default white for dark themes */
+    opacity: 1 !important;
+  }
+
+  /* Light theme: black icon */
+  :global([data-theme="light"]) .hamburger-icon {
+    filter: brightness(0) saturate(100%) !important; /* Black in light theme */
+    opacity: 1 !important;
+  }
+
+  /* Dark themes: white icon */
+  :global([data-theme="dark"]) .hamburger-icon,
+  :global([data-theme="black"]) .hamburger-icon {
+    filter: brightness(0) saturate(100%) invert(1) !important; /* White in dark themes */
+    opacity: 1 !important;
+  }
+
+  /* Hover: white for visibility */
+  .mobile-menu-toggle:hover .hamburger-icon {
+    filter: brightness(0) saturate(100%) invert(1) !important;
+    opacity: 1 !important;
+  }
+
+  /* Light theme hover: keep black */
+  :global([data-theme="light"]) .mobile-menu-toggle:hover .hamburger-icon {
+    filter: brightness(0) saturate(100%) !important;
+    opacity: 1 !important;
   }
 
   /* Mobile responsive styles */

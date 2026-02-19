@@ -3084,17 +3084,23 @@
               {/if}
             </button>
           {/if}
-          <select bind:value={currentBranch} onchange={handleBranchChange} class="branch-select" disabled={branches.length === 0 && loading}>
-            {#if branches.length === 0}
-              <!-- Show current branch even if branches haven't loaded yet -->
-              <option value={currentBranch}>{currentBranch}{loading ? ' (loading...)' : ''}</option>
-            {:else}
-              {#each branches as branch}
-                {@const branchName = typeof branch === 'string' ? branch : (branch as { name: string }).name}
-                <option value={branchName}>{branchName}</option>
-              {/each}
-            {/if}
-          </select>
+          {#if branches.length === 0 && !loading}
+            <div class="branch-select branch-select-empty" title="No branches available">
+              No branches detected
+            </div>
+          {:else}
+            <select bind:value={currentBranch} onchange={handleBranchChange} class="branch-select" disabled={branches.length === 0 && loading}>
+              {#if branches.length === 0}
+                <!-- Show current branch even if branches haven't loaded yet -->
+                <option value={currentBranch}>{currentBranch}{loading ? ' (loading...)' : ''}</option>
+              {:else}
+                {#each branches as branch}
+                  {@const branchName = typeof branch === 'string' ? branch : (branch as { name: string }).name}
+                  <option value={branchName}>{branchName}</option>
+                {/each}
+              {/if}
+            </select>
+          {/if}
           {#if isMaintainer && branches.length > 0 && currentBranch && branches.length > 1}
             {@const canDelete = defaultBranch !== null && currentBranch !== defaultBranch}
             {#if canDelete && currentBranch}
@@ -4992,6 +4998,18 @@
     background: var(--input-bg);
     color: var(--text-primary);
     font-family: 'IBM Plex Serif', serif;
+  }
+
+  .branch-select-empty {
+    padding: 0.5rem;
+    border: 1px solid var(--input-border);
+    border-radius: 0.25rem;
+    background: var(--input-bg);
+    color: var(--text-muted);
+    font-family: 'IBM Plex Serif', serif;
+    opacity: 0.7;
+    cursor: not-allowed;
+    user-select: none;
   }
 
 

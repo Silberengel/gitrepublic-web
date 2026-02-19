@@ -90,8 +90,8 @@
 
 /* GitRepublic Black Theme - GitHub-style all black */
 [data-theme="black"] {
-  /* Black theme colors - GitHub-inspired */
-  --royal-plum: #9a2a7f;
+  /* Black theme colors - GitHub-inspired with burgundy/red accent */
+  --royal-plum: #C41E3A; /* Crimson/burgundy red */
   --snow: #0d1117; /* GitHub's black background */
   --lavender-blush: #161b22; /* GitHub's slightly lighter black */
   --thistle: #21262d; /* GitHub's border color */
@@ -106,21 +106,21 @@
   --text-muted: #8b949e; /* GitHub's muted text color */
   --border-color: #30363d; /* GitHub's border color */
   --border-light: #21262d; /* Lighter border */
-  --accent: var(--royal-plum);
-  --accent-hover: #b84a8a;
-  --accent-light: #6a3a5a;
+  --accent: var(--royal-plum); /* Crimson red */
+  --accent-hover: #DC143C; /* Brighter crimson for hover */
+  --accent-light: #8B4A5A; /* Lighter burgundy */
   --accent-text: #ffffff;
-  --link-color: #58a6ff; /* GitHub's link color */
-  --link-hover: #79c0ff; /* GitHub's link hover */
+  --link-color: #FF6B6B; /* Light red for links */
+  --link-hover: #FF8E8E; /* Brighter red for link hover */
   --card-bg: #161b22; /* GitHub's card background */
   --card-border: #30363d; /* GitHub's card border */
-  --button-primary: var(--royal-plum);
-  --button-primary-hover: #b84a8a;
+  --button-primary: var(--royal-plum); /* Crimson red */
+  --button-primary-hover: #DC143C; /* Brighter crimson */
   --button-secondary: #30363d; /* GitHub's secondary button - lighter for contrast */
   --button-secondary-hover: #484f58; /* GitHub's secondary button hover - even lighter */
   --input-bg: #0d1117; /* GitHub's input background */
   --input-border: #30363d; /* GitHub's input border */
-  --input-focus: var(--royal-plum);
+  --input-focus: var(--royal-plum); /* Crimson red for focus */
   --input-placeholder: #6e7681; /* GitHub's placeholder color */
   --error-bg: #3d1f1f;
   --error-text: #f85149; /* GitHub's error color */
