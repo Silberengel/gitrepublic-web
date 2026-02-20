@@ -8,24 +8,7 @@ import logger from '../logger.js';
 import type { NostrEvent } from '../../types/nostr.js';
 import { getCachedUserLevel } from '../security/user-level-cache.js';
 import { KIND } from '../../types/nostr.js';
-
-// Lazy import to avoid importing Node.js crypto in browser
-// Use a function type instead of typeof import to avoid static analysis
-let getPreferences: ((userPubkeyHex: string) => Promise<any>) | null = null;
-async function getPreferencesLazy() {
-  if (typeof window !== 'undefined') {
-    // Browser environment - event forwarding should be done server-side
-    return null;
-  }
-  if (!getPreferences) {
-    // Use static import path with vite-ignore to prevent static analysis
-    // This is intentional - we only want to import this server-side
-    // @ts-ignore - Dynamic import for server-side only code
-    const module = await import(/* @vite-ignore */ './preferences-storage.server.js');
-    getPreferences = module.getPreferences;
-  }
-  return getPreferences;
-}
+import type { MessagingPreferences } from './preferences-types.js';
 
 // ============================================================================
 // Types & Interfaces
@@ -614,10 +597,17 @@ async function forwardToGitPlatform(
  * - User has unlimited access
  * - User has preferences configured and enabled
  * - Event kind is in notifyOn list (if specified)
+ * 
+ * @param event - The Nostr event to forward
+ * @param userPubkeyHex - User's public key in hex format
+ * @param preferences - Optional messaging preferences. If not provided, forwarding is skipped.
+ *                      Preferences are stored client-side in IndexedDB and should be passed
+ *                      from the client when available.
  */
 export async function forwardEventIfEnabled(
   event: NostrEvent,
-  userPubkeyHex: string
+  userPubkeyHex: string,
+  preferences?: MessagingPreferences | null
 ): Promise<void> {
   try {
     // Early returns for eligibility checks
@@ -627,12 +617,8 @@ export async function forwardEventIfEnabled(
       return;
     }
 
-    const getPreferencesFn = await getPreferencesLazy();
-    if (!getPreferencesFn) {
-      // Browser environment - forwarding should be done server-side via API
-      return;
-    }
-    const preferences = await getPreferencesFn(userPubkeyHex);
+    // Preferences are stored client-side in IndexedDB
+    // If not provided, skip forwarding (preferences must be passed from client)
     if (!preferences || !preferences.enabled) {
       return;
     }

@@ -444,20 +444,65 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
 
   /**
    * Check if force push is safe (no divergent history)
-   * This is a simplified check - in production you might want more sophisticated validation
+   * A force push is safe if:
+   * - Local branch is ahead of remote (linear history, just new commits)
+   * - Local and remote are at the same commit (no-op)
+   * A force push is unsafe if:
+   * - Remote has commits that local doesn't have (would overwrite remote history)
    */
   private async canSafelyForcePush(repoPath: string, remoteName: string): Promise<boolean> {
     try {
       const git = simpleGit(repoPath);
-      // Fetch to see if there are any remote changes
+      
+      // Get current branch name
+      const currentBranch = await git.revParse(['--abbrev-ref', 'HEAD']);
+      if (!currentBranch) {
+        return false; // Can't determine current branch
+      }
+      
+      // Fetch latest remote state
       await git.fetch(remoteName);
-      // If fetch succeeds, check if we're ahead (safe to force) or behind (dangerous)
-      const status = await git.status();
-      // For now, default to false (safer) unless explicitly allowed
-      // In production, you'd check branch divergence more carefully
+      
+      // Get remote branch reference
+      const remoteBranch = `${remoteName}/${currentBranch}`;
+      
+      // Check if remote branch exists
+      try {
+        await git.revParse([`refs/remotes/${remoteBranch}`]);
+      } catch {
+        // Remote branch doesn't exist yet - safe to push (first push)
+        return true;
+      }
+      
+      // Get local and remote commit SHAs
+      const localSha = await git.revParse(['HEAD']);
+      const remoteSha = await git.revParse([`refs/remotes/${remoteBranch}`]);
+      
+      // If they're the same, it's safe (no-op)
+      if (localSha === remoteSha) {
+        return true;
+      }
+      
+      // Check if local is ahead (linear history) - safe to force push
+      // This means all remote commits are ancestors of local commits
+      const mergeBase = await git.raw(['merge-base', localSha, remoteSha]);
+      const mergeBaseSha = mergeBase.trim();
+      
+      // If merge base equals remote SHA, local is ahead (safe)
+      if (mergeBaseSha === remoteSha) {
+        return true;
+      }
+      
+      // If merge base equals local SHA, remote is ahead (unsafe to force push)
+      if (mergeBaseSha === localSha) {
+        return false;
+      }
+      
+      // If merge base is different from both, branches have diverged (unsafe)
       return false;
-    } catch {
+    } catch (error) {
       // If we can't determine, default to false (safer)
+      logger.warn({ error, repoPath, remoteName }, 'Failed to check branch divergence, defaulting to unsafe');
       return false;
     }
   }

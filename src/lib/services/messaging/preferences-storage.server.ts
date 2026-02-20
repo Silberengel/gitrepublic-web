@@ -191,10 +191,12 @@ function deriveUserKey(userPubkeyHex: string, salt: string): Buffer {
 }
 
 /**
- * In-memory storage (in production, use Redis or database)
- * Key: HMAC(pubkey), Value: {encryptedSalt, encrypted}
+ * DEPRECATED: Preferences are now stored client-side in IndexedDB via settings-store.ts
+ * This server-side storage is kept for backward compatibility but should not be used.
+ * Use preferences-storage.client.ts for new code.
+ * 
+ * The in-memory Map has been removed - preferences are stored in IndexedDB on the client.
  */
-const preferencesStore = new Map<string, string>();
 
 /**
  * Store user messaging preferences securely
@@ -230,17 +232,12 @@ export async function storePreferences(
   // Encrypt preferences
   const encrypted = encryptAES256GCM(userKey, JSON.stringify(preferences));
   
-  // Store using HMAC lookup key (not raw pubkey)
-  const lookupKey = getLookupKey(userPubkeyHex);
-  const stored: StoredPreferences = {
-    encryptedSalt,
-    encrypted
-  };
+  // DEPRECATED: Preferences should be stored client-side in IndexedDB
+  // This function is kept for backward compatibility but does nothing
+  // Use preferences-storage.client.ts instead
   
-  preferencesStore.set(lookupKey, JSON.stringify(stored));
-  
-  logger.info({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 
-    'Stored messaging preferences');
+  logger.warn({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 
+    'storePreferences called on deprecated server-side storage. Preferences should be stored client-side in IndexedDB.');
 }
 
 /**
@@ -268,58 +265,38 @@ export async function getPreferences(
     );
   }
 
-  // Get stored data using HMAC lookup key
-  const lookupKey = getLookupKey(userPubkeyHex);
-  const storedJson = preferencesStore.get(lookupKey);
+  // DEPRECATED: Preferences are now stored client-side in IndexedDB
+  // This function always returns null - use preferences-storage.client.ts instead
   
-  if (!storedJson) {
-    return null;
-  }
+  logger.warn({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 
+    'getPreferences called on deprecated server-side storage. Use preferences-storage.client.ts to read from IndexedDB.');
+  
+  return null;
 
-  try {
-    const stored: StoredPreferences = JSON.parse(storedJson);
-    
-    // Decrypt salt
-    const salt = decryptSalt(stored.encryptedSalt);
-    
-    // Derive same encryption key
-    const userKey = deriveUserKey(userPubkeyHex, salt);
-    
-    // Decrypt preferences
-    const decrypted = decryptAES256GCM(userKey, stored.encrypted);
-    const preferences: MessagingPreferences = JSON.parse(decrypted);
-    
-    // Reset rate limit on successful decryption
-    decryptionAttempts.delete(lookupKey);
-    
-    return preferences;
-  } catch (error) {
-    logger.error({ 
-      error, 
-      userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' 
-    }, 'Failed to decrypt preferences');
-    throw new Error('Failed to decrypt preferences. Data may be corrupted.');
-  }
+  // DEPRECATED: This code path is no longer used
+  // Preferences are stored client-side in IndexedDB
+  return null;
 }
 
 /**
  * Delete user messaging preferences
  */
 export async function deletePreferences(userPubkeyHex: string): Promise<void> {
-  const lookupKey = getLookupKey(userPubkeyHex);
-  preferencesStore.delete(lookupKey);
-  decryptionAttempts.delete(lookupKey);
+  // DEPRECATED: Preferences are now stored client-side in IndexedDB
+  // This function does nothing - use preferences-storage.client.ts instead
   
-  logger.info({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 
-    'Deleted messaging preferences');
+  logger.warn({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 
+    'deletePreferences called on deprecated server-side storage. Use preferences-storage.client.ts to delete from IndexedDB.');
 }
 
 /**
  * Check if user has preferences configured
  */
 export async function hasPreferences(userPubkeyHex: string): Promise<boolean> {
-  const lookupKey = getLookupKey(userPubkeyHex);
-  return preferencesStore.has(lookupKey);
+  // DEPRECATED: Preferences are now stored client-side in IndexedDB
+  // This function always returns false - use preferences-storage.client.ts instead
+  
+  return false;
 }
 
 /**

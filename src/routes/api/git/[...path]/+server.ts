@@ -767,31 +767,72 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     }
 
     // Check branch protection rules
-    // Note: We need to extract the target branch from the git push request
-    // This is a simplified check - in production, you'd parse the git protocol
-    // to determine the exact branch being pushed
-    let targetBranch = 'main'; // Default to main if can't determine
+    // Parse git push protocol to extract branch names being pushed
+    // Git receive-pack protocol format:
+    // - Capability lines (optional)
+    // - Ref updates: <old-sha> <new-sha> refs/heads/<branch>\0<capabilities>
+    // - Pack data follows (binary)
+    const pushedBranches: string[] = [];
     try {
-      // Try to extract branch from request body (git protocol)
-      const bodyText = bodyBuffer.toString('utf-8', 0, Math.min(bodyBuffer.length, 1000));
-      const branchMatch = bodyText.match(/refs\/heads\/([^\s\n]+)/);
-      targetBranch = branchMatch ? branchMatch[1] : 'main'; // Default to main if can't determine
+      // Parse git receive-pack protocol
+      // The protocol uses null-terminated strings and space-separated refs
+      // Format: <old-sha> <new-sha> refs/heads/<branch-name>\0[capabilities]
+      const bodyText = bodyBuffer.toString('binary');
       
-      // Validate branch name to prevent injection
-      if (!isValidBranchName(targetBranch)) {
-        return error(400, 'Invalid branch name');
+      // Split by null bytes to separate ref updates from pack data
+      const nullIndex = bodyText.indexOf('\0');
+      const refSection = nullIndex >= 0 ? bodyText.substring(0, nullIndex) : bodyText;
+      
+      // Split ref section by newlines (each line is a ref update)
+      const refLines = refSection.split('\n').filter(line => line.trim().length > 0);
+      
+      for (const line of refLines) {
+        // Parse format: <old-sha> <new-sha> refs/heads/<branch-name>
+        // Or: <old-sha> <new-sha> refs/heads/<branch-name>\0<capabilities>
+        const parts = line.split(/\s+/);
+        if (parts.length >= 3) {
+          const refPath = parts[2];
+          // Extract branch name from refs/heads/<branch>
+          if (refPath.startsWith('refs/heads/')) {
+            const branchName = refPath.substring(11); // Remove 'refs/heads/' prefix
+            // Remove any null bytes or capabilities that might be appended
+            const cleanBranchName = branchName.split('\0')[0].trim();
+            
+            // Validate branch name
+            if (cleanBranchName && isValidBranchName(cleanBranchName)) {
+              pushedBranches.push(cleanBranchName);
+            }
+          }
+        }
       }
       
-      const protectionCheck = await branchProtectionService.canPushToBranch(
-        authResult.pubkey || '',
-        currentOwnerPubkey,
-        repoName,
-        targetBranch,
-        isMaintainer
-      );
+      // If no branches found, try fallback regex (for edge cases)
+      if (pushedBranches.length === 0) {
+        const fallbackMatch = bodyText.match(/refs\/heads\/([^\s\n\0]+)/);
+        if (fallbackMatch && isValidBranchName(fallbackMatch[1])) {
+          pushedBranches.push(fallbackMatch[1]);
+        }
+      }
+      
+      // Default to 'main' if we can't determine any branch (shouldn't happen in normal operation)
+      if (pushedBranches.length === 0) {
+        logger.warn({ repoName, bodyLength: bodyBuffer.length }, 'Could not extract branch name from git push, defaulting to main');
+        pushedBranches.push('main');
+      }
+      
+      // Check protection for all branches being pushed
+      for (const targetBranch of pushedBranches) {
+        const protectionCheck = await branchProtectionService.canPushToBranch(
+          authResult.pubkey || '',
+          currentOwnerPubkey,
+          repoName,
+          targetBranch,
+          isMaintainer
+        );
 
-      if (!protectionCheck.allowed) {
-        return error(403, protectionCheck.reason || 'Branch is protected');
+        if (!protectionCheck.allowed) {
+          return error(403, protectionCheck.reason || `Branch '${targetBranch}' is protected`);
+        }
       }
     } catch (error) {
       // If we can't check protection, log but don't block (fail open for now)

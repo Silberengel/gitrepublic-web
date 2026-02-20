@@ -5,7 +5,6 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { getPreferencesSummary } from '$lib/services/messaging/preferences-storage.server.js';
 import { getCachedUserLevel } from '$lib/services/security/user-level-cache.js';
 import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
 import { extractRequestContext } from '$lib/utils/api-context.js';
@@ -29,18 +28,16 @@ export const GET: RequestHandler = async (event) => {
       return error(403, 'Messaging forwarding requires unlimited access level');
     }
 
-    // Get safe summary (decrypts but only returns safe info)
-    const summary = await getPreferencesSummary(requestContext.userPubkeyHex);
+    // Preferences are now stored client-side in IndexedDB
+    // The client should read from IndexedDB directly using preferences-storage.client.ts
+    // This endpoint returns a default response indicating client-side storage
     
-    if (!summary) {
-      return json({
-        configured: false,
-        enabled: false,
-        platforms: {}
-      });
-    }
-
-    return json(summary);
+    return json({
+      configured: false, // Client should check IndexedDB
+      enabled: false,
+      platforms: {},
+      message: 'Preferences are stored client-side in IndexedDB. Use preferences-storage.client.ts to access them.'
+    });
   } catch (err) {
     logger.error({ error: err, clientIp }, '[API] Error getting messaging preferences summary');
     

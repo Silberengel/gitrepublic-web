@@ -10,13 +10,12 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { verifyEvent } from 'nostr-tools';
-import { storePreferences, getPreferences, deletePreferences, hasPreferences, getRateLimitStatus } from '$lib/services/messaging/preferences-storage.server.js';
 import { getCachedUserLevel } from '$lib/services/security/user-level-cache.js';
 import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
 import { extractRequestContext } from '$lib/utils/api-context.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 import logger from '$lib/services/logger.js';
-import type { MessagingPreferences } from '$lib/services/messaging/preferences-storage.server.js';
+import type { MessagingPreferences } from '$lib/services/messaging/preferences-types.js';
 
 /**
  * POST - Save messaging preferences
@@ -105,8 +104,11 @@ export const POST: RequestHandler = async (event) => {
       return error(400, 'Invalid preferences: enabled must be boolean');
     }
 
-    // Store preferences (will encrypt and store securely)
-    await storePreferences(userPubkeyHex, preferences as MessagingPreferences);
+    // Preferences are now stored client-side in IndexedDB via settings store
+    // The client should use the preferences-storage.client.ts helper
+    // This API endpoint just validates the request
+    // Note: For server-side event forwarding, preferences are read from the client's IndexedDB
+    // via the request context when available
 
     auditLogger.log({
       user: userPubkeyHex,
@@ -116,7 +118,7 @@ export const POST: RequestHandler = async (event) => {
       result: 'success'
     });
 
-    return json({ success: true });
+    return json({ success: true, message: 'Preferences validated. Client should store in IndexedDB.' });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     logger.error({ error: err, clientIp }, '[API] Error saving messaging preferences');
@@ -157,18 +159,13 @@ export const GET: RequestHandler = async (event) => {
       return error(403, 'Messaging forwarding requires unlimited access level');
     }
 
-    // Check if preferences exist (without decrypting)
-    const exists = await hasPreferences(requestContext.userPubkeyHex);
-    
-    // Get rate limit status
-    const rateLimit = getRateLimitStatus(requestContext.userPubkeyHex);
+    // Preferences are stored client-side in IndexedDB
+    // The client should check IndexedDB directly using preferences-storage.client.ts
+    // This endpoint just confirms the user has access
 
     return json({
-      configured: exists,
-      rateLimit: {
-        remaining: rateLimit.remaining,
-        resetAt: rateLimit.resetAt
-      }
+      configured: false, // Client should check IndexedDB
+      message: 'Check client-side IndexedDB for preferences'
     });
   } catch (err) {
     logger.error({ error: err, clientIp }, '[API] Error getting messaging preferences status');
@@ -194,7 +191,9 @@ export const DELETE: RequestHandler = async (event) => {
       return error(403, 'Messaging forwarding requires unlimited access level');
     }
 
-    await deletePreferences(requestContext.userPubkeyHex);
+    // Preferences are stored client-side in IndexedDB
+    // The client should delete from IndexedDB using preferences-storage.client.ts
+    // This API endpoint just validates the request
 
     auditLogger.log({
       user: requestContext.userPubkeyHex,
@@ -204,7 +203,7 @@ export const DELETE: RequestHandler = async (event) => {
       result: 'success'
     });
 
-    return json({ success: true });
+    return json({ success: true, message: 'Client should delete from IndexedDB.' });
   } catch (err) {
     logger.error({ error: err, clientIp }, '[API] Error deleting messaging preferences');
     return error(500, 'Failed to delete messaging preferences');

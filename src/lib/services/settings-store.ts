@@ -1,6 +1,6 @@
 /**
  * Settings store using IndexedDB for persistent client-side storage
- * Stores: auto-save, user.name, user.email, theme
+ * Stores: auto-save, user.name, user.email, theme, messagingPreferences
  */
 
 import logger from './logger.js';
@@ -9,12 +9,15 @@ const DB_NAME = 'gitrepublic_settings';
 const DB_VERSION = 1;
 const STORE_SETTINGS = 'settings';
 
+import type { MessagingPreferences } from './messaging/preferences-types.js';
+
 interface Settings {
   autoSave: boolean;
   userName: string;
   userEmail: string;
   theme: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black';
   defaultBranch: string;
+  messagingPreferences?: MessagingPreferences;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -22,7 +25,8 @@ const DEFAULT_SETTINGS: Settings = {
   userName: '',
   userEmail: '',
   theme: 'gitrepublic-dark',
-  defaultBranch: 'master'
+  defaultBranch: 'master',
+  messagingPreferences: undefined
 };
 
 export class SettingsStore {
