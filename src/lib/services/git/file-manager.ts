@@ -1623,8 +1623,6 @@ export class FileManager {
    */
   async getCurrentOwnerFromRepo(npub: string, repoName: string): Promise<string | null> {
     try {
-      const { VERIFICATION_FILE_PATH } = await import('../nostr/repo-verification.js');
-      
       if (!this.repoExists(npub, repoName)) {
         return null;
       }
@@ -1632,25 +1630,44 @@ export class FileManager {
       const repoPath = this.getRepoPath(npub, repoName);
       const git: SimpleGit = simpleGit(repoPath);
       
-      // Get git log for the announcement file, most recent first
+      // Get git log for nostr/repo-events.jsonl, most recent first
       // Use --all to check all branches, --reverse to get chronological order
-      const logOutput = await git.raw(['log', '--all', '--format=%H', '--reverse', '--', VERIFICATION_FILE_PATH]);
+      const logOutput = await git.raw(['log', '--all', '--format=%H', '--reverse', '--', 'nostr/repo-events.jsonl']);
       const commitHashes = logOutput.trim().split('\n').filter(Boolean);
       
       if (commitHashes.length === 0) {
-        return null; // No announcement file in repo
+        return null; // No announcement in repo
       }
       
-      // Get the most recent announcement file content (last commit in the list)
+      // Get the most recent repo-events.jsonl content (last commit in the list)
       const mostRecentCommit = commitHashes[commitHashes.length - 1];
-      const announcementFile = await this.getFileContent(npub, repoName, VERIFICATION_FILE_PATH, mostRecentCommit);
+      const repoEventsFile = await this.getFileContent(npub, repoName, 'nostr/repo-events.jsonl', mostRecentCommit);
       
-      // Parse the announcement event from the file
-      let announcementEvent: any;
+      // Parse the repo-events.jsonl file and find the most recent announcement
+      let announcementEvent: any = null;
+      let latestTimestamp = 0;
       try {
-        announcementEvent = JSON.parse(announcementFile.content);
+        const lines = repoEventsFile.content.trim().split('\n').filter(Boolean);
+        for (const line of lines) {
+          try {
+            const entry = JSON.parse(line);
+            if (entry.type === 'announcement' && entry.event && entry.timestamp) {
+              if (entry.timestamp > latestTimestamp) {
+                latestTimestamp = entry.timestamp;
+                announcementEvent = entry.event;
+              }
+            }
+          } catch {
+            // Skip invalid lines
+            continue;
+          }
+        }
       } catch (parseError) {
-        logger.warn({ error: parseError, npub, repoName, commit: mostRecentCommit }, 'Failed to parse announcement file JSON');
+        logger.warn({ error: parseError, npub, repoName, commit: mostRecentCommit }, 'Failed to parse repo-events.jsonl');
+        return null;
+      }
+      
+      if (!announcementEvent) {
         return null;
       }
       

@@ -6,7 +6,8 @@ import { json, error } from '@sveltejs/kit';
 // @ts-ignore - SvelteKit generates this type
 import type { RequestHandler } from './$types';
 import { fileManager } from '$lib/services/service-registry.js';
-import { verifyRepositoryOwnership, VERIFICATION_FILE_PATH } from '$lib/services/nostr/repo-verification.js';
+import { verifyRepositoryOwnership } from '$lib/services/nostr/repo-verification.js';
+import type { NostrEvent } from '$lib/types/nostr.js';
 import { nostrClient } from '$lib/services/service-registry.js';
 import { KIND } from '$lib/types/nostr.js';
 import { existsSync } from 'fs';
@@ -72,13 +73,37 @@ export const GET: RequestHandler = createRepoGetHandler(
       localOwner = await fileManager.getCurrentOwnerFromRepo(context.npub, context.repo);
       
       if (localOwner) {
-        // Verify the announcement file matches the announcement event
+        // Verify the announcement in nostr/repo-events.jsonl matches the announcement event
         try {
-          const announcementFile = await fileManager.getFileContent(context.npub, context.repo, VERIFICATION_FILE_PATH, 'HEAD');
-          const verification = verifyRepositoryOwnership(announcement, announcementFile.content);
-          localVerified = verification.valid;
-          if (!verification.valid) {
-            localError = verification.error;
+          const repoEventsFile = await fileManager.getFileContent(context.npub, context.repo, 'nostr/repo-events.jsonl', 'HEAD');
+          // Parse repo-events.jsonl and find the most recent announcement
+          const lines = repoEventsFile.content.trim().split('\n').filter(Boolean);
+          let repoAnnouncement: NostrEvent | null = null;
+          let latestTimestamp = 0;
+          
+          for (const line of lines) {
+            try {
+              const entry = JSON.parse(line);
+              if (entry.type === 'announcement' && entry.event && entry.timestamp) {
+                if (entry.timestamp > latestTimestamp) {
+                  latestTimestamp = entry.timestamp;
+                  repoAnnouncement = entry.event;
+                }
+              }
+            } catch {
+              continue;
+            }
+          }
+          
+          if (repoAnnouncement) {
+            const verification = verifyRepositoryOwnership(announcement, JSON.stringify(repoAnnouncement));
+            localVerified = verification.valid;
+            if (!verification.valid) {
+              localError = verification.error;
+            }
+          } else {
+            localVerified = false;
+            localError = 'No announcement found in nostr/repo-events.jsonl';
           }
         } catch (err) {
           localVerified = false;
@@ -86,7 +111,7 @@ export const GET: RequestHandler = createRepoGetHandler(
         }
       } else {
         localVerified = false;
-        localError = 'No announcement file found in repository';
+        localError = 'No announcement found in repository';
       }
     } catch (err) {
       localVerified = false;

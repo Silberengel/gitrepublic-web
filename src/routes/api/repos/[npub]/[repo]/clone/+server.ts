@@ -77,9 +77,15 @@ export const POST: RequestHandler = async (event) => {
     const announcementEvent = events[0];
 
     // Attempt to clone the repository
-    const cloned = await repoManager.fetchRepoOnDemand(npub, repo, announcementEvent);
+    const result = await repoManager.fetchRepoOnDemand(npub, repo, announcementEvent);
 
-    if (!cloned) {
+    if (!result.success) {
+      if (result.needsAnnouncement) {
+        throw handleValidationError(
+          'Repository announcement is required. Please provide an announcement event or create one.',
+          { operation: 'cloneRepo', npub, repo }
+        );
+      }
       throw handleApiError(
         new Error('Failed to clone repository from remote URLs'),
         { operation: 'cloneRepo', npub, repo },

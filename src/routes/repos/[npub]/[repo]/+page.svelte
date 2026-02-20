@@ -16,7 +16,7 @@
   import { nip19 } from 'nostr-tools';
   import { userStore } from '$lib/stores/user-store.js';
   import { settingsStore } from '$lib/services/settings-store.js';
-  import { generateVerificationFile, VERIFICATION_FILE_PATH } from '$lib/services/nostr/repo-verification.js';
+  // Note: Announcements are now stored in nostr/repo-events.jsonl, not .nostr-announcement
   import type { NostrEvent } from '$lib/types/nostr.js';
   import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
   import { fetchUserEmail, fetchUserName } from '$lib/utils/user-profile.js';
@@ -1777,9 +1777,9 @@
     }
   }
 
-  async function generateVerificationFileForRepo() {
+  async function generateAnnouncementFileForRepo() {
     if (!pageData.repoOwnerPubkey || !userPubkeyHex) {
-      error = 'Unable to generate verification file: missing repository or user information';
+      error = 'Unable to generate announcement file: missing repository or user information';
       return;
     }
 
@@ -1801,11 +1801,12 @@
       }
 
       const announcement = events[0] as NostrEvent;
-      verificationFileContent = generateVerificationFile(announcement, pageData.repoOwnerPubkey);
+      // Generate announcement event JSON (for download/reference)
+      verificationFileContent = JSON.stringify(announcement, null, 2) + '\n';
       showVerificationDialog = true;
     } catch (err) {
-      console.error('Failed to generate verification file:', err);
-      error = `Failed to generate verification file: ${err instanceof Error ? err.message : String(err)}`;
+      console.error('Failed to generate announcement file:', err);
+      error = `Failed to generate announcement file: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
 
@@ -1901,7 +1902,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = VERIFICATION_FILE_PATH;
+    a.download = 'announcement-event.json';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -3227,7 +3228,7 @@
                         {#if pageData.repoOwnerPubkey && userPubkeyHex === pageData.repoOwnerPubkey}
                           {#if verificationStatus?.verified !== true}
                             <button 
-                              onclick={() => { generateVerificationFileForRepo(); showRepoMenu = false; }} 
+                              onclick={() => { generateAnnouncementFileForRepo(); showRepoMenu = false; }} 
                               class="repo-menu-item"
                               title="Generate verification file"
                             >
@@ -4615,12 +4616,12 @@
         </div>
         <div class="modal-body">
           <p class="verification-instructions">
-            Create a file named <code>{VERIFICATION_FILE_PATH}</code> in the root of your git repository and paste the content below into it.
-            Then commit and push the file to your repository.
+            The announcement event should be saved to <code>nostr/repo-events.jsonl</code> in your repository.
+            You can download the announcement event JSON below for reference.
           </p>
           <div class="verification-file-content">
             <div class="file-header">
-              <span class="filename">{VERIFICATION_FILE_PATH}</span>
+              <span class="filename">announcement-event.json</span>
               <div class="file-actions">
                 <button onclick={copyVerificationToClipboard} class="copy-button">Copy</button>
                 <button onclick={downloadVerificationFile} class="download-button">Download</button>

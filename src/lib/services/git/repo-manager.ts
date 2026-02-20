@@ -3,13 +3,13 @@
  * Handles repo provisioning, syncing, and NIP-34 integration
  */
 
-import { existsSync, mkdirSync, writeFileSync, statSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, statSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { readdir } from 'fs/promises';
+import { readdir, readFile } from 'fs/promises';
 import { spawn } from 'child_process';
 import type { NostrEvent } from '../../types/nostr.js';
 import { GIT_DOMAIN } from '../../config.js';
-import { generateVerificationFile, VERIFICATION_FILE_PATH } from '../nostr/repo-verification.js';
+import { validateAnnouncementEvent } from '../nostr/repo-verification.js';
 import simpleGit, { type SimpleGit } from 'simple-git';
 import logger from '../logger.js';
 import { shouldUseTor, getTorProxy } from '../../utils/tor.js';
@@ -138,14 +138,21 @@ export class RepoManager {
       await this.syncFromRemotes(repoPath.fullPath, otherUrls);
     }
 
+    // Validate announcement event before proceeding
+    const { validateAnnouncementEvent } = await import('../nostr/repo-verification.js');
+    const validation = validateAnnouncementEvent(event, repoPath.repoName);
+    if (!validation.valid) {
+      throw new Error(`Invalid announcement event: ${validation.error}`);
+    }
+
     // Create bare repository if it doesn't exist
     if (isNewRepo) {
       // Use simple-git to create bare repo (safer than exec)
       const git = simpleGit();
       await git.init(['--bare', repoPath.fullPath]);
       
-      // Create announcement file and self-transfer event in the repository
-      await this.createVerificationFile(repoPath.fullPath, event, selfTransferEvent);
+      // Ensure announcement event is saved to nostr/repo-events.jsonl in the repository
+      await this.ensureAnnouncementInRepo(repoPath.fullPath, event, selfTransferEvent);
       
       // If there are other clone URLs, sync from them after creating the repo
       if (otherUrls.length > 0) {
@@ -154,12 +161,26 @@ export class RepoManager {
         // No external URLs - this is a brand new repo, create initial branch and README
         await this.createInitialBranchAndReadme(repoPath.fullPath, repoPath.npub, repoPath.repoName, event);
       }
-    } else if (isExistingRepo && selfTransferEvent) {
-      // For existing repos, we might want to add the self-transfer event
-      // But we should be careful not to overwrite existing history
-      // For now, we'll just ensure the announcement file exists
-      // The self-transfer event should already be published to relays
-      logger.info({ repoPath: repoPath.fullPath }, 'Existing repo - self-transfer event should be published to relays');
+    } else {
+      // For existing repos, check if announcement exists in repo
+      // If not, try to fetch from relays and save it
+      const hasAnnouncement = await this.hasAnnouncementInRepoFile(repoPath.fullPath);
+      if (!hasAnnouncement) {
+        // Try to fetch from relays
+        const fetchedEvent = await this.fetchAnnouncementFromRelays(event.pubkey, repoPath.repoName);
+        if (fetchedEvent) {
+          // Save fetched announcement to repo
+          await this.ensureAnnouncementInRepo(repoPath.fullPath, fetchedEvent, selfTransferEvent);
+        } else {
+          // Announcement not found in repo or relays - this is a problem
+          logger.warn({ repoPath: repoPath.fullPath }, 'Existing repo has no announcement in repo or on relays');
+        }
+      }
+      
+      if (selfTransferEvent) {
+        // Ensure self-transfer event is also saved
+        await this.ensureAnnouncementInRepo(repoPath.fullPath, event, selfTransferEvent);
+      }
     }
   }
 
@@ -203,39 +224,6 @@ You can use this read-me file to explain the purpose of this repo to everyone wh
 Your commits will all be signed by your Nostr keys and saved to the event files in the ./nostr folder.
 `;
       
-      // Generate announcement file content
-      const { generateVerificationFile, VERIFICATION_FILE_PATH } = await import('../nostr/repo-verification.js');
-      
-      // Try to get announcement file content from client-signed event (kind 1642) first
-      let announcementFileContent: string | null = null;
-      try {
-        const { NostrClient } = await import('../nostr/nostr-client.js');
-        const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
-        
-        // Look for a kind 1642 event that references this announcement
-        const announcementFileEvents = await nostrClient.fetchEvents([
-          {
-            kinds: [1642], // Announcement file event kind
-            authors: [announcementEvent.pubkey],
-            '#e': [announcementEvent.id], // References this announcement
-            limit: 1
-          }
-        ]);
-        
-        if (announcementFileEvents.length > 0) {
-          // Extract announcement file content from the client-signed event
-          announcementFileContent = announcementFileEvents[0].content;
-          logger.info({ repoPath, announcementFileEventId: announcementFileEvents[0].id }, 'Using client-signed announcement file for initial commit');
-        }
-      } catch (err) {
-        logger.debug({ error: err, repoPath }, 'Failed to fetch announcement file event, will generate from announcement event');
-      }
-      
-      // If client didn't provide announcement file, generate it from the announcement event
-      if (!announcementFileContent) {
-        announcementFileContent = generateVerificationFile(announcementEvent, announcementEvent.pubkey);
-      }
-      
       // Use FileManager to create the initial branch and files
       const { FileManager } = await import('./file-manager.js');
       const fileManager = new FileManager(this.repoRoot);
@@ -257,29 +245,29 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         await fileManager.createBranch(npub, repoName, defaultBranch, undefined);
       }
       
-      // Create both README.md and announcement file in the initial commit
+      // Create both README.md and announcement in the initial commit
       // We'll use a worktree to write both files and commit them together
       const workDir = await fileManager.getWorktree(repoPath, defaultBranch, npub, repoName);
-      const { writeFile: writeFileFs, mkdir } = await import('fs/promises');
+      const { writeFile: writeFileFs } = await import('fs/promises');
       const { join } = await import('path');
       
       // Write README.md
       const readmePath = join(workDir, 'README.md');
       await writeFileFs(readmePath, readmeContent, 'utf-8');
       
-      // Write announcement file
-      const announcementPath = join(workDir, VERIFICATION_FILE_PATH);
-      await writeFileFs(announcementPath, announcementFileContent, 'utf-8');
+      // Save repo announcement event to nostr/repo-events.jsonl (only if not already present)
+      const announcementSaved = await this.saveRepoEventToWorktree(workDir, announcementEvent, 'announcement', true);
       
-      // Save repo announcement event to nostr/repo-events.jsonl (standard file for easy analysis)
-      await this.saveRepoEventToWorktree(workDir, announcementEvent, 'announcement');
-      
-      // Stage both files
+      // Stage files
       const workGit = simpleGit(workDir);
-      await workGit.add(['README.md', VERIFICATION_FILE_PATH]);
+      const filesToAdd: string[] = ['README.md'];
+      if (announcementSaved) {
+        filesToAdd.push('nostr/repo-events.jsonl');
+      }
+      await workGit.add(filesToAdd);
       
-      // Commit both files together
-      const commitResult = await workGit.commit('Initial commit', ['README.md', VERIFICATION_FILE_PATH], {
+      // Commit files together
+      const commitResult = await workGit.commit('Initial commit', filesToAdd, {
         '--author': `${authorName} <${authorEmail}>`
       });
       
@@ -651,17 +639,41 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
     npub: string,
     repoName: string,
     announcementEvent?: NostrEvent
-  ): Promise<boolean> {
+  ): Promise<{ success: boolean; needsAnnouncement?: boolean; announcement?: NostrEvent }> {
     const repoPath = join(this.repoRoot, npub, `${repoName}.git`);
     
-    // If repo already exists, no need to fetch
+    // If repo already exists, check if it has an announcement
     if (existsSync(repoPath)) {
-      return true;
+      const hasAnnouncement = await this.hasAnnouncementInRepoFile(repoPath);
+      if (hasAnnouncement) {
+        return { success: true };
+      }
+      
+      // Repo exists but no announcement - try to fetch from relays
+      const { requireNpubHex: requireNpubHexUtil } = await import('../../utils/npub-utils.js');
+      const repoOwnerPubkey = requireNpubHexUtil(npub);
+      const fetchedAnnouncement = await this.fetchAnnouncementFromRelays(repoOwnerPubkey, repoName);
+      if (fetchedAnnouncement) {
+        // Save fetched announcement to repo
+        await this.ensureAnnouncementInRepo(repoPath, fetchedAnnouncement);
+        return { success: true, announcement: fetchedAnnouncement };
+      }
+      
+      // Repo exists but no announcement found - needs announcement
+      return { success: false, needsAnnouncement: true };
     }
 
-    // If no announcement provided, we can't fetch (caller should provide it)
+    // If no announcement provided, try to fetch from relays
     if (!announcementEvent) {
-      return false;
+      const { requireNpubHex: requireNpubHexUtil } = await import('../../utils/npub-utils.js');
+      const repoOwnerPubkey = requireNpubHexUtil(npub);
+      const fetchedAnnouncement = await this.fetchAnnouncementFromRelays(repoOwnerPubkey, repoName);
+      if (fetchedAnnouncement) {
+        announcementEvent = fetchedAnnouncement;
+      } else {
+        // No announcement found - needs announcement
+        return { success: false, needsAnnouncement: true };
+      }
     }
 
     // Check if repository is public
@@ -680,7 +692,7 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
           pubkey: announcementEvent.pubkey.slice(0, 16) + '...',
           level: userLevel?.level || 'none'
         }, 'Skipping on-demand repo fetch: private repo requires owner with unlimited access');
-        return false;
+        return { success: false, needsAnnouncement: false };
       }
     } else {
       logger.info({ 
@@ -717,7 +729,7 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
 
       if (remoteUrls.length === 0) {
         logger.warn({ npub, repoName, cloneUrls, announcementEventId: announcementEvent.id }, 'No remote clone URLs found for on-demand fetch');
-        return false;
+        return { success: false, needsAnnouncement: false };
       }
       
       logger.debug({ npub, repoName, cloneUrls, remoteUrls, isPublic }, 'On-demand fetch details');
@@ -798,16 +810,16 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         throw new Error('Repository clone completed but repository path does not exist');
       }
 
-      // Create announcement file with the signed announcement event (non-blocking - repo is usable without it)
+      // Ensure announcement is saved to nostr/repo-events.jsonl (non-blocking - repo is usable without it)
       try {
-        await this.createVerificationFile(repoPath, announcementEvent);
+        await this.ensureAnnouncementInRepo(repoPath, announcementEvent);
       } catch (verifyError) {
         // Announcement file creation is optional - log but don't fail
-        logger.warn({ error: verifyError, npub, repoName }, 'Failed to create announcement file, but repository is usable');
+        logger.warn({ error: verifyError, npub, repoName }, 'Failed to ensure announcement in repo, but repository is usable');
       }
 
       logger.info({ npub, repoName }, 'Successfully fetched repository on-demand');
-      return true;
+      return { success: true, announcement: announcementEvent };
     } catch (error) {
       const sanitizedError = sanitizeError(error);
       logger.error({ 
@@ -818,7 +830,7 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         isPublic,
         remoteUrls
       }, 'Failed to fetch repository on-demand');
-      return false;
+      return { success: false, needsAnnouncement: false };
     }
   }
 
@@ -887,10 +899,10 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
   }
 
   /**
-   * Create announcement file and self-transfer event in a new repository
-   * The announcement file contains the full signed announcement event JSON, proving ownership
+   * Ensure announcement event is saved to nostr/repo-events.jsonl in the repository
+   * Only saves if not already present (avoids redundant entries)
    */
-  private async createVerificationFile(repoPath: string, event: NostrEvent, selfTransferEvent?: NostrEvent): Promise<void> {
+  private async ensureAnnouncementInRepo(repoPath: string, event: NostrEvent, selfTransferEvent?: NostrEvent): Promise<void> {
     try {
       // Create a temporary working directory
       const repoName = this.parseRepoPathForName(repoPath)?.repoName || 'temp';
@@ -907,102 +919,63 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
       const git: SimpleGit = simpleGit();
       await git.clone(repoPath, workDir);
 
-      // Extract announcement file content from client-signed event (kind 1642)
-      // The client creates and signs this event separately, with an 'e' tag pointing to the announcement
-      // The content is just the full announcement event JSON - simpler than a custom verification format
-      let announcementFileContent: string | null = null;
+      // Check if announcement already exists in nostr/repo-events.jsonl
+      const hasAnnouncement = await this.hasAnnouncementInRepo(workDir, event.id);
       
-      try {
-        const { NostrClient } = await import('../nostr/nostr-client.js');
-        const { DEFAULT_NOSTR_RELAYS } = await import('../../config.js');
-        const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
-        
-        // Look for a kind 1642 event that references this announcement
-        const announcementFileEvents = await nostrClient.fetchEvents([
-          {
-            kinds: [1642], // Announcement file event kind
-            authors: [event.pubkey],
-            '#e': [event.id], // References this announcement
-            limit: 1
-          }
-        ]);
-        
-        if (announcementFileEvents.length > 0) {
-          // Extract announcement file content from the client-signed event
-          announcementFileContent = announcementFileEvents[0].content;
-          logger.info({ repoPath, announcementFileEventId: announcementFileEvents[0].id }, 'Using client-signed announcement file');
+      const filesToAdd: string[] = [];
+      
+      // Only save announcement if not already present
+      if (!hasAnnouncement) {
+        const saved = await this.saveRepoEventToWorktree(workDir, event, 'announcement', false);
+        if (saved) {
+          filesToAdd.push('nostr/repo-events.jsonl');
+          logger.info({ repoPath, eventId: event.id }, 'Saved announcement to nostr/repo-events.jsonl');
         }
-      } catch (err) {
-        logger.warn({ error: err, repoPath }, 'Failed to fetch announcement file event, generating server-side');
+      } else {
+        logger.debug({ repoPath, eventId: event.id }, 'Announcement already exists in repo, skipping');
       }
       
-      // If client didn't provide announcement file, generate it from the announcement event
-      if (!announcementFileContent) {
-        announcementFileContent = generateVerificationFile(event, event.pubkey);
+      // Save transfer event if provided
+      if (selfTransferEvent) {
+        const saved = await this.saveRepoEventToWorktree(workDir, selfTransferEvent, 'transfer', false);
+        if (saved) {
+          if (!filesToAdd.includes('nostr/repo-events.jsonl')) {
+            filesToAdd.push('nostr/repo-events.jsonl');
+          }
+        }
       }
 
-      // Write announcement file (contains the full signed announcement event JSON)
-      const announcementPath = join(workDir, VERIFICATION_FILE_PATH);
-      writeFileSync(announcementPath, announcementFileContent, 'utf-8');
-
-      // Save repo events to nostr/repo-events.jsonl (standard file for easy analysis)
-      await this.saveRepoEventToWorktree(workDir, event, 'announcement');
-      if (selfTransferEvent) {
-        await this.saveRepoEventToWorktree(workDir, selfTransferEvent, 'transfer');
-      }
-
-      // If self-transfer event is provided, include it in the commit
-      const filesToAdd = [VERIFICATION_FILE_PATH];
-      if (selfTransferEvent) {
-        const selfTransferPath = join(workDir, '.nostr-ownership-transfer');
-        const isTemplate = !selfTransferEvent.sig || !selfTransferEvent.id;
+      // Only commit if we added files
+      if (filesToAdd.length > 0) {
+        const workGit: SimpleGit = simpleGit(workDir);
+        await workGit.add(filesToAdd);
         
-        const selfTransferContent = JSON.stringify({
-          eventId: selfTransferEvent.id || '(unsigned - needs owner signature)',
-          pubkey: selfTransferEvent.pubkey,
-          signature: selfTransferEvent.sig || '(unsigned - needs owner signature)',
-          timestamp: selfTransferEvent.created_at,
-          kind: selfTransferEvent.kind,
-          content: selfTransferEvent.content,
-          tags: selfTransferEvent.tags,
-          ...(isTemplate ? {
-            _note: 'This is a template. The owner must sign and publish this event to relays for it to be valid.',
-            _instructions: 'To publish: 1. Sign this event with your private key, 2. Publish to relays using your Nostr client'
-          } : {})
-        }, null, 2) + '\n';
-        writeFileSync(selfTransferPath, selfTransferContent, 'utf-8');
-        filesToAdd.push('.nostr-ownership-transfer');
+        // Use the event timestamp for commit date
+        const commitDate = new Date(event.created_at * 1000).toISOString();
+        const commitMessage = selfTransferEvent 
+          ? 'Add Nostr repository announcement and initial ownership proof'
+          : 'Add Nostr repository announcement';
+        
+        // Note: Initial commits are unsigned. The repository owner can sign their own commits
+        // when they make changes. The server should never sign commits on behalf of users.
+        
+        await workGit.commit(commitMessage, filesToAdd, {
+          '--author': `Nostr <${event.pubkey}@nostr>`,
+          '--date': commitDate
+        });
+
+        // Push back to bare repo
+        await workGit.push(['origin', 'main']).catch(async () => {
+          // If main branch doesn't exist, create it
+          await workGit.checkout(['-b', 'main']);
+          await workGit.push(['origin', 'main']);
+        });
       }
-
-      // Commit the verification file and self-transfer event
-      const workGit: SimpleGit = simpleGit(workDir);
-      await workGit.add(filesToAdd);
-      
-      // Use the event timestamp for commit date
-      const commitDate = new Date(event.created_at * 1000).toISOString();
-      const commitMessage = selfTransferEvent 
-        ? 'Add Nostr repository announcement and initial ownership proof'
-        : 'Add Nostr repository announcement';
-      
-      // Note: Initial commits are unsigned. The repository owner can sign their own commits
-      // when they make changes. The server should never sign commits on behalf of users.
-      
-      await workGit.commit(commitMessage, filesToAdd, {
-        '--author': `Nostr <${event.pubkey}@nostr>`,
-        '--date': commitDate
-      });
-
-      // Push back to bare repo
-      await workGit.push(['origin', 'main']).catch(async () => {
-        // If main branch doesn't exist, create it
-        await workGit.checkout(['-b', 'main']);
-        await workGit.push(['origin', 'main']);
-      });
 
       // Clean up
       await rm(workDir, { recursive: true, force: true });
     } catch (error) {
-      logger.error({ error, repoPath }, 'Failed to create announcement file');
+      logger.error({ error, repoPath }, 'Failed to ensure announcement in repo');
       // Don't throw - announcement file creation is important but shouldn't block provisioning
     }
   }
@@ -1017,17 +990,148 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
   }
 
   /**
+   * Check if an announcement event already exists in nostr/repo-events.jsonl
+   */
+  private async hasAnnouncementInRepo(worktreePath: string, eventId?: string): Promise<boolean> {
+    try {
+      const jsonlFile = join(worktreePath, 'nostr', 'repo-events.jsonl');
+      if (!existsSync(jsonlFile)) {
+        return false;
+      }
+      
+      const content = await readFile(jsonlFile, 'utf-8');
+      const lines = content.trim().split('\n').filter(Boolean);
+      
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === 'announcement' && entry.event) {
+            // If eventId provided, check for exact match
+            if (eventId) {
+              if (entry.event.id === eventId) {
+                return true;
+              }
+            } else {
+              // Just check if any announcement exists
+              return true;
+            }
+          }
+        } catch {
+          // Skip invalid lines
+          continue;
+        }
+      }
+      
+      return false;
+    } catch (err) {
+      logger.debug({ error: err, worktreePath }, 'Failed to check for announcement in repo');
+      return false;
+    }
+  }
+
+  /**
+   * Read announcement event from nostr/repo-events.jsonl
+   */
+  private async getAnnouncementFromRepo(worktreePath: string): Promise<NostrEvent | null> {
+    try {
+      const jsonlFile = join(worktreePath, 'nostr', 'repo-events.jsonl');
+      if (!existsSync(jsonlFile)) {
+        return null;
+      }
+      
+      const content = await readFile(jsonlFile, 'utf-8');
+      const lines = content.trim().split('\n').filter(Boolean);
+      
+      // Find the most recent announcement event
+      let latestAnnouncement: NostrEvent | null = null;
+      let latestTimestamp = 0;
+      
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === 'announcement' && entry.event && entry.timestamp) {
+            if (entry.timestamp > latestTimestamp) {
+              latestTimestamp = entry.timestamp;
+              latestAnnouncement = entry.event;
+            }
+          }
+        } catch {
+          // Skip invalid lines
+          continue;
+        }
+      }
+      
+      return latestAnnouncement;
+    } catch (err) {
+      logger.debug({ error: err, worktreePath }, 'Failed to read announcement from repo');
+      return null;
+    }
+  }
+
+  /**
+   * Fetch announcement from relays and validate it
+   */
+  private async fetchAnnouncementFromRelays(
+    repoOwnerPubkey: string,
+    repoName: string
+  ): Promise<NostrEvent | null> {
+    try {
+      const { NostrClient } = await import('../nostr/nostr-client.js');
+      const { DEFAULT_NOSTR_RELAYS } = await import('../../config.js');
+      const { KIND } = await import('../../types/nostr.js');
+      
+      const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+      const events = await nostrClient.fetchEvents([
+        {
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          authors: [repoOwnerPubkey],
+          '#d': [repoName],
+          limit: 1
+        }
+      ]);
+      
+      if (events.length === 0) {
+        return null;
+      }
+      
+      const event = events[0];
+      
+      // Validate the event
+      const validation = validateAnnouncementEvent(event, repoName);
+      if (!validation.valid) {
+        logger.warn({ error: validation.error, repoName }, 'Fetched announcement failed validation');
+        return null;
+      }
+      
+      return event;
+    } catch (err) {
+      logger.debug({ error: err, repoOwnerPubkey, repoName }, 'Failed to fetch announcement from relays');
+      return null;
+    }
+  }
+
+  /**
    * Save a repo event (announcement or transfer) to nostr/repo-events.jsonl
+   * Only saves if not already present (for announcements)
    * This provides a standard location for all repo-related Nostr events for easy analysis
    */
   private async saveRepoEventToWorktree(
     worktreePath: string,
     event: NostrEvent,
-    eventType: 'announcement' | 'transfer'
-  ): Promise<void> {
+    eventType: 'announcement' | 'transfer',
+    skipIfExists: boolean = true
+  ): Promise<boolean> {
     try {
+      // For announcements, check if already exists
+      if (eventType === 'announcement' && skipIfExists) {
+        const exists = await this.hasAnnouncementInRepo(worktreePath, event.id);
+        if (exists) {
+          logger.debug({ eventId: event.id, worktreePath }, 'Announcement already exists in repo, skipping');
+          return false;
+        }
+      }
+      
       const { mkdir, writeFile } = await import('fs/promises');
-      const { join } = await import('path');
       
       // Create nostr directory in worktree
       const nostrDir = join(worktreePath, 'nostr');
@@ -1041,17 +1145,19 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         event
       }) + '\n';
       await writeFile(jsonlFile, eventLine, { flag: 'a', encoding: 'utf-8' });
+      return true;
     } catch (err) {
       logger.debug({ error: err, worktreePath, eventType }, 'Failed to save repo event to nostr/repo-events.jsonl');
       // Don't throw - this is a nice-to-have feature
+      return false;
     }
   }
 
   /**
-   * Check if a repository already has an announcement file
+   * Check if a repository already has an announcement in nostr/repo-events.jsonl
    * Used to determine if this is a truly new repo or an existing one being added
    */
-  async hasVerificationFile(repoPath: string): Promise<boolean> {
+  async hasAnnouncementInRepoFile(repoPath: string): Promise<boolean> {
     if (!this.repoExists(repoPath)) {
       return false;
     }
@@ -1068,15 +1174,14 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
       }
       await mkdir(workDir, { recursive: true });
 
-      // Try to clone and check for verification file
+      // Try to clone and check for announcement in nostr/repo-events.jsonl
       await git.clone(repoPath, workDir);
-      const verificationPath = join(workDir, VERIFICATION_FILE_PATH);
-      const hasFile = existsSync(verificationPath);
+      const hasAnnouncement = await this.hasAnnouncementInRepo(workDir, undefined);
 
       // Clean up
       await rm(workDir, { recursive: true, force: true });
       
-      return hasFile;
+      return hasAnnouncement;
     } catch {
       // If we can't check, assume it doesn't have one
       return false;

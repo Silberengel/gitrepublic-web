@@ -32,16 +32,22 @@ export class ForkCountService {
     try {
       // Find all repo announcements that reference this repo as a fork
       const repoTag = `${KIND.REPO_ANNOUNCEMENT}:${originalOwnerPubkey}:${originalRepoName}`;
-      const forkEvents = await this.nostrClient.fetchEvents([
+      
+      // Fetch all repo announcements and filter for forks manually
+      // (NostrFilter doesn't support '#fork' tag, so we fetch all and filter)
+      const allRepoEvents = await this.nostrClient.fetchEvents([
         {
           kinds: [KIND.REPO_ANNOUNCEMENT],
-          '#a': [repoTag],
-          limit: 1000 // Reasonable limit for fork count
+          limit: 1000
         }
       ]);
 
-      // Filter for actual forks (have 'a' tag matching the original repo)
-      const forks = forkEvents.filter(event => {
+      // Filter for actual forks (have 'fork' tag or legacy 'a' tag matching the original repo)
+      const forks = allRepoEvents.filter(event => {
+        // Check for new standardized fork tag format: ['fork', '30617:pubkey:d-tag']
+        const forkTag = event.tags.find(t => t[0] === 'fork' && t[1] === repoTag);
+        if (forkTag) return true;
+        // Legacy support: check for 'a' tag
         const aTag = event.tags.find(t => t[0] === 'a' && t[1] === repoTag);
         return aTag !== undefined;
       });

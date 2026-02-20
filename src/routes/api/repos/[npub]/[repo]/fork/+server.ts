@@ -243,14 +243,15 @@ export const POST: RequestHandler = async ({ params, request }) => {
     }
 
     // Build fork announcement tags
+    // Use standardized fork tag: ['fork', '30617:pubkey:d-tag']
+    const originalRepoTag = `${KIND.REPO_ANNOUNCEMENT}:${originalOwnerPubkey}:${repo}`;
     const tags: string[][] = [
       ['d', forkRepoName],
       ['name', `${originalName} (fork)`],
       ['description', `Fork of ${originalName}${originalDescription ? `: ${originalDescription}` : ''}`],
       ['clone', ...forkCloneUrls],
       ['relays', ...DEFAULT_NOSTR_RELAYS],
-      ['t', 'fork'], // Mark as fork
-      ['a', `${KIND.REPO_ANNOUNCEMENT}:${originalOwnerPubkey}:${repo}`], // Reference to original repo
+      ['fork', originalRepoTag], // Standardized fork tag format
       ['p', originalOwnerPubkey], // Original owner
     ];
 
@@ -362,26 +363,36 @@ export const POST: RequestHandler = async ({ params, request }) => {
     logger.info({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}` }, 'Provisioning fork repository...');
     await repoManager.provisionRepo(signedForkAnnouncement, signedOwnershipEvent, false);
 
-    // Save fork announcement to repo (offline papertrail)
+    // Save fork announcement to repo (offline papertrail) in nostr/repo-events.jsonl
     try {
-      const { generateVerificationFile, VERIFICATION_FILE_PATH } = await import('$lib/services/nostr/repo-verification.js');
       const { fileManager } = await import('$lib/services/service-registry.js');
-      const announcementFileContent = generateVerificationFile(signedForkAnnouncement, userPubkeyHex);
       
       // Save to repo if it exists locally (should exist after provisioning)
       if (fileManager.repoExists(userNpub, forkRepoName)) {
-        await fileManager.writeFile(
-          userNpub,
-          forkRepoName,
-          VERIFICATION_FILE_PATH,
-          announcementFileContent,
+        // Get worktree to save to repo-events.jsonl
+        const defaultBranch = await fileManager.getDefaultBranch(userNpub, forkRepoName).catch(() => 'main');
+        const repoPath = fileManager.getRepoPath(userNpub, forkRepoName);
+        const workDir = await fileManager.getWorktree(repoPath, defaultBranch, userNpub, forkRepoName);
+        
+        // Save to repo-events.jsonl
+        await fileManager.saveRepoEventToWorktree(workDir, signedForkAnnouncement as NostrEvent, 'announcement').catch(err => {
+          logger.debug({ error: err }, 'Failed to save fork announcement to repo-events.jsonl');
+        });
+        
+        // Stage and commit the file
+        const workGit = simpleGit(workDir);
+        await workGit.add(['nostr/repo-events.jsonl']);
+        await workGit.commit(
           `Add fork repository announcement: ${signedForkAnnouncement.id.slice(0, 16)}...`,
-          'Nostr',
-          `${userPubkeyHex}@nostr`,
-          'main'
-        ).catch(err => {
-          // Log but don't fail - publishing to relays is more important
-          logger.warn({ error: err, npub: userNpub, repo: forkRepoName }, 'Failed to save fork announcement to repo');
+          ['nostr/repo-events.jsonl'],
+          {
+            '--author': `Nostr <${userPubkeyHex}@nostr>`
+          }
+        );
+        
+        // Clean up worktree
+        await fileManager.removeWorktree(repoPath, workDir).catch(err => {
+          logger.debug({ error: err }, 'Failed to remove worktree after saving fork announcement');
         });
       }
     } catch (err) {
