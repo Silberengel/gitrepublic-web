@@ -1,24 +1,29 @@
 services:
   gitrepublic:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # For using a pre-built image (e.g., from local build or registry):
+    image: ${DOCKER_IMAGE:-silberengel/gitrepublic-web:latest}
+    # For building from source, comment out image above and uncomment build below:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     container_name: gitrepublic-web
-    # For localhost: expose port directly
+    # Publish port to host (required when reverse proxy is on host, not in Docker)
+    # Apache on host machine proxies to 127.0.0.1:6543, so we need ports: not expose:
     ports:
       - "${PORT:-6543}:6543"
-    # For production behind reverse proxy: comment out ports above and use expose instead
+    # Alternative: If reverse proxy is in Docker (same network), use expose instead:
     # expose:
-    #   - "6543"  # Internal only, accessed via reverse proxy
+    #   - "6543"  # Internal only, accessed via reverse proxy container
     environment:
       - NODE_ENV=production
       - GIT_REPO_ROOT=/repos
-      - GIT_DOMAIN=${GIT_DOMAIN:-localhost:6543}  # Set to your domain for production
-      - NOSTR_RELAYS=${NOSTR_RELAYS:-wss://relay.damus.io,wss://nostr.wine,wss://nos.lol}
+      - GIT_DOMAIN=${GIT_DOMAIN:-gitrepublic.imwald.eu}  # Set to your domain for production (without https://)
+      - NOSTR_RELAYS=${NOSTR_RELAYS:-wss://theforest.nostr1.com}
       - NOSTRGIT_SECRET_KEY=${NOSTRGIT_SECRET_KEY:-}
       - PORT=6543
     volumes:
       # Persist git repositories
+      # Note: Ensure ./repos directory exists on the remote machine, or Docker will create it
       - ./repos:/repos
       # Optional: persist audit logs
       # - ./logs:/app/logs
@@ -26,17 +31,22 @@ services:
       # - ./config:/app/config:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:6543', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:6543', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)}).on('error', () => {process.exit(1)})"]
       interval: 30s
-      timeout: 3s
+      timeout: 5s
       retries: 3
       start_period: 10s
     # Resource limits (adjust as needed)
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '1'
-          memory: 1G
+    # Note: deploy section is for Docker Swarm only
+    # For local development with docker-compose v1, use:
+    # mem_limit: 2g
+    # cpus: '2'
+    # For docker-compose v2 or Docker Swarm, uncomment below:
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2'
+    #       memory: 2G
+    #     reservations:
+    #       cpus: '1'
+    #       memory: 1G
