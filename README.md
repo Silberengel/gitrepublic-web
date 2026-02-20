@@ -115,8 +115,7 @@ These are not part of any NIP but are used by this application:
    - When found, server:
      - Creates a bare git repository at `/repos/{npub}/{repo-name}.git`
      - Fetches the self-transfer event for ownership verification
-     - Creates initial commit with `.nostr-ownership-transfer` file containing the self-transfer event
-     - Creates `.nostr-announcement` file with the full signed announcement event JSON
+     - Creates initial commit with README.md and saves announcement/transfer events to `nostr/repo-events.jsonl` for offline papertrail
      - If repository has `clone` tags pointing to other remotes, syncs from those remotes
 
 3. **Repository Access**:
@@ -155,12 +154,18 @@ These are not part of any NIP but are used by this application:
 
 1. **Current Owner Initiates Transfer**:
    - Owner creates a kind 1641 event with:
-     - `from` tag: Current owner pubkey
-     - `to` tag: New owner pubkey
      - `a` tag: Repository identifier (`30617:{owner}:{repo}`)
-   - Signs and publishes event
+     - `p` tag: New owner pubkey
+     - `d` tag: Repository name
+   - Signs and publishes event to Nostr relays
+   - Transfer event is saved to repository in `nostr/repo-events.jsonl` for offline papertrail
 
-2. **Server Processes Transfer**:
+2. **New Owner Completes Transfer**:
+   - New owner is notified when logging into GitRepublic web
+   - New owner publishes a new repository announcement (kind 30617) to complete the transfer
+   - New announcement is saved to repository for verification
+
+3. **Server Processes Transfer**:
    - Server fetches all ownership transfer events for repository
    - Validates chain of ownership chronologically
    - Updates current owner for all permission checks
@@ -327,7 +332,7 @@ npm run dev
 
 **Note**: This repository uses npm workspaces. The CLI (`gitrepublic-cli`) is included as a workspace package but can also be published independently. See `gitrepublic-cli/SYNC.md` for details on syncing to a separate repository.
 
-### Security Features
+## Security Features
 
 ### Lightweight Mode (Single Container)
 - **Resource Limits**: Per-user repository count and disk quota limits
@@ -507,7 +512,7 @@ git clone https://{domain}/repos/{npub}/{repo-name}.git
 git clone https://{domain}/{npub}/{repo-name}.git
 ```
 
-**Note**: Use `/api/git/` or `/repos/` paths to ensure proper detection by the commit signing hook and to distinguish from GRASP servers.
+**Note**: Use `/api/git/` or `/repos/` paths to ensure proper detection by the commit signing hook and to distinguish from GRASP servers. All three paths work for cloning, but `/api/git/` is recommended for best compatibility.
 
 ### Pushing to a Repository
 
@@ -549,11 +554,9 @@ The credential helper will automatically generate NIP-98 authentication tokens f
 - **Resource Quotas**: Per-tenant CPU, memory, and storage limits
 - **Separate Volumes**: Each tenant has their own PersistentVolume
 
-See `docs/SECURITY.md` and `docs/SECURITY_IMPLEMENTATION.md` for detailed information.
+### Security Considerations
 
-## Security Considerations
-
-- **Path Traversal**: All file paths are validated and sanitized
+- **Path Traversal Protection**: All file paths are validated and sanitized
 - **Input Validation**: Commit messages, author info, and file paths are validated
 - **Size Limits**: 2 GB per repository, 500 MB per file
 - **Authentication**: All write operations require NIP-98 authentication
@@ -562,6 +565,8 @@ See `docs/SECURITY.md` and `docs/SECURITY_IMPLEMENTATION.md` for detailed inform
 - **Resource Limits**: Per-user repository count and disk quota limits (configurable)
 - **Rate Limiting**: Per-IP and per-user rate limiting (configurable)
 - **Audit Logging**: All security-relevant events are logged
+
+See `docs/SECURITY.md` and `docs/SECURITY_IMPLEMENTATION.md` for detailed information.
 
 ## License
 

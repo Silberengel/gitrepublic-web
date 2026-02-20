@@ -94,10 +94,14 @@ Your repository will be accessible at:
 https://{domain}/repos/{your-npub}/{repository-name}
 ```
 
-For git operations:
+For git operations, you can use any of these paths:
 ```
+https://{domain}/api/git/{your-npub}/{repository-name}.git  # Recommended
+https://{domain}/repos/{your-npub}/{repository-name}.git
 https://{domain}/{your-npub}/{repository-name}.git
 ```
+
+**Note**: The `/api/git/` path is recommended for best compatibility with commit signing hooks.
 
 ### Initial Setup
 
@@ -105,7 +109,7 @@ After creating your repository, you can:
 
 1. **Clone it locally**:
    ```bash
-   git clone https://{domain}/{your-npub}/{repository-name}.git
+   git clone https://{domain}/api/git/{your-npub}/{repository-name}.git
    cd {repository-name}
    ```
 
@@ -126,7 +130,7 @@ After creating your repository, you can:
 Anyone can clone public repositories without authentication:
 
 ```bash
-git clone https://{domain}/{owner-npub}/{repository-name}.git
+git clone https://{domain}/api/git/{owner-npub}/{repository-name}.git
 cd {repository-name}
 ```
 
@@ -136,25 +140,38 @@ Private repositories require authentication. You'll need to set up NIP-98 authen
 
 #### Setting Up NIP-98 Authentication
 
-1. **Install a git credential helper** (if not already installed):
+For command-line git operations, you need to install the [GitRepublic CLI](https://github.com/your-org/gitrepublic-cli) which provides:
+
+1. **Credential Helper**: Automatically generates NIP-98 authentication tokens for git operations
+2. **Commit Signing Hook**: Automatically signs commits for GitRepublic repositories
+
+**Quick Setup**:
+
+1. Install the CLI:
    ```bash
-   # For Linux/Mac
-   git config --global credential.helper store
+   npm install -g gitrepublic-cli
    ```
 
-2. **Configure git to use NIP-98**:
+2. Set your Nostr private key:
    ```bash
-   git config --global credential.https://{domain}.helper '!f() { echo "username=nostr"; echo "password=$(nostr-auth-token)"; }; f'
+   export NOSTRGIT_SECRET_KEY="nsec1..."
    ```
 
-   Note: You may need a custom credential helper that generates NIP-98 auth tokens. Check the GitRepublic documentation for your specific setup.
+3. Run the setup script:
+   ```bash
+   gitrepublic-setup
+   ```
+
+This automatically configures the credential helper and commit signing hook. See the README for complete setup instructions.
 
 3. **Clone the private repository**:
    ```bash
-   git clone https://{domain}/{owner-npub}/{repository-name}.git
+   git clone https://{domain}/api/git/{owner-npub}/{repository-name}.git
    ```
 
    When prompted, the credential helper will automatically generate and use a NIP-98 authentication token.
+
+**Note**: For command-line git operations, you'll need to install the [GitRepublic CLI](https://github.com/your-org/gitrepublic-cli) and set up the credential helper. See the README for complete setup instructions.
 
 ### Cloning from Multiple Remotes
 
@@ -262,7 +279,7 @@ Pull requests (PRs) allow you to propose changes to a repository. They're create
 
 1. **Fork and clone the repository**:
    ```bash
-   git clone https://{domain}/{owner-npub}/{repo}.git
+   git clone https://{domain}/api/git/{owner-npub}/{repo}.git
    cd {repo}
    ```
 
@@ -362,7 +379,7 @@ After forking:
 
 1. **Clone your fork**:
    ```bash
-   git clone https://{domain}/{your-npub}/{fork-name}.git
+   git clone https://{domain}/api/git/{your-npub}/{fork-name}.git
    ```
 
 2. **Make changes** in your fork
@@ -380,7 +397,7 @@ To keep your fork up to date with the original repository:
 
 1. **Add the original as a remote**:
    ```bash
-   git remote add upstream https://{domain}/{original-npub}/{original-repo}.git
+   git remote add upstream https://{domain}/api/git/{original-npub}/{original-repo}.git
    ```
 
 2. **Fetch and merge**:
@@ -450,13 +467,13 @@ Transfer repository ownership to another user using the transfer workflow:
 
 1. **Initiate Transfer**: On your repository page, click "Transfer Ownership"
 2. **Enter New Owner**: Provide the new owner's npub
-3. **Sign and Publish**: The transfer event is signed and published to Nostr relays
-4. **Save to Repository**: The transfer event is saved to your repository for offline papertrail
+3. **Sign and Publish**: The transfer event (kind 1641) is signed and published to Nostr relays
+4. **Save to Repository**: The transfer event is saved to `nostr/repo-events.jsonl` in your repository for offline papertrail
 5. **New Owner Notification**: The new owner will be notified when they log into GitRepublic web
-6. **Complete Transfer**: The new owner completes the transfer by publishing a new repository announcement
-7. **Verification**: The transfer is complete and the repository is verified
+6. **Complete Transfer**: The new owner completes the transfer by publishing a new repository announcement (kind 30617)
+7. **Verification**: The new announcement is saved to the repository, and the transfer is complete
 
-**Important**: Ownership transfers are permanent and create a chain of ownership events. The new owner will have full control. Both the transfer event and the new repository announcement are published to relays and saved to the repository for both online and offline papertrail.
+**Important**: Ownership transfers are permanent and create a chain of ownership events. The new owner will have full control. Both the transfer event and the new repository announcement are published to relays and saved to `nostr/repo-events.jsonl` in the repository for both online and offline papertrail.
 
 ---
 
@@ -603,10 +620,12 @@ GitRepublic implements NIP-34 for repository announcements. Key event types:
 - **Kind 30618**: Repository state
 - **Kind 1617**: Git patch
 - **Kind 1618**: Pull request
+- **Kind 1619**: Pull request update
 - **Kind 1621**: Issue
+- **Kind 1630-1633**: Status events (open, applied/merged, closed, draft)
 - **Kind 1641**: Ownership transfer
 
-See the [NIP-34 specification](/docs/nip34/spec) for full details.
+See the [NIP-34 documentation](/docs/nip34) for full details.
 
 ### GRASP Protocol Support
 
