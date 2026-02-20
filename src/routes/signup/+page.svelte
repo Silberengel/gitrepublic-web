@@ -100,16 +100,24 @@
               .filter(url => url && typeof url === 'string');
             
             const gitDomain = $page.data.gitDomain || 'localhost:6543';
-            const protocol = gitDomain.startsWith('localhost') ? 'http' : 'https';
-            const currentDomainUrl = `${protocol}://${gitDomain}/${originalOwnerParam}/${repoParam}.git`;
+            const isLocalhost = gitDomain.startsWith('localhost') || gitDomain.startsWith('127.0.0.1');
             
-            // Check if current domain URL already exists
-            const hasCurrentDomain = existingCloneUrls.some(url => url.includes(gitDomain));
-            
-            if (!hasCurrentDomain) {
-              cloneUrls = [...existingCloneUrls, currentDomainUrl];
+            // Only add clone URL if not localhost
+            if (!isLocalhost) {
+              const protocol = 'https';
+              const currentDomainUrl = `${protocol}://${gitDomain}/${originalOwnerParam}/${repoParam}.git`;
+              
+              // Check if current domain URL already exists
+              const hasCurrentDomain = existingCloneUrls.some(url => url.includes(gitDomain));
+              
+              if (!hasCurrentDomain) {
+                cloneUrls = [...existingCloneUrls, currentDomainUrl];
+              } else {
+                cloneUrls = existingCloneUrls.length > 0 ? existingCloneUrls : [currentDomainUrl];
+              }
             } else {
-              cloneUrls = existingCloneUrls.length > 0 ? existingCloneUrls : [currentDomainUrl];
+              // Localhost: just use existing clone URLs
+              cloneUrls = existingCloneUrls.length > 0 ? existingCloneUrls : [''];
             }
             
             // Pre-fill other fields
@@ -137,6 +145,122 @@
               relays = relayTags.flatMap(t => t.slice(1)).filter(r => r && typeof r === 'string');
             }
             
+            // Extract blossoms
+            const blossomsTags = event.tags.filter(t => t[0] === 'blossoms');
+            if (blossomsTags.length > 0) {
+              blossoms = blossomsTags.flatMap(t => t.slice(1)).filter(b => b && typeof b === 'string');
+            }
+            
+            // Extract tags/labels (excluding 'private' and 'fork')
+            const tagsList: string[] = [];
+            for (const tag of event.tags) {
+              if (tag[0] === 't' && tag[1] && tag[1] !== 'private' && tag[1] !== 'fork') {
+                tagsList.push(tag[1]);
+              }
+            }
+            tags = tagsList.length > 0 ? tagsList : [''];
+            
+            // Extract documentation - handle relay hints correctly
+            const docsList: string[] = [];
+            const isRelayUrl = (value: string): boolean => {
+              return typeof value === 'string' && (value.startsWith('wss://') || value.startsWith('ws://'));
+            };
+            
+            const getDocFormat = (value: string): string | null => {
+              if (value.startsWith('naddr1')) return 'naddr';
+              if (/^\d+:[0-9a-f]{64}:[a-zA-Z0-9_-]+$/.test(value)) return 'kind:pubkey:identifier';
+              return null;
+            };
+            
+            for (const tag of event.tags) {
+              if (tag[0] === 'documentation') {
+                let i = 1;
+                
+                while (i < tag.length) {
+                  const value = tag[i];
+                  if (!value || typeof value !== 'string' || !value.trim()) {
+                    i++;
+                    continue;
+                  }
+                  
+                  const trimmed = value.trim();
+                  
+                  if (isRelayUrl(trimmed)) {
+                    i++;
+                    continue;
+                  }
+                  
+                  const format = getDocFormat(trimmed);
+                  if (!format) {
+                    i++;
+                    continue;
+                  }
+                  
+                  const nextValue = i + 1 < tag.length ? tag[i + 1] : null;
+                  if (nextValue && typeof nextValue === 'string' && isRelayUrl(nextValue.trim())) {
+                    docsList.push(trimmed);
+                    i += 2;
+                    continue;
+                  }
+                  
+                  const sameFormatEntries: string[] = [trimmed];
+                  let j = i + 1;
+                  while (j < tag.length) {
+                    const nextVal = tag[j];
+                    if (!nextVal || typeof nextVal !== 'string' || !nextVal.trim()) {
+                      j++;
+                      continue;
+                    }
+                    
+                    const nextTrimmed = nextVal.trim();
+                    
+                    if (isRelayUrl(nextTrimmed)) {
+                      break;
+                    }
+                    
+                    const nextFormat = getDocFormat(nextTrimmed);
+                    if (nextFormat === format) {
+                      sameFormatEntries.push(nextTrimmed);
+                      j++;
+                    } else {
+                      break;
+                    }
+                  }
+                  
+                  docsList.push(...sameFormatEntries);
+                  i = j;
+                }
+              }
+            }
+            documentation = docsList.length > 0 ? docsList : [''];
+            
+            // Extract alt tag
+            const altTag = event.tags.find(t => t[0] === 'alt');
+            alt = altTag?.[1] || '';
+            
+            // Extract fork information
+            const aTag = event.tags.find(t => t[0] === 'a' && t[1]?.startsWith('30617:'));
+            if (aTag?.[1]) {
+              forkOriginalRepo = aTag[1];
+              isFork = true;
+            } else {
+              isFork = event.tags.some(t => t[0] === 't' && t[1] === 'fork');
+              if (isFork) {
+                const pTag = event.tags.find(t => t[0] === 'p' && t[1] && t[1] !== event.pubkey);
+                const dTag = event.tags.find(t => t[0] === 'd')?.[1];
+                if (pTag?.[1] && dTag) {
+                  forkOriginalRepo = `${KIND.REPO_ANNOUNCEMENT}:${pTag[1]}:${dTag}`;
+                }
+              }
+            }
+            
+            // Extract earliest unique commit
+            const rTag = event.tags.find(t => t[0] === 'r' && t[2] === 'euc');
+            earliestCommit = rTag?.[1] || '';
+            
+            // Check if client tag exists
+            addClientTag = !event.tags.some(t => t[0] === 'client' && t[1] === 'gitrepublic-web');
+            
             const isPrivateTag = event.tags.find(t => 
               (t[0] === 'private' && t[1] === 'true') || 
               (t[0] === 't' && t[1] === 'private')
@@ -146,11 +270,17 @@
             // Set existing repo ref for updating
             existingRepoRef = event.id;
           } else {
-            // No announcement found, just set the clone URL with current domain
+            // No announcement found
             repoName = repoParam;
             const gitDomain = $page.data.gitDomain || 'localhost:6543';
-            const protocol = gitDomain.startsWith('localhost') ? 'http' : 'https';
-            cloneUrls = [`${protocol}://${gitDomain}/${originalOwnerParam}/${repoParam}.git`];
+            const isLocalhost = gitDomain.startsWith('localhost') || gitDomain.startsWith('127.0.0.1');
+            
+            // Only add clone URL if not localhost
+            if (!isLocalhost) {
+              cloneUrls = [`https://${gitDomain}/${originalOwnerParam}/${repoParam}.git`];
+            } else {
+              cloneUrls = [''];
+            }
           }
         }
       } catch (err) {
@@ -158,8 +288,14 @@
         // Still set basic info
         repoName = repoParam;
         const gitDomain = $page.data.gitDomain || 'localhost:6543';
-        const protocol = gitDomain.startsWith('localhost') ? 'http' : 'https';
-        cloneUrls = [`${protocol}://${originalOwnerParam}/${repoParam}.git`];
+        const isLocalhost = gitDomain.startsWith('localhost') || gitDomain.startsWith('127.0.0.1');
+        
+        // Only add clone URL if not localhost
+        if (!isLocalhost) {
+          cloneUrls = [`https://${gitDomain}/${originalOwnerParam}/${repoParam}.git`];
+        } else {
+          cloneUrls = [''];
+        }
       }
     } else if (npubParam && repoParam) {
       // Pre-fill repo name
@@ -193,16 +329,24 @@
               .filter(url => url && typeof url === 'string');
             
             const gitDomain = $page.data.gitDomain || 'localhost:6543';
-            const protocol = gitDomain.startsWith('localhost') ? 'http' : 'https';
-            const currentDomainUrl = `${protocol}://${gitDomain}/${npubParam}/${repoParam}.git`;
+            const isLocalhost = gitDomain.startsWith('localhost') || gitDomain.startsWith('127.0.0.1');
             
-            // Check if current domain URL already exists
-            const hasCurrentDomain = existingCloneUrls.some(url => url.includes(gitDomain));
-            
-            if (!hasCurrentDomain) {
-              cloneUrls = [...existingCloneUrls, currentDomainUrl];
+            // Only add clone URL if not localhost
+            if (!isLocalhost) {
+              const protocol = 'https';
+              const currentDomainUrl = `${protocol}://${gitDomain}/${npubParam}/${repoParam}.git`;
+              
+              // Check if current domain URL already exists
+              const hasCurrentDomain = existingCloneUrls.some(url => url.includes(gitDomain));
+              
+              if (!hasCurrentDomain) {
+                cloneUrls = [...existingCloneUrls, currentDomainUrl];
+              } else {
+                cloneUrls = existingCloneUrls.length > 0 ? existingCloneUrls : [currentDomainUrl];
+              }
             } else {
-              cloneUrls = existingCloneUrls.length > 0 ? existingCloneUrls : [currentDomainUrl];
+              // Localhost: just use existing clone URLs
+              cloneUrls = existingCloneUrls.length > 0 ? existingCloneUrls : [''];
             }
             
             // Pre-fill other fields
@@ -230,6 +374,122 @@
               relays = relayTags.flatMap(t => t.slice(1)).filter(r => r && typeof r === 'string');
             }
             
+            // Extract blossoms
+            const blossomsTags = event.tags.filter(t => t[0] === 'blossoms');
+            if (blossomsTags.length > 0) {
+              blossoms = blossomsTags.flatMap(t => t.slice(1)).filter(b => b && typeof b === 'string');
+            }
+            
+            // Extract tags/labels (excluding 'private' and 'fork')
+            const tagsList: string[] = [];
+            for (const tag of event.tags) {
+              if (tag[0] === 't' && tag[1] && tag[1] !== 'private' && tag[1] !== 'fork') {
+                tagsList.push(tag[1]);
+              }
+            }
+            tags = tagsList.length > 0 ? tagsList : [''];
+            
+            // Extract documentation - handle relay hints correctly
+            const docsList: string[] = [];
+            const isRelayUrl = (value: string): boolean => {
+              return typeof value === 'string' && (value.startsWith('wss://') || value.startsWith('ws://'));
+            };
+            
+            const getDocFormat = (value: string): string | null => {
+              if (value.startsWith('naddr1')) return 'naddr';
+              if (/^\d+:[0-9a-f]{64}:[a-zA-Z0-9_-]+$/.test(value)) return 'kind:pubkey:identifier';
+              return null;
+            };
+            
+            for (const tag of event.tags) {
+              if (tag[0] === 'documentation') {
+                let i = 1;
+                
+                while (i < tag.length) {
+                  const value = tag[i];
+                  if (!value || typeof value !== 'string' || !value.trim()) {
+                    i++;
+                    continue;
+                  }
+                  
+                  const trimmed = value.trim();
+                  
+                  if (isRelayUrl(trimmed)) {
+                    i++;
+                    continue;
+                  }
+                  
+                  const format = getDocFormat(trimmed);
+                  if (!format) {
+                    i++;
+                    continue;
+                  }
+                  
+                  const nextValue = i + 1 < tag.length ? tag[i + 1] : null;
+                  if (nextValue && typeof nextValue === 'string' && isRelayUrl(nextValue.trim())) {
+                    docsList.push(trimmed);
+                    i += 2;
+                    continue;
+                  }
+                  
+                  const sameFormatEntries: string[] = [trimmed];
+                  let j = i + 1;
+                  while (j < tag.length) {
+                    const nextVal = tag[j];
+                    if (!nextVal || typeof nextVal !== 'string' || !nextVal.trim()) {
+                      j++;
+                      continue;
+                    }
+                    
+                    const nextTrimmed = nextVal.trim();
+                    
+                    if (isRelayUrl(nextTrimmed)) {
+                      break;
+                    }
+                    
+                    const nextFormat = getDocFormat(nextTrimmed);
+                    if (nextFormat === format) {
+                      sameFormatEntries.push(nextTrimmed);
+                      j++;
+                    } else {
+                      break;
+                    }
+                  }
+                  
+                  docsList.push(...sameFormatEntries);
+                  i = j;
+                }
+              }
+            }
+            documentation = docsList.length > 0 ? docsList : [''];
+            
+            // Extract alt tag
+            const altTag = event.tags.find(t => t[0] === 'alt');
+            alt = altTag?.[1] || '';
+            
+            // Extract fork information
+            const aTag = event.tags.find(t => t[0] === 'a' && t[1]?.startsWith('30617:'));
+            if (aTag?.[1]) {
+              forkOriginalRepo = aTag[1];
+              isFork = true;
+            } else {
+              isFork = event.tags.some(t => t[0] === 't' && t[1] === 'fork');
+              if (isFork) {
+                const pTag = event.tags.find(t => t[0] === 'p' && t[1] && t[1] !== event.pubkey);
+                const dTag = event.tags.find(t => t[0] === 'd')?.[1];
+                if (pTag?.[1] && dTag) {
+                  forkOriginalRepo = `${KIND.REPO_ANNOUNCEMENT}:${pTag[1]}:${dTag}`;
+                }
+              }
+            }
+            
+            // Extract earliest unique commit
+            const rTag = event.tags.find(t => t[0] === 'r' && t[2] === 'euc');
+            earliestCommit = rTag?.[1] || '';
+            
+            // Check if client tag exists
+            addClientTag = !event.tags.some(t => t[0] === 'client' && t[1] === 'gitrepublic-web');
+            
             const isPrivateTag = event.tags.find(t => 
               (t[0] === 'private' && t[1] === 'true') || 
               (t[0] === 't' && t[1] === 'private')
@@ -239,18 +499,30 @@
             // Set existing repo ref for updating
             existingRepoRef = event.id;
           } else {
-            // No announcement found, just set the clone URL with current domain
+            // No announcement found
             const gitDomain = $page.data.gitDomain || 'localhost:6543';
-            const protocol = gitDomain.startsWith('localhost') ? 'http' : 'https';
-            cloneUrls = [`${protocol}://${gitDomain}/${npubParam}/${repoParam}.git`];
+            const isLocalhost = gitDomain.startsWith('localhost') || gitDomain.startsWith('127.0.0.1');
+            
+            // Only add clone URL if not localhost
+            if (!isLocalhost) {
+              cloneUrls = [`https://${gitDomain}/${npubParam}/${repoParam}.git`];
+            } else {
+              cloneUrls = [''];
+            }
           }
         }
       } catch (err) {
         console.warn('Failed to pre-fill form from query params:', err);
-        // Still set basic clone URL
+        // Still set basic info
         const gitDomain = $page.data.gitDomain || 'localhost:6543';
-        const protocol = gitDomain.startsWith('localhost') ? 'http' : 'https';
-        cloneUrls = [`${protocol}://${gitDomain}/${npubParam}/${repoParam}.git`];
+        const isLocalhost = gitDomain.startsWith('localhost') || gitDomain.startsWith('127.0.0.1');
+        
+        // Only add clone URL if not localhost
+        if (!isLocalhost) {
+          cloneUrls = [`https://${gitDomain}/${npubParam}/${repoParam}.git`];
+        } else {
+          cloneUrls = [''];
+        }
       }
     }
   });
@@ -536,12 +808,30 @@
   // Validation functions
   function validateCloneUrl(url: string): string | null {
     if (!url.trim()) return null; // Empty is OK
-    if (!isValidUrl(url.trim())) {
+    const trimmed = url.trim();
+    
+    // Allow Tor .onion URLs (they use http:// not https://)
+    if (trimmed.includes('.onion')) {
+      if (!trimmed.startsWith('http://')) {
+        return 'Tor .onion URLs must use http:// (not https://)';
+      }
+      // .onion URLs are valid if they contain a path (they don't need to end with .git)
+      if (!trimmed.includes('/')) {
+        return 'Tor .onion URL must include a path';
+      }
+      return null;
+    }
+    
+    // Validate regular URLs
+    if (!isValidUrl(trimmed)) {
       return 'Invalid URL format. Must start with http:// or https://';
     }
-    if (!url.trim().endsWith('.git') && !url.trim().includes('/')) {
+    
+    // For regular URLs, check if it ends with .git or contains a path
+    if (!trimmed.endsWith('.git') && !trimmed.includes('/')) {
       return 'Clone URL should end with .git or be a valid repository URL';
     }
+    
     return null;
   }
 
@@ -900,7 +1190,8 @@
 
   function selectNpubResult(result: { pubkey: string; npub: string; name?: string; about?: string; picture?: string }, fieldName: string, index?: number) {
     if (fieldName === 'maintainers' && index !== undefined) {
-      updateMaintainer(index, result.npub);
+      // Store hex pubkey instead of npub for maintainers
+      updateMaintainer(index, result.pubkey);
     }
     const lookupKey = index !== undefined ? `npub-${fieldName}-${index}` : `npub-${fieldName}`;
     lookupResults[lookupKey] = null;
@@ -1189,6 +1480,22 @@
       return;
     }
 
+    // Validate repo name format (alphanumeric, hyphens, underscores, spaces - will be normalized to d-tag)
+    const repoNameTrimmed = repoName.trim();
+    if (repoNameTrimmed.length === 0) {
+      error = 'Repository name cannot be empty.';
+      return;
+    }
+    if (repoNameTrimmed.length > 100) {
+      error = 'Repository name is too long (maximum 100 characters).';
+      return;
+    }
+    // Check for invalid characters that can't be normalized
+    if (!/^[\w\s-]+$/.test(repoNameTrimmed)) {
+      error = 'Repository name contains invalid characters. Use only letters, numbers, spaces, hyphens, and underscores.';
+      return;
+    }
+
     // Validate all fields
     const validationErrors: string[] = [];
 
@@ -1299,59 +1606,307 @@
         return;
       }
 
-      // Build clone URLs - NEVER include localhost, only include public domain or Tor .onion
-      const allCloneUrls: string[] = [];
+      // ============================================
+      // COMPREHENSIVE VALIDATION, NORMALIZATION, AND DEDUPLICATION
+      // ============================================
+      
+      // Normalize and deduplicate clone URLs
+      const normalizedCloneUrls: string[] = [];
+      const seenCloneUrls = new Set<string>();
       
       // Add our domain URL only if it's NOT localhost (explicitly check the URL)
       if (!isLocalhost && !gitUrl.includes('localhost') && !gitUrl.includes('127.0.0.1')) {
-        allCloneUrls.push(gitUrl);
+        const normalized = gitUrl.trim().toLowerCase();
+        if (!seenCloneUrls.has(normalized)) {
+          normalizedCloneUrls.push(gitUrl); // Keep original case for display
+          seenCloneUrls.add(normalized);
+        }
       }
       
-      // Add Tor .onion URL if available (always useful, even with localhost)
+      // Add Tor .onion URL if available (skip validation - it's system-generated and already valid)
       if (torOnionUrl) {
-        allCloneUrls.push(torOnionUrl);
+        const normalized = torOnionUrl.trim().toLowerCase();
+        if (!seenCloneUrls.has(normalized)) {
+          normalizedCloneUrls.push(torOnionUrl);
+          seenCloneUrls.add(normalized);
+        }
       }
       
-      // Add user-provided clone URLs
-      allCloneUrls.push(...userCloneUrls);
+      // Add and deduplicate user-provided clone URLs
+      for (const url of userCloneUrls) {
+        const trimmed = url.trim();
+        if (!trimmed) continue;
+        
+        // Skip localhost URLs in user input (they should have been filtered, but double-check)
+        if (trimmed.includes('localhost') || trimmed.includes('127.0.0.1')) {
+          continue;
+        }
+        
+        // Normalize for comparison (lowercase, remove trailing slashes)
+        // For .onion URLs, be careful with normalization to preserve the .onion domain
+        const normalized = trimmed.toLowerCase().replace(/\/+$/, '');
+        if (!seenCloneUrls.has(normalized)) {
+          // Validate format
+          const urlError = validateCloneUrl(trimmed);
+          if (urlError) {
+            error = `Invalid clone URL: ${trimmed}\n${urlError}`;
+            loading = false;
+            return;
+          }
+          normalizedCloneUrls.push(trimmed);
+          seenCloneUrls.add(normalized);
+        }
+      }
+      
+      // Final validation: Ensure we have at least one clone URL
+      if (normalizedCloneUrls.length === 0) {
+        error = 'At least one clone URL is required.';
+        loading = false;
+        return;
+      }
+      
+      // Final validation for localhost: If we only have localhost URLs, that's an error
+      const hasNonLocalhost = normalizedCloneUrls.some(url => 
+        !url.includes('localhost') && !url.includes('127.0.0.1')
+      );
+      if (isLocalhost && !hasNonLocalhost && !torOnionUrl) {
+        error = 'Cannot publish with only localhost URLs. You need either:\n' +
+          '• A Tor .onion address (configure Tor hidden service and set TOR_ONION_ADDRESS)\n' +
+          '• At least one other public clone URL (e.g., GitHub, GitLab, or another GitRepublic instance)';
+        loading = false;
+        return;
+      }
+      
+      // Normalize and deduplicate web URLs
+      const normalizedWebUrls: string[] = [];
+      const seenWebUrls = new Set<string>();
+      for (const url of webUrls) {
+        const trimmed = url.trim();
+        if (!trimmed) continue;
+        
+        // Normalize for comparison
+        const normalized = trimmed.toLowerCase().replace(/\/+$/, '');
+        if (!seenWebUrls.has(normalized)) {
+          // Validate format
+          const urlError = validateWebUrl(trimmed);
+          if (urlError) {
+            error = `Invalid web URL: ${trimmed}\n${urlError}`;
+            loading = false;
+            return;
+          }
+          normalizedWebUrls.push(trimmed);
+          seenWebUrls.add(normalized);
+        }
+      }
 
-      // Build web URLs
-      const allWebUrls = webUrls.filter(url => url.trim());
+      // Normalize, convert, and deduplicate maintainers (convert npubs to hex pubkeys)
+      const normalizedMaintainers: string[] = [];
+      const seenMaintainers = new Set<string>();
+      for (const maintainer of maintainers) {
+        const trimmed = maintainer.trim();
+        if (!trimmed) continue;
+        
+        let hexPubkey: string;
+        // Convert npub to hex if needed
+        if (trimmed.startsWith('npub')) {
+          try {
+            const decoded = nip19.decode(trimmed);
+            if (decoded.type === 'npub') {
+              hexPubkey = decoded.data as string;
+            } else {
+              error = `Invalid maintainer format: ${trimmed}`;
+              loading = false;
+              return;
+            }
+          } catch {
+            error = `Invalid maintainer npub format: ${trimmed}`;
+            loading = false;
+            return;
+          }
+        } else if (trimmed.length === 64 && /^[0-9a-f]+$/i.test(trimmed)) {
+          hexPubkey = trimmed.toLowerCase();
+        } else {
+          error = `Invalid maintainer format: ${trimmed}. Must be npub1... or 64-character hex pubkey`;
+          loading = false;
+          return;
+        }
+        
+        // Deduplicate by hex pubkey
+        if (!seenMaintainers.has(hexPubkey)) {
+          normalizedMaintainers.push(hexPubkey);
+          seenMaintainers.add(hexPubkey);
+        }
+      }
 
-      // Build maintainers list
-      const allMaintainers = maintainers.filter(m => m.trim());
+      // Normalize and deduplicate relays
+      const normalizedRelays: string[] = [];
+      const seenRelays = new Set<string>();
+      
+      // Add user relays first
+      for (const relay of relays) {
+        const trimmed = relay.trim().toLowerCase();
+        if (!trimmed) continue;
+        
+        // Validate relay URL format
+        if (!trimmed.startsWith('ws://') && !trimmed.startsWith('wss://')) {
+          error = `Invalid relay URL format: ${relay}. Must start with ws:// or wss://`;
+          loading = false;
+          return;
+        }
+        
+        if (!seenRelays.has(trimmed)) {
+          normalizedRelays.push(relay.trim()); // Keep original case
+          seenRelays.add(trimmed);
+        }
+      }
+      
+      // Add default relays that aren't already included
+      for (const defaultRelay of DEFAULT_NOSTR_RELAYS) {
+        const normalized = defaultRelay.toLowerCase();
+        if (!seenRelays.has(normalized)) {
+          normalizedRelays.push(defaultRelay);
+          seenRelays.add(normalized);
+        }
+      }
 
-      // Build relays list - combine user relays with default relays
-      const allRelays = [
-        ...relays.filter(r => r.trim()),
-        ...DEFAULT_NOSTR_RELAYS.filter(r => !relays.includes(r))
-      ];
+      // Normalize and deduplicate blossoms
+      const normalizedBlossoms: string[] = [];
+      const seenBlossoms = new Set<string>();
+      for (const blossom of blossoms) {
+        const trimmed = blossom.trim();
+        if (!trimmed) continue;
+        
+        // Validate blossom format (should be a URL or identifier)
+        if (!isValidUrl(trimmed) && !/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
+          error = `Invalid blossom format: ${trimmed}. Must be a valid URL or identifier`;
+          loading = false;
+          return;
+        }
+        
+        const normalized = trimmed.toLowerCase();
+        if (!seenBlossoms.has(normalized)) {
+          normalizedBlossoms.push(trimmed); // Keep original case
+          seenBlossoms.add(normalized);
+        }
+      }
 
-      // Build blossoms list
-      const allBlossoms = blossoms.filter(b => b.trim());
+      // Normalize and deduplicate documentation
+      const normalizedDocumentation: string[] = [];
+      const seenDocumentation = new Set<string>();
+      for (const doc of documentation) {
+        const trimmed = doc.trim();
+        if (!trimmed) continue;
+        
+        // Validate format
+        const docError = validateDocumentation(trimmed);
+        if (docError) {
+          error = `Invalid documentation format: ${trimmed}\n${docError}`;
+          loading = false;
+          return;
+        }
+        
+        // Normalize for comparison
+        const normalized = trimmed.toLowerCase();
+        if (!seenDocumentation.has(normalized)) {
+          normalizedDocumentation.push(trimmed); // Keep original case
+          seenDocumentation.add(normalized);
+        }
+      }
 
-      // Build documentation list
-      const allDocumentation = documentation.filter(d => d.trim());
+      // Normalize and deduplicate tags/labels (excluding 'private' and 'fork')
+      const normalizedTags: string[] = [];
+      const seenTags = new Set<string>();
+      for (const tag of tags) {
+        const trimmed = tag.trim().toLowerCase();
+        if (!trimmed) continue;
+        if (trimmed === 'private' || trimmed === 'fork') continue; // Handled separately
+        
+        // Validate tag format (alphanumeric, hyphens, underscores)
+        if (!/^[a-z0-9_-]+$/.test(trimmed)) {
+          error = `Invalid tag format: ${tag}. Tags can only contain lowercase letters, numbers, hyphens, and underscores`;
+          loading = false;
+          return;
+        }
+        
+        if (!seenTags.has(trimmed)) {
+          normalizedTags.push(trimmed);
+          seenTags.add(trimmed);
+        }
+      }
 
-      // Build tags/labels (excluding 'private' and 'fork' which are handled separately)
-      const allTags = tags.filter(t => t.trim() && t !== 'private' && t !== 'fork');
+      // Normalize description, alt, and other text fields
+      const normalizedDescription = description.trim();
+      const normalizedAlt = alt.trim();
+      const normalizedImageUrl = imageUrl.trim();
+      const normalizedBannerUrl = bannerUrl.trim();
+      const normalizedEarliestCommit = earliestCommit.trim();
+
+      // Validate description length
+      if (normalizedDescription.length > 1000) {
+        error = 'Description is too long (maximum 1000 characters).';
+        loading = false;
+        return;
+      }
+
+      // Validate alt text length
+      if (normalizedAlt.length > 500) {
+        error = 'Alt text is too long (maximum 500 characters).';
+        loading = false;
+        return;
+      }
+
+      // Validate image URLs if provided
+      if (normalizedImageUrl) {
+        const imageError = validateImageUrl(normalizedImageUrl);
+        if (imageError) {
+          error = `Invalid image URL: ${imageError}`;
+          loading = false;
+          return;
+        }
+      }
+
+      if (normalizedBannerUrl) {
+        const bannerError = validateImageUrl(normalizedBannerUrl);
+        if (bannerError) {
+          error = `Invalid banner URL: ${bannerError}`;
+          loading = false;
+          return;
+        }
+      }
+
+      // Validate earliest commit format if provided
+      if (normalizedEarliestCommit && !/^[0-9a-f]{40}$/i.test(normalizedEarliestCommit)) {
+        error = `Invalid earliest commit format: ${normalizedEarliestCommit}. Must be a 40-character hex SHA-1 hash`;
+        loading = false;
+        return;
+      }
+
+      // Use normalized and deduplicated data
+      const allCloneUrls = normalizedCloneUrls;
+      const allWebUrls = normalizedWebUrls;
+      const allMaintainers = normalizedMaintainers;
+      const allRelays = normalizedRelays;
+      const allBlossoms = normalizedBlossoms;
+      const allDocumentation = normalizedDocumentation;
+      const allTags = normalizedTags;
 
       // Build event tags - use single tag with multiple values (NIP-34 format)
+      // All data has been normalized, deduplicated, and validated above
       const eventTags: string[][] = [
         ['d', dTag],
-        ['name', repoName],
-        ...(description ? [['description', description]] : []),
+        ['name', repoName.trim()],
+        ...(normalizedDescription ? [['description', normalizedDescription]] : []),
         ...(allCloneUrls.length > 0 ? [['clone', ...allCloneUrls]] : []), // Single tag with all clone URLs
         ...(allWebUrls.length > 0 ? [['web', ...allWebUrls]] : []), // Single tag with all web URLs
-        ...(allMaintainers.length > 0 ? [['maintainers', ...allMaintainers]] : []), // Single tag with all maintainers
+        ...(allMaintainers.length > 0 ? [['maintainers', ...allMaintainers]] : []), // Single tag with all maintainers (hex pubkeys)
         ...(allRelays.length > 0 ? [['relays', ...allRelays]] : []), // Single tag with all relays
         ...(allBlossoms.length > 0 ? [['blossoms', ...allBlossoms]] : []), // Single tag with all blossoms
         ...allDocumentation.map(d => ['documentation', d]), // Documentation can have relay hints, so keep separate
         ...allTags.map(t => ['t', t]),
-        ...(imageUrl.trim() ? [['image', imageUrl.trim()]] : []),
-        ...(bannerUrl.trim() ? [['banner', bannerUrl.trim()]] : []),
-        ...(alt.trim() ? [['alt', alt.trim()]] : []),
-        ...(earliestCommit.trim() ? [['r', earliestCommit.trim(), 'euc']] : [])
+        ...(normalizedImageUrl ? [['image', normalizedImageUrl]] : []),
+        ...(normalizedBannerUrl ? [['banner', normalizedBannerUrl]] : []),
+        ...(normalizedAlt ? [['alt', normalizedAlt]] : []),
+        ...(normalizedEarliestCommit ? [['r', normalizedEarliestCommit, 'euc']] : [])
       ];
 
       // Add fork tags if this is a fork
@@ -1458,10 +2013,18 @@
         eventTags.push(['private', 'true']);
       }
 
-      // Add client tag if enabled
+      // Remove any existing client tags (from other clients) and ensure only our client tag exists
+      // Filter out any client tags
+      const filteredEventTags = eventTags.filter(tag => tag[0] !== 'client');
+      
+      // Add our client tag if enabled (ensuring only one client tag exists)
       if (addClientTag) {
-        eventTags.push(['client', 'gitrepublic-web']);
+        filteredEventTags.push(['client', 'gitrepublic-web']);
       }
+      
+      // Replace eventTags with filtered version
+      eventTags.length = 0;
+      eventTags.push(...filteredEventTags);
 
       // We'll generate the announcement file content after signing (it's just the full event JSON)
 
@@ -1614,7 +2177,7 @@
     {#if !hasUnlimitedAccess($userStore.userLevel)}
       <div class="warning">
         <p>Only users with unlimited access can create or register repositories.</p>
-        <p>Please log in with an account that has write access to Nostr relays.</p>
+        <p>Please log in with an account that has write access to this server's associated Nostr relays.</p>
         <button onclick={() => goto('/')} class="button-primary">Go to Home</button>
       </div>
     {:else if !nip07Available}
