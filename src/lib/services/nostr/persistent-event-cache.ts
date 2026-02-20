@@ -139,6 +139,12 @@ function eventMatchesAnyFilter(event: NostrEvent, filters: NostrFilter[]): boole
   return filters.some(filter => eventMatchesFilter(event, filter));
 }
 
+interface InMemoryCacheEntry {
+  events: NostrEvent[];
+  timestamp: number;
+  ttl: number;
+}
+
 export class PersistentEventCache {
   private db: IDBDatabase | null = null;
   private initPromise: Promise<void> | null = null;
@@ -147,6 +153,12 @@ export class PersistentEventCache {
   private maxCacheAge: number = 7 * 24 * 60 * 60 * 1000; // 7 days max age
   private writeQueue: Array<() => Promise<void>> = [];
   private isProcessingQueue: boolean = false;
+  private queueProcessingPromise: Promise<void> | null = null;
+  
+  // In-memory read-through cache for fast synchronous access
+  // This eliminates the need for a separate in-memory cache
+  private memoryCache: Map<string, InMemoryCacheEntry> = new Map();
+  private maxMemoryCacheSize: number = 1000; // Limit memory cache size
 
   constructor() {
     this.init();
@@ -208,8 +220,24 @@ export class PersistentEventCache {
 
   /**
    * Get events from cache that match the filters
+   * Uses in-memory read-through cache for fast synchronous access
    */
   async get(filters: NostrFilter[]): Promise<NostrEvent[] | null> {
+    const filterKey = generateMultiFilterKey(filters);
+    const now = Date.now();
+    
+    // 1. Check in-memory cache first (synchronous, fast)
+    const memoryEntry = this.memoryCache.get(filterKey);
+    if (memoryEntry) {
+      const age = now - memoryEntry.timestamp;
+      if (age < memoryEntry.ttl) {
+        // Cache hit - return immediately
+        return memoryEntry.events;
+      }
+      // Expired in memory, but might still be in IndexedDB - continue to check
+    }
+    
+    // 2. Check IndexedDB (async, slower but persistent)
     await this.init();
     
     if (!this.db) {
@@ -217,8 +245,6 @@ export class PersistentEventCache {
     }
 
     try {
-      const filterKey = generateMultiFilterKey(filters);
-      
       // Check filter cache first
       const filterEntry = await this.getFilterEntry(filterKey);
       if (!filterEntry) {
@@ -226,7 +252,6 @@ export class PersistentEventCache {
       }
 
       // Check if filter cache is expired
-      const now = Date.now();
       if (now - filterEntry.cachedAt > filterEntry.ttl) {
         // Expired, but we can still return events if they exist
         // Don't delete, just mark as stale
@@ -274,11 +299,62 @@ export class PersistentEventCache {
       // Sort by created_at descending
       result.sort((a, b) => b.created_at - a.created_at);
 
-      return result.length > 0 ? result : null;
+      // Update in-memory cache with result from IndexedDB
+      if (result.length > 0) {
+        const ttl = filterEntry.ttl;
+        this.updateMemoryCache(filterKey, result, ttl);
+        return result;
+      }
+
+      return null;
     } catch (error) {
       logger.error({ error, filters }, 'Error reading from event cache');
       return null;
     }
+  }
+  
+  /**
+   * Update in-memory cache and enforce size limit
+   */
+  private updateMemoryCache(filterKey: string, events: NostrEvent[], ttl: number): void {
+    // Enforce size limit - remove oldest entries if needed
+    if (this.memoryCache.size >= this.maxMemoryCacheSize) {
+      // Remove oldest entry (simple FIFO - could be improved with LRU)
+      const firstKey = this.memoryCache.keys().next().value;
+      if (firstKey) {
+        this.memoryCache.delete(firstKey);
+      }
+    }
+    
+    this.memoryCache.set(filterKey, {
+      events,
+      timestamp: Date.now(),
+      ttl
+    });
+  }
+  
+  /**
+   * Get events synchronously from in-memory cache only (for fast access)
+   * Returns null if not in memory cache - use async get() for full cache access
+   */
+  getSync(filters: NostrFilter[]): NostrEvent[] | null {
+    const filterKey = generateMultiFilterKey(filters);
+    const memoryEntry = this.memoryCache.get(filterKey);
+    
+    if (!memoryEntry) {
+      return null;
+    }
+    
+    const now = Date.now();
+    const age = now - memoryEntry.timestamp;
+    
+    if (age < memoryEntry.ttl) {
+      return memoryEntry.events;
+    }
+    
+    // Expired
+    this.memoryCache.delete(filterKey);
+    return null;
   }
 
   /**
@@ -302,27 +378,42 @@ export class PersistentEventCache {
 
   /**
    * Process write queue to prevent concurrent IndexedDB transactions
+   * Ensures only one processor runs at a time by tracking a promise
    */
   private async processWriteQueue(): Promise<void> {
-    if (this.isProcessingQueue || this.writeQueue.length === 0) {
+    // If already processing, wait for the current processor to finish
+    if (this.queueProcessingPromise) {
+      return this.queueProcessingPromise;
+    }
+
+    // If queue is empty, nothing to do
+    if (this.writeQueue.length === 0) {
       return;
     }
 
-    this.isProcessingQueue = true;
+    // Create a promise that processes the queue
+    this.queueProcessingPromise = (async () => {
+      this.isProcessingQueue = true;
 
-    while (this.writeQueue.length > 0) {
-      const writeFn = this.writeQueue.shift();
-      if (writeFn) {
-        try {
-          await writeFn();
-        } catch (error) {
-          // Log but continue processing queue
-          logger.debug({ error }, 'Error in write queue item');
+      try {
+        while (this.writeQueue.length > 0) {
+          const writeFn = this.writeQueue.shift();
+          if (writeFn) {
+            try {
+              await writeFn();
+            } catch (error) {
+              // Log but continue processing queue
+              logger.debug({ error }, 'Error in write queue item');
+            }
+          }
         }
+      } finally {
+        this.isProcessingQueue = false;
+        this.queueProcessingPromise = null;
       }
-    }
+    })();
 
-    this.isProcessingQueue = false;
+    return this.queueProcessingPromise;
   }
 
   /**
@@ -354,7 +445,8 @@ export class PersistentEventCache {
         }
       });
 
-      // Process queue asynchronously
+      // Process queue asynchronously (don't await, but track the promise)
+      // Multiple calls will share the same processing promise
       this.processWriteQueue().catch(err => {
         if (!resolved) {
           resolved = true;
@@ -391,6 +483,18 @@ export class PersistentEventCache {
       const existingEntry = await this.getFilterEntry(filterKey);
       const existingEventIds = new Set(existingEntry?.eventIds || []);
 
+      // Quick check: if all events already exist and TTL hasn't expired, skip the write
+      const allEventsExist = events.length > 0 && events.every(e => existingEventIds.has(e.id));
+      if (allEventsExist && existingEntry) {
+        const now = Date.now();
+        const age = now - existingEntry.cachedAt;
+        // If cache is still fresh (within 80% of TTL), skip the write
+        if (age < (existingEntry.ttl * 0.8)) {
+          logger.debug({ filterKey, eventCount: events.length }, 'All events already cached and fresh, skipping write');
+          return;
+        }
+      }
+
       // Use a single transaction for all operations
       const transaction = this.db.transaction([STORE_EVENTS, STORE_PROFILES, STORE_FILTERS], 'readwrite');
       const eventStore = transaction.objectStore(STORE_EVENTS);
@@ -404,11 +508,17 @@ export class PersistentEventCache {
         // For replaceable events, check if we have a newer version for this pubkey
         if (REPLACEABLE_KINDS.includes(event.kind)) {
           // Check if we already have a newer replaceable event for this pubkey
-          const existingProfile = await this.getProfile(event.pubkey);
-          if (existingProfile && existingProfile.kind === event.kind && existingProfile.created_at >= event.created_at) {
+          // Use the same transaction instead of calling getProfile (which creates a new transaction)
+          const existingProfile = await new Promise<CachedEvent | undefined>((resolve) => {
+            const req = profileStore.get(event.pubkey);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => resolve(undefined);
+          });
+          
+          if (existingProfile && existingProfile.event.kind === event.kind && existingProfile.event.created_at >= event.created_at) {
             // Existing event is newer or same, skip
-            if (existingEventIds.has(existingProfile.id)) {
-              newEventIds.push(existingProfile.id);
+            if (existingEventIds.has(existingProfile.event.id)) {
+              newEventIds.push(existingProfile.event.id);
             }
             continue;
           }
@@ -427,11 +537,31 @@ export class PersistentEventCache {
           filterKey
         };
 
-        await new Promise<void>((resolve, reject) => {
-          const request = eventStore.put(cached);
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-        });
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const request = eventStore.put(cached);
+            request.onsuccess = () => resolve();
+            request.onerror = () => {
+              const err = request.error;
+              // Handle transaction errors gracefully
+              if (err instanceof DOMException && 
+                  (err.name === 'TransactionInactiveError' || err.name === 'InvalidStateError')) {
+                logger.debug({ error: err }, 'IndexedDB request error, transaction inactive');
+                resolve(); // Don't reject, just skip this write
+                return;
+              }
+              reject(err);
+            };
+          });
+        } catch (err) {
+          // If it's a transaction error, skip this event and continue
+          if (err instanceof DOMException && 
+              (err.name === 'TransactionInactiveError' || err.name === 'InvalidStateError')) {
+            logger.debug({ error: err }, 'IndexedDB transaction error during event store, skipping');
+            continue; // Skip this event
+          }
+          throw err; // Re-throw other errors
+        }
 
         newEventIds.push(event.id);
 
@@ -444,11 +574,32 @@ export class PersistentEventCache {
           });
 
           if (!existingProfile || event.created_at > existingProfile.event.created_at) {
-            await new Promise<void>((resolve, reject) => {
-              const req = profileStore.put({ pubkey: event.pubkey, ...cached });
-              req.onsuccess = () => resolve();
-              req.onerror = () => reject(req.error);
-            });
+            try {
+              await new Promise<void>((resolve, reject) => {
+                const req = profileStore.put({ pubkey: event.pubkey, ...cached });
+                req.onsuccess = () => resolve();
+                req.onerror = () => {
+                  const err = req.error;
+                  // Handle transaction errors gracefully
+                  if (err instanceof DOMException && 
+                      (err.name === 'TransactionInactiveError' || err.name === 'InvalidStateError')) {
+                    logger.debug({ error: err }, 'IndexedDB request error in profile store, transaction inactive');
+                    resolve(); // Don't reject, just skip this write
+                    return;
+                  }
+                  reject(err);
+                };
+              });
+            } catch (err) {
+              // If it's a transaction error, skip this profile update and continue
+              if (err instanceof DOMException && 
+                  (err.name === 'TransactionInactiveError' || err.name === 'InvalidStateError')) {
+                logger.debug({ error: err }, 'IndexedDB transaction error during profile store, skipping');
+                // Continue processing other events
+              } else {
+                throw err; // Re-throw other errors
+              }
+            }
           }
         }
       }
@@ -464,17 +615,53 @@ export class PersistentEventCache {
         ttl: effectiveTTL
       };
 
-      await new Promise<void>((resolve, reject) => {
-        const request = filterStore.put(filterEntry);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-      });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const request = filterStore.put(filterEntry);
+          request.onsuccess = () => resolve();
+          request.onerror = () => {
+            const err = request.error;
+            // Handle transaction errors gracefully
+            if (err instanceof DOMException && 
+                (err.name === 'TransactionInactiveError' || err.name === 'InvalidStateError')) {
+              logger.debug({ error: err }, 'IndexedDB request error in filter store, transaction inactive');
+              resolve(); // Don't reject, just skip this write
+              return;
+            }
+            reject(err);
+          };
+        });
 
-      // Wait for transaction to complete
-      await new Promise<void>((resolve, reject) => {
-        transaction.oncomplete = () => resolve();
-        transaction.onerror = () => reject(transaction.error);
-      });
+        // Wait for transaction to complete
+        await new Promise<void>((resolve, reject) => {
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => {
+            const err = transaction.error;
+            // Handle transaction errors gracefully
+            if (err instanceof DOMException && 
+                (err.name === 'TransactionInactiveError' || err.name === 'InvalidStateError')) {
+              logger.debug({ error: err }, 'IndexedDB transaction error, transaction inactive');
+              resolve(); // Don't reject, just skip
+              return;
+            }
+            reject(err);
+          };
+        });
+      } catch (err) {
+        // If it's a transaction error, handle gracefully
+        if (err instanceof DOMException && 
+            (err.name === 'TransactionInactiveError' || err.name === 'InvalidStateError')) {
+          logger.debug({ error: err }, 'IndexedDB transaction error during filter update, skipping');
+          return; // Don't throw, just skip this write
+        }
+        throw err; // Re-throw other errors
+      }
+
+      // Also update in-memory cache for fast access
+      // Use the events we're setting (they'll be merged with existing in get() if needed)
+      if (events.length > 0) {
+        this.updateMemoryCache(filterKey, events, effectiveTTL);
+      }
 
       logger.debug({ 
         filterKey, 
@@ -483,16 +670,46 @@ export class PersistentEventCache {
         ttl: effectiveTTL 
       }, 'Cached events in IndexedDB');
     } catch (error) {
-      // Check if it's a quota exceeded error or other recoverable error
-      if (error instanceof DOMException) {
-        if (error.name === 'QuotaExceededError') {
-          logger.warn({ error, filters }, 'IndexedDB quota exceeded, skipping cache write');
-          return; // Don't throw, just skip this write
-        } else if (error.name === 'TransactionInactiveError' || error.name === 'InvalidStateError') {
-          logger.debug({ error, filters }, 'IndexedDB transaction error, likely concurrent write, skipping');
-          return; // Don't throw, just skip this write
-        }
+      // Check error message first (works for all error types)
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorName = error instanceof DOMException ? error.name : '';
+      
+      // Check if it's a quota exceeded error
+      if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+        logger.warn({ error, filters }, 'IndexedDB quota exceeded, skipping cache write');
+        return; // Don't throw, just skip this write
       }
+      
+      // Check if it's any transaction-related error (by name or message)
+      // DOMException can have various names: TransactionInactiveError, InvalidStateError, AbortError, etc.
+      // Also check for any DOMException that might be transaction-related
+      const isTransactionError = 
+        (error instanceof DOMException && (
+          error.name === 'TransactionInactiveError' || 
+          error.name === 'InvalidStateError' ||
+          error.name === 'AbortError' ||
+          error.name === 'ConstraintError' ||
+          error.name === 'DataError'
+        )) ||
+        errorMessage.toLowerCase().includes('transaction') ||
+        errorMessage.toLowerCase().includes('indexeddb') ||
+        errorMessage.toLowerCase().includes('inactive') ||
+        errorName.toLowerCase().includes('transaction') ||
+        errorName.toLowerCase().includes('inactive');
+      
+      if (isTransactionError) {
+        // All transaction-related errors should be logged as debug, not error
+        logger.debug({ error, filters, errorName }, 'IndexedDB transaction error, likely concurrent write, skipping');
+        return; // Don't throw, just skip this write
+      }
+      
+      // For any other DOMException, treat as potentially recoverable and log as debug
+      if (error instanceof DOMException) {
+        logger.debug({ error, filters, errorName }, 'IndexedDB error (DOMException), skipping cache write');
+        return; // Don't throw, just skip this write
+      }
+      
+      // Only log as ERROR if it's not a DOMException or transaction-related error
       logger.error({ error, filters }, 'Error writing to event cache');
       throw error; // Re-throw other errors
     }
@@ -603,6 +820,14 @@ export class PersistentEventCache {
    */
   async invalidatePubkey(pubkey: string): Promise<void> {
     await this.init();
+    
+    // Clear in-memory cache entries that might contain events from this pubkey
+    // We need to check each entry and remove if it contains events from this pubkey
+    for (const [key, entry] of this.memoryCache.entries()) {
+      if (entry.events.some(e => e.pubkey === pubkey)) {
+        this.memoryCache.delete(key);
+      }
+    }
     
     if (!this.db) {
       return;
@@ -981,6 +1206,17 @@ export class PersistentEventCache {
           };
           profileRequest.onerror = () => resolve();
         });
+      }
+
+      // Clear in-memory cache entries that contain deleted events
+      for (const [key, entry] of this.memoryCache.entries()) {
+        const hasDeletedEvent = entry.events.some(e => 
+          deletedEventIds.has(e.id) || 
+          (REPLACEABLE_KINDS.includes(e.kind) && deletedAddresses.has(`${e.kind}:${e.pubkey}:${e.tags.find(t => t[0] === 'd')?.[1] || ''}`))
+        );
+        if (hasDeletedEvent) {
+          this.memoryCache.delete(key);
+        }
       }
 
       if (removedCount > 0) {

@@ -6,7 +6,7 @@ import type { NostrEvent, NostrFilter } from '../../types/nostr.js';
 import logger from '../logger.js';
 import { isNIP07Available, getPublicKeyWithNIP07, signEventWithNIP07 } from './nip07-signer.js';
 import { shouldUseTor, getTorProxy } from '../../utils/tor.js';
-import { eventCache } from './event-cache.js';
+// Removed separate in-memory cache - persistent cache now has built-in memory layer
 import { KIND } from '../../types/nostr.js';
 
 // Replaceable event kinds (only latest per pubkey matters)
@@ -223,10 +223,24 @@ export class NostrClient {
     const hasSearchQuery = filters.some(f => f.search && f.search.trim().length > 0);
     
     if (!hasSearchQuery) {
-      // 1. Check persistent cache first (IndexedDB) - only in browser
+      // Check persistent cache (has built-in in-memory layer for fast access)
       const persistentCache = await getPersistentCache();
       if (persistentCache) {
         try {
+          // First try synchronous memory cache (fast)
+          const memoryCached = persistentCache.getSync(filters);
+          if (memoryCached && memoryCached.length > 0) {
+            logger.debug({ filters, cachedCount: memoryCached.length }, 'Returning cached events from memory');
+            
+            // Return cached events immediately, but also fetch from relays in background to update cache
+            this.fetchAndMergeFromRelays(filters, memoryCached).catch(err => {
+              logger.debug({ error: err, filters }, 'Background fetch failed, using cached events');
+            });
+            
+            return memoryCached;
+          }
+          
+          // If not in memory, check IndexedDB (async)
           const cachedEvents = await persistentCache.get(filters);
           if (cachedEvents && cachedEvents.length > 0) {
             logger.debug({ filters, cachedCount: cachedEvents.length }, 'Returning cached events from IndexedDB');
@@ -241,24 +255,6 @@ export class NostrClient {
         } catch (error) {
           logger.debug({ error, filters }, 'Error reading from persistent cache, falling back');
         }
-      }
-      
-      // 2. Check in-memory cache as fallback
-      const memoryCached = eventCache.get(filters);
-      if (memoryCached !== null && memoryCached.length > 0) {
-        logger.debug({ filters, cachedCount: memoryCached.length }, 'Returning cached events from memory');
-        
-        // Also store in persistent cache and fetch from relays in background
-        if (persistentCache) {
-          persistentCache.set(filters, memoryCached).catch(err => {
-            logger.debug({ error: err }, 'Failed to persist cache');
-          });
-        }
-        this.fetchAndMergeFromRelays(filters, memoryCached).catch(err => {
-          logger.debug({ error: err, filters }, 'Background fetch failed');
-        });
-        
-        return memoryCached;
       }
     } else {
       logger.debug({ filters }, 'Skipping cache for search query');
@@ -332,12 +328,11 @@ export class NostrClient {
     // Get persistent cache once (if available)
     const persistentCache = await getPersistentCache();
     
-    // Cache in both persistent and in-memory caches
+    // Cache in persistent cache (has built-in in-memory layer)
     // For kind 0 (profile) events, also cache individually by pubkey
     const profileEvents = finalEvents.filter(e => e.kind === 0);
     for (const profileEvent of profileEvents) {
-      eventCache.setProfile(profileEvent.pubkey, profileEvent);
-      // Also cache in persistent cache if available
+      // Cache profile in persistent cache (which also updates its memory layer)
       if (persistentCache) {
         persistentCache.setProfile(profileEvent.pubkey, profileEvent).catch(err => {
           logger.debug({ error: err, pubkey: profileEvent.pubkey }, 'Failed to cache profile');
@@ -352,10 +347,7 @@ export class NostrClient {
         // Cache successful fetches for 5 minutes, empty results for 1 minute
         const ttl = finalEvents.length > 0 ? 5 * 60 * 1000 : 60 * 1000;
         
-        // Update in-memory cache
-        eventCache.set(filters, finalEvents, ttl);
-        
-        // Update persistent cache (async, don't wait) - only in browser
+        // Update persistent cache (which also updates its built-in memory layer)
         if (persistentCache) {
           persistentCache.set(filters, finalEvents, ttl).catch(err => {
             logger.debug({ error: err, filters }, 'Failed to update persistent cache');
@@ -427,10 +419,7 @@ export class NostrClient {
       const deletionEvents = Array.from(uniqueDeletionEvents.values());
 
       if (deletionEvents.length > 0) {
-        // Process deletions in in-memory cache
-        eventCache.processDeletionEvents(deletionEvents);
-
-        // Process deletions in persistent cache
+        // Process deletions in persistent cache (which also handles its memory layer)
         const persistentCache = await getPersistentCache();
         if (persistentCache && typeof persistentCache.processDeletionEvents === 'function') {
           await persistentCache.processDeletionEvents(deletionEvents);
@@ -599,9 +588,7 @@ export class NostrClient {
     // Invalidate cache for events from this pubkey (new event published)
     // This ensures fresh data on next fetch
     if (success.length > 0) {
-      eventCache.invalidatePubkey(event.pubkey);
-      
-      // Also invalidate persistent cache
+      // Invalidate persistent cache (which also handles its memory layer)
       const persistentCache = await getPersistentCache();
       if (persistentCache) {
         persistentCache.invalidatePubkey(event.pubkey).catch(err => {
