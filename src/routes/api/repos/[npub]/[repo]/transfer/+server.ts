@@ -128,6 +128,17 @@ export const POST: RequestHandler = withRepoValidation(
       
       // Save to repo if it exists locally
       if (fileManager.repoExists(repoContext.npub, repoContext.repo)) {
+        // Get worktree to save to repo-events.jsonl
+        const defaultBranch = await fileManager.getDefaultBranch(repoContext.npub, repoContext.repo).catch(() => 'main');
+        const repoPath = fileManager.getRepoPath(repoContext.npub, repoContext.repo);
+        const workDir = await fileManager.getWorktree(repoPath, defaultBranch, repoContext.npub, repoContext.repo);
+        
+        // Save to repo-events.jsonl (standard file for easy analysis)
+        await fileManager.saveRepoEventToWorktree(workDir, transferEvent as NostrEvent, 'transfer').catch(err => {
+          logger.debug({ error: err }, 'Failed to save transfer event to repo-events.jsonl');
+        });
+        
+        // Also save individual transfer file
         await fileManager.writeFile(
           repoContext.npub,
           repoContext.repo,
@@ -136,10 +147,15 @@ export const POST: RequestHandler = withRepoValidation(
           `Add ownership transfer event: ${transferEvent.id.slice(0, 16)}...`,
           'Nostr',
           `${requestContext.userPubkeyHex}@nostr`,
-          'main'
+          defaultBranch
         ).catch(err => {
           // Log but don't fail - publishing to relays is more important
           logger.warn({ error: err, npub: repoContext.npub, repo: repoContext.repo }, 'Failed to save transfer event to repo');
+        });
+        
+        // Clean up worktree
+        await fileManager.removeWorktree(repoPath, workDir).catch(err => {
+          logger.debug({ error: err }, 'Failed to remove worktree after saving transfer event');
         });
       } else {
         logger.debug({ npub: repoContext.npub, repo: repoContext.repo }, 'Repo does not exist locally, skipping transfer event save to repo');

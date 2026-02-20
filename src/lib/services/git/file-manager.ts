@@ -63,7 +63,7 @@ export class FileManager {
    * More efficient than cloning the entire repo for each operation
    * Security: Validates branch name to prevent path traversal attacks
    */
-  private async getWorktree(repoPath: string, branch: string, npub: string, repoName: string): Promise<string> {
+  async getWorktree(repoPath: string, branch: string, npub: string, repoName: string): Promise<string> {
     // Security: Validate branch name to prevent path traversal
     if (!isValidBranchName(branch)) {
       throw new Error(`Invalid branch name: ${branch}`);
@@ -263,7 +263,7 @@ export class FileManager {
   /**
    * Remove a worktree
    */
-  private async removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
+  async removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
     try {
       // Use spawn for worktree remove (safer than exec)
       await new Promise<void>((resolve, reject) => {
@@ -315,7 +315,7 @@ export class FileManager {
   /**
    * Get the full path to a repository
    */
-  private getRepoPath(npub: string, repoName: string): string {
+  getRepoPath(npub: string, repoName: string): string {
     const repoPath = join(this.repoRoot, npub, `${repoName}.git`);
     // Security: Ensure the resolved path is within repoRoot to prevent path traversal
     // Normalize paths to handle Windows/Unix differences
@@ -755,9 +755,101 @@ export class FileManager {
       }
 
       // Commit
-      await workGit.commit(finalCommitMessage, [filePath], {
+      const commitResult = await workGit.commit(finalCommitMessage, [filePath], {
         '--author': `${authorName} <${authorEmail}>`
-      });
+      }) as string | { commit: string };
+
+      // Get commit hash from result
+      let commitHash: string;
+      if (typeof commitResult === 'string') {
+        commitHash = commitResult.trim();
+      } else if (commitResult && typeof commitResult === 'object' && 'commit' in commitResult) {
+        commitHash = String(commitResult.commit);
+      } else {
+        // Fallback: get latest commit hash
+        commitHash = await workGit.revparse(['HEAD']);
+      }
+
+      // Save commit signature event to nostr folder if signing was used
+      if (signingOptions && (signingOptions.commitSignatureEvent || signingOptions.useNIP07 || signingOptions.nip98Event || signingOptions.nsecKey)) {
+        try {
+          // Get the signature event that was used (already created above)
+          let signatureEvent: NostrEvent;
+          if (signingOptions.commitSignatureEvent) {
+            signatureEvent = signingOptions.commitSignatureEvent;
+          } else {
+            // Re-create it to get the event object
+            const { signedMessage: _, signatureEvent: event } = await createGitCommitSignature(
+              commitMessage,
+              authorName,
+              authorEmail,
+              signingOptions
+            );
+            signatureEvent = event;
+          }
+          
+          // Update signature event with actual commit hash
+          const { updateCommitSignatureWithHash } = await import('./commit-signer.js');
+          const updatedEvent = updateCommitSignatureWithHash(signatureEvent, commitHash);
+          
+          // Save to nostr/commit-signatures.jsonl (use workDir since we have it)
+          await this.saveCommitSignatureEventToWorktree(workDir, updatedEvent);
+          
+          // Check if repo is private - only publish to relays if public
+          const isPrivate = await this.isRepoPrivate(npub, repoName);
+          if (!isPrivate) {
+            // Public repo: publish commit signature event to relays
+            try {
+              const { NostrClient } = await import('../nostr/nostr-client.js');
+              const { DEFAULT_NOSTR_RELAYS } = await import('../../config.js');
+              const { getUserRelays } = await import('../nostr/user-relays.js');
+              const { combineRelays } = await import('../../config.js');
+              
+              // Get user's preferred relays (outbox/inbox from kind 10002)
+              const { nip19 } = await import('nostr-tools');
+              const { requireNpubHex } = await import('../../utils/npub-utils.js');
+              const userPubkeyHex = requireNpubHex(npub);
+              
+              const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+              const { inbox, outbox } = await getUserRelays(userPubkeyHex, nostrClient);
+              
+              // Use user's outbox relays if available, otherwise inbox, otherwise defaults
+              const userRelays = outbox.length > 0 
+                ? combineRelays(outbox, DEFAULT_NOSTR_RELAYS)
+                : inbox.length > 0
+                ? combineRelays(inbox, DEFAULT_NOSTR_RELAYS)
+                : DEFAULT_NOSTR_RELAYS;
+              
+              // Publish to relays (non-blocking - don't fail if publishing fails)
+              const publishResult = await nostrClient.publishEvent(updatedEvent, userRelays);
+              if (publishResult.success.length > 0) {
+                logger.debug({ 
+                  eventId: updatedEvent.id, 
+                  commitHash,
+                  relays: publishResult.success 
+                }, 'Published commit signature event to relays');
+              }
+              if (publishResult.failed.length > 0) {
+                logger.warn({ 
+                  eventId: updatedEvent.id,
+                  failed: publishResult.failed 
+                }, 'Some relays failed to publish commit signature event');
+              }
+            } catch (publishErr) {
+              // Log but don't fail - publishing is nice-to-have, saving to repo is the important part
+              const sanitizedErr = sanitizeError(publishErr);
+              logger.debug({ error: sanitizedErr, repoPath, filePath }, 'Failed to publish commit signature event to relays');
+            }
+          } else {
+            // Private repo: only save to repo, don't publish to relays
+            logger.debug({ repoPath, filePath }, 'Private repo - commit signature event saved to repo only (not published to relays)');
+          }
+        } catch (err) {
+          // Log but don't fail - saving event is nice-to-have
+          const sanitizedErr = sanitizeError(err);
+          logger.debug({ error: sanitizedErr, repoPath, filePath }, 'Failed to save commit signature event');
+        }
+      }
 
       // Note: No push needed - worktrees of bare repos share the same object database,
       // so the commit is already in the bare repository. We don't push to remote origin
@@ -769,6 +861,109 @@ export class FileManager {
     } catch (error) {
       logger.error({ error, repoPath, filePath, npub }, 'Error writing file');
       throw new Error(`Failed to write file: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Save commit signature event to nostr/commit-signatures.jsonl in a worktree
+   */
+  private async saveCommitSignatureEventToWorktree(worktreePath: string, event: NostrEvent): Promise<void> {
+    try {
+      const { mkdir, writeFile } = await import('fs/promises');
+      const { join } = await import('path');
+      
+      // Create nostr directory in worktree
+      const nostrDir = join(worktreePath, 'nostr');
+      await mkdir(nostrDir, { recursive: true });
+      
+      // Append to commit-signatures.jsonl
+      const jsonlFile = join(nostrDir, 'commit-signatures.jsonl');
+      const eventLine = JSON.stringify(event) + '\n';
+      await writeFile(jsonlFile, eventLine, { flag: 'a', encoding: 'utf-8' });
+    } catch (err) {
+      logger.debug({ error: err, worktreePath }, 'Failed to save commit signature event to nostr folder');
+      // Don't throw - this is a nice-to-have feature
+    }
+  }
+
+  /**
+   * Save a repo event (announcement or transfer) to nostr/repo-events.jsonl
+   * This provides a standard location for all repo-related Nostr events for easy analysis
+   */
+  async saveRepoEventToWorktree(
+    worktreePath: string,
+    event: NostrEvent,
+    eventType: 'announcement' | 'transfer'
+  ): Promise<void> {
+    try {
+      const { mkdir, writeFile } = await import('fs/promises');
+      const { join } = await import('path');
+      
+      // Create nostr directory in worktree
+      const nostrDir = join(worktreePath, 'nostr');
+      await mkdir(nostrDir, { recursive: true });
+      
+      // Append to repo-events.jsonl with event type metadata
+      const jsonlFile = join(nostrDir, 'repo-events.jsonl');
+      const eventLine = JSON.stringify({
+        type: eventType,
+        timestamp: event.created_at,
+        event
+      }) + '\n';
+      await writeFile(jsonlFile, eventLine, { flag: 'a', encoding: 'utf-8' });
+    } catch (err) {
+      logger.debug({ error: err, worktreePath, eventType }, 'Failed to save repo event to nostr/repo-events.jsonl');
+      // Don't throw - this is a nice-to-have feature
+    }
+  }
+
+  /**
+   * Check if a repository is private by fetching its announcement event
+   */
+  private async isRepoPrivate(npub: string, repoName: string): Promise<boolean> {
+    try {
+      const { requireNpubHex } = await import('../../utils/npub-utils.js');
+      const repoOwnerPubkey = requireNpubHex(npub);
+      
+      // Fetch the repository announcement
+      const { NostrClient } = await import('../nostr/nostr-client.js');
+      const { DEFAULT_NOSTR_RELAYS } = await import('../../config.js');
+      const { KIND } = await import('../../types/nostr.js');
+      
+      const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+      const events = await nostrClient.fetchEvents([
+        {
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          authors: [repoOwnerPubkey],
+          '#d': [repoName],
+          limit: 1
+        }
+      ]);
+      
+      if (events.length === 0) {
+        // No announcement found - assume public (default)
+        return false;
+      }
+      
+      const announcement = events[0];
+      
+      // Check for ["private", "true"] tag
+      const privateTag = announcement.tags.find(t => t[0] === 'private' && t[1] === 'true');
+      if (privateTag) return true;
+      
+      // Check for ["private"] tag (just the tag name, no value)
+      const privateTagOnly = announcement.tags.find(t => t[0] === 'private' && (!t[1] || t[1] === ''));
+      if (privateTagOnly) return true;
+      
+      // Check for ["t", "private"] tag (topic tag)
+      const topicTag = announcement.tags.find(t => t[0] === 't' && t[1] === 'private');
+      if (topicTag) return true;
+      
+      return false;
+    } catch (err) {
+      // If we can't determine, default to public (safer - allows publishing)
+      logger.debug({ error: err, npub, repoName }, 'Failed to check repo privacy, defaulting to public');
+      return false;
     }
   }
 

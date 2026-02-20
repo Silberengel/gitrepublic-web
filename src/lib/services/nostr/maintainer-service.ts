@@ -29,12 +29,16 @@ export class MaintainerService {
 
   /**
    * Check if a repository is private
-   * A repo is private if it has a tag ["private", "true"] or ["t", "private"]
+   * A repo is private if it has a tag ["private"], ["private", "true"], or ["t", "private"]
    */
   private isPrivateRepo(announcement: NostrEvent): boolean {
     // Check for ["private", "true"] tag
     const privateTag = announcement.tags.find(t => t[0] === 'private' && t[1] === 'true');
     if (privateTag) return true;
+
+    // Check for ["private"] tag (just the tag name, no value)
+    const privateTagOnly = announcement.tags.find(t => t[0] === 'private' && (!t[1] || t[1] === ''));
+    if (privateTagOnly) return true;
 
     // Check for ["t", "private"] tag (topic tag)
     const topicTag = announcement.tags.find(t => t[0] === 't' && t[1] === 'private');

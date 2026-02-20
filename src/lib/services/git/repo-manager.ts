@@ -150,6 +150,9 @@ export class RepoManager {
       // If there are other clone URLs, sync from them after creating the repo
       if (otherUrls.length > 0) {
         await this.syncFromRemotes(repoPath.fullPath, otherUrls);
+      } else {
+        // No external URLs - this is a brand new repo, create initial branch and README
+        await this.createInitialBranchAndReadme(repoPath.fullPath, repoPath.npub, repoPath.repoName, event);
       }
     } else if (isExistingRepo && selfTransferEvent) {
       // For existing repos, we might want to add the self-transfer event
@@ -157,6 +160,137 @@ export class RepoManager {
       // For now, we'll just ensure the announcement file exists
       // The self-transfer event should already be published to relays
       logger.info({ repoPath: repoPath.fullPath }, 'Existing repo - self-transfer event should be published to relays');
+    }
+  }
+
+  /**
+   * Create initial branch and README.md for a new repository
+   */
+  private async createInitialBranchAndReadme(
+    repoPath: string,
+    npub: string,
+    repoName: string,
+    announcementEvent: NostrEvent
+  ): Promise<void> {
+    try {
+      // Get default branch from environment or use 'master'
+      const defaultBranch = process.env.DEFAULT_BRANCH || 'master';
+      
+      // Get repo name from d-tag or use repoName from path
+      const dTag = announcementEvent.tags.find(t => t[0] === 'd')?.[1] || repoName;
+      
+      // Get name tag for README title, fallback to d-tag
+      const nameTag = announcementEvent.tags.find(t => t[0] === 'name')?.[1] || dTag;
+      
+      // Get author info from user profile (fetch from relays)
+      const { fetchUserProfile, extractProfileData, getUserName, getUserEmail } = await import('../../utils/user-profile.js');
+      const { nip19 } = await import('nostr-tools');
+      const { DEFAULT_NOSTR_RELAYS } = await import('../../config.js');
+      const userNpub = nip19.npubEncode(announcementEvent.pubkey);
+      
+      const profileEvent = await fetchUserProfile(announcementEvent.pubkey, DEFAULT_NOSTR_RELAYS);
+      const profile = extractProfileData(profileEvent);
+      const authorName = getUserName(profile, announcementEvent.pubkey, userNpub);
+      const authorEmail = getUserEmail(profile, announcementEvent.pubkey, userNpub);
+      
+      // Create README.md content
+      const readmeContent = `# ${nameTag}
+
+Welcome to your new GitRepublic repo.
+
+You can use this read-me file to explain the purpose of this repo to everyone who looks at it. You can also make a ReadMe.adoc file and delete this one, if you prefer. GitRepublic supports both markups.
+
+Your commits will all be signed by your Nostr keys and saved to the event files in the ./nostr folder.
+`;
+      
+      // Generate announcement file content
+      const { generateVerificationFile, VERIFICATION_FILE_PATH } = await import('../nostr/repo-verification.js');
+      
+      // Try to get announcement file content from client-signed event (kind 1642) first
+      let announcementFileContent: string | null = null;
+      try {
+        const { NostrClient } = await import('../nostr/nostr-client.js');
+        const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+        
+        // Look for a kind 1642 event that references this announcement
+        const announcementFileEvents = await nostrClient.fetchEvents([
+          {
+            kinds: [1642], // Announcement file event kind
+            authors: [announcementEvent.pubkey],
+            '#e': [announcementEvent.id], // References this announcement
+            limit: 1
+          }
+        ]);
+        
+        if (announcementFileEvents.length > 0) {
+          // Extract announcement file content from the client-signed event
+          announcementFileContent = announcementFileEvents[0].content;
+          logger.info({ repoPath, announcementFileEventId: announcementFileEvents[0].id }, 'Using client-signed announcement file for initial commit');
+        }
+      } catch (err) {
+        logger.debug({ error: err, repoPath }, 'Failed to fetch announcement file event, will generate from announcement event');
+      }
+      
+      // If client didn't provide announcement file, generate it from the announcement event
+      if (!announcementFileContent) {
+        announcementFileContent = generateVerificationFile(announcementEvent, announcementEvent.pubkey);
+      }
+      
+      // Use FileManager to create the initial branch and files
+      const { FileManager } = await import('./file-manager.js');
+      const fileManager = new FileManager(this.repoRoot);
+      
+      // For a new repo with no branches, we need to create an orphan branch first
+      // Check if repo has any branches
+      const git = simpleGit(repoPath);
+      let hasBranches = false;
+      try {
+        const branches = await git.branch(['-a']);
+        hasBranches = branches.all.length > 0;
+      } catch {
+        // No branches exist
+        hasBranches = false;
+      }
+      
+      if (!hasBranches) {
+        // Create orphan branch first (pass undefined for fromBranch to create orphan)
+        await fileManager.createBranch(npub, repoName, defaultBranch, undefined);
+      }
+      
+      // Create both README.md and announcement file in the initial commit
+      // We'll use a worktree to write both files and commit them together
+      const workDir = await fileManager.getWorktree(repoPath, defaultBranch, npub, repoName);
+      const { writeFile: writeFileFs, mkdir } = await import('fs/promises');
+      const { join } = await import('path');
+      
+      // Write README.md
+      const readmePath = join(workDir, 'README.md');
+      await writeFileFs(readmePath, readmeContent, 'utf-8');
+      
+      // Write announcement file
+      const announcementPath = join(workDir, VERIFICATION_FILE_PATH);
+      await writeFileFs(announcementPath, announcementFileContent, 'utf-8');
+      
+      // Save repo announcement event to nostr/repo-events.jsonl (standard file for easy analysis)
+      await this.saveRepoEventToWorktree(workDir, announcementEvent, 'announcement');
+      
+      // Stage both files
+      const workGit = simpleGit(workDir);
+      await workGit.add(['README.md', VERIFICATION_FILE_PATH]);
+      
+      // Commit both files together
+      const commitResult = await workGit.commit('Initial commit', ['README.md', VERIFICATION_FILE_PATH], {
+        '--author': `${authorName} <${authorEmail}>`
+      });
+      
+      // Clean up worktree
+      await fileManager.removeWorktree(repoPath, workDir);
+      
+      logger.info({ npub, repoName, branch: defaultBranch }, 'Created initial branch and README.md');
+    } catch (err) {
+      // Log but don't fail - initial README creation is nice-to-have
+      const sanitizedErr = sanitizeError(err);
+      logger.warn({ error: sanitizedErr, repoPath, npub, repoName }, 'Failed to create initial branch and README, continuing anyway');
     }
   }
 
@@ -495,12 +629,16 @@ export class RepoManager {
    */
   /**
    * Check if a repository is private based on announcement event
-   * A repo is private if it has a tag ["private", "true"] or ["t", "private"]
+   * A repo is private if it has a tag ["private"], ["private", "true"], or ["t", "private"]
    */
   private isPrivateRepo(announcement: NostrEvent): boolean {
     // Check for ["private", "true"] tag
     const privateTag = announcement.tags.find(t => t[0] === 'private' && t[1] === 'true');
     if (privateTag) return true;
+
+    // Check for ["private"] tag (just the tag name, no value)
+    const privateTagOnly = announcement.tags.find(t => t[0] === 'private' && (!t[1] || t[1] === ''));
+    if (privateTagOnly) return true;
 
     // Check for ["t", "private"] tag (topic tag)
     const topicTag = announcement.tags.find(t => t[0] === 't' && t[1] === 'private');
@@ -807,6 +945,12 @@ export class RepoManager {
       const announcementPath = join(workDir, VERIFICATION_FILE_PATH);
       writeFileSync(announcementPath, announcementFileContent, 'utf-8');
 
+      // Save repo events to nostr/repo-events.jsonl (standard file for easy analysis)
+      await this.saveRepoEventToWorktree(workDir, event, 'announcement');
+      if (selfTransferEvent) {
+        await this.saveRepoEventToWorktree(workDir, selfTransferEvent, 'transfer');
+      }
+
       // If self-transfer event is provided, include it in the commit
       const filesToAdd = [VERIFICATION_FILE_PATH];
       if (selfTransferEvent) {
@@ -870,6 +1014,37 @@ export class RepoManager {
     const match = repoPath.match(/\/([^\/]+)\.git$/);
     if (!match) return null;
     return { repoName: match[1] };
+  }
+
+  /**
+   * Save a repo event (announcement or transfer) to nostr/repo-events.jsonl
+   * This provides a standard location for all repo-related Nostr events for easy analysis
+   */
+  private async saveRepoEventToWorktree(
+    worktreePath: string,
+    event: NostrEvent,
+    eventType: 'announcement' | 'transfer'
+  ): Promise<void> {
+    try {
+      const { mkdir, writeFile } = await import('fs/promises');
+      const { join } = await import('path');
+      
+      // Create nostr directory in worktree
+      const nostrDir = join(worktreePath, 'nostr');
+      await mkdir(nostrDir, { recursive: true });
+      
+      // Append to repo-events.jsonl with event type metadata
+      const jsonlFile = join(nostrDir, 'repo-events.jsonl');
+      const eventLine = JSON.stringify({
+        type: eventType,
+        timestamp: event.created_at,
+        event
+      }) + '\n';
+      await writeFile(jsonlFile, eventLine, { flag: 'a', encoding: 'utf-8' });
+    } catch (err) {
+      logger.debug({ error: err, worktreePath, eventType }, 'Failed to save repo event to nostr/repo-events.jsonl');
+      // Don't throw - this is a nice-to-have feature
+    }
   }
 
   /**
