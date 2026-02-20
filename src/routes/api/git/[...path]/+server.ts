@@ -655,7 +655,7 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     // This ensures git calls the credential helper proactively
     // Git requires WWW-Authenticate header on ALL 401 responses, otherwise it won't retry
     if (!rawAuthHeader) {
-      return new Response('Authentication required. Please configure the git credential helper. See https://github.com/your-org/gitrepublic-cli for setup instructions.', {
+      return new Response('Authentication required. Please configure the git credential helper. Install via: npm install -g gitrepublic-cli\nSee https://github.com/silberengel/gitrepublic-cli for setup instructions.', {
         status: 401,
         headers: {
           'WWW-Authenticate': 'Basic realm="GitRepublic"',
@@ -822,23 +822,30 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
       
       // Check protection for all branches being pushed
       for (const targetBranch of pushedBranches) {
-        const protectionCheck = await branchProtectionService.canPushToBranch(
-          authResult.pubkey || '',
-          currentOwnerPubkey,
-          repoName,
-          targetBranch,
-          isMaintainer
-        );
+        try {
+          const protectionCheck = await branchProtectionService.canPushToBranch(
+            authResult.pubkey || '',
+            currentOwnerPubkey,
+            repoName,
+            targetBranch,
+            isMaintainer
+          );
 
-        if (!protectionCheck.allowed) {
-          return error(403, protectionCheck.reason || `Branch '${targetBranch}' is protected`);
+          if (!protectionCheck.allowed) {
+            return error(403, protectionCheck.reason || `Branch '${targetBranch}' is protected`);
+          }
+        } catch (error) {
+          // If we can't check protection, log but don't block (fail open for now)
+          // Security: Sanitize error messages
+          const sanitizedError = sanitizeError(error);
+          logger.warn({ error: sanitizedError, npub, repoName, targetBranch }, 'Failed to check branch protection');
         }
       }
     } catch (error) {
-      // If we can't check protection, log but don't block (fail open for now)
+      // If we can't extract branches or check protection, log but don't block (fail open for now)
       // Security: Sanitize error messages
       const sanitizedError = sanitizeError(error);
-      logger.warn({ error: sanitizedError, npub, repoName, targetBranch }, 'Failed to check branch protection');
+      logger.warn({ error: sanitizedError, npub, repoName }, 'Failed to check branch protection');
     }
   }
 

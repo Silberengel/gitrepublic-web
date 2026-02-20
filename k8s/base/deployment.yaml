@@ -44,8 +44,8 @@ spec:
           value: "${NOSTR_RELAYS}"
         - name: PORT
           value: "6543"
-        - name: SECURITY_MODE
-          value: "enterprise"  # Use enterprise mode in K8s
+        - name: ENTERPRISE_MODE
+          value: "true"  # Enable enterprise mode in K8s
         volumeMounts:
         - name: repos
           mountPath: /repos

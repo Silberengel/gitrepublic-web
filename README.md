@@ -1,8 +1,58 @@
-# gitrepublic-web
+# GitRepublic
 
 A decentralized, Nostr-based git server that enables git repository hosting and collaboration using Nostr events. Repositories are announced via NIP-34, and all operations (clone, push, pull) are authenticated using NIP-98 HTTP authentication.
 
-See [ARCHITECTURE_FAQ.md](./docs/ARCHITECTURE_FAQ.md) for answers to common architecture questions.
+## Command Line Interface (CLI)
+
+**The GitRepublic CLI is published and available via npm:**
+
+```bash
+npm install -g gitrepublic-cli
+```
+
+The CLI provides:
+- **Git wrapper** with enhanced error messages for GitRepublic operations
+- **Credential helper** for automatic NIP-98 authentication
+- **Commit signing hook** that automatically signs commits using Nostr keys
+- **Full API access** from the command line
+
+### Quick Start with CLI
+
+```bash
+# Install
+npm install -g gitrepublic-cli
+
+# Set your Nostr private key
+export NOSTRGIT_SECRET_KEY="nsec1..."
+
+# Setup (configures credential helper and commit hook)
+gitrep-setup
+
+# Use gitrep (or gitrepublic) for git operations
+gitrep clone https://your-domain.com/api/git/npub1.../repo.git
+gitrep push origin main
+
+# Use gitrep for API commands
+gitrep repos list                 # List repositories
+gitrep push-all main              # Push to all remotes
+gitrep publish repo-announcement myrepo
+```
+
+**Note**: `gitrep` is a shorter alias for `gitrepublic` - both work the same way.
+
+For complete CLI documentation, see [gitrepublic-cli/README.md](./gitrepublic-cli/README.md).
+
+---
+
+## Overview
+
+GitRepublic consists of three main components:
+
+1. **Web Interface** - Full-featured web application for browsing, editing, and managing repositories
+2. **Command Line Interface (CLI)** - Git wrapper and API client for command-line operations
+3. **REST API** - Complete API for programmatic access (see `/api/openapi.json` for full documentation)
+
+All three interfaces use the same underlying Nostr-based authentication and repository management system.
 
 ## Features
 
@@ -43,7 +93,6 @@ See [ARCHITECTURE_FAQ.md](./docs/ARCHITECTURE_FAQ.md) for answers to common arch
 - **Raw File View**: Direct access to raw file content
 - **Download Repository**: Download repositories as ZIP archives
 - **OpenGraph Metadata**: Rich social media previews with repository images and banners
-- **Universal Git Dashboard**: Aggregate and view issues and pull requests from all configured git platforms (GitHub, GitLab, Gitea, etc.) in one place
 
 ### Security & Validation
 - **Path Traversal Protection**: Validates and sanitizes file paths
@@ -55,6 +104,144 @@ See [ARCHITECTURE_FAQ.md](./docs/ARCHITECTURE_FAQ.md) for answers to common arch
   - **Web UI**: Uses NIP-07 browser extension (secure, keys never leave browser)
   - **Git Operations**: Uses NIP-98 HTTP authentication (ephemeral signed events)
   - ⚠️ **Security Note**: Never send private keys (nsec) in API requests. Use NIP-07 for web UI or NIP-98 for git operations.
+
+## Getting Started
+
+### Prerequisites
+- Node.js 18+
+- Git with `git-http-backend` installed
+- NIP-07 browser extension (for web UI) - [Alby](https://getalby.com/) or [nos2x](https://github.com/fiatjaf/nos2x) recommended
+
+### Installation
+
+#### For Web Server
+```bash
+# Clone the repository
+git clone https://github.com/silberengel/gitrepublic-web.git
+cd gitrepublic-web
+
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+```
+
+#### For CLI (Command Line)
+```bash
+# Install globally
+npm install -g gitrepublic-cli
+
+# Set your Nostr private key
+export NOSTRGIT_SECRET_KEY="nsec1..."
+
+# Setup credential helper and commit hook
+gitrep-setup
+```
+
+### Quick Start
+
+#### Web Interface
+1. Start the server: `npm run dev`
+2. Open browser: `http://localhost:5173`
+3. Connect NIP-07 extension
+4. Visit `/signup` to create your first repository
+
+#### Command Line
+```bash
+# Clone a repository
+gitrep clone https://your-domain.com/api/git/npub1.../repo.git
+
+# Make changes and push
+git add .
+git commit -m "Update README"
+gitrep push origin main
+```
+
+#### API Access
+All API endpoints are documented in OpenAPI format at `/api/openapi.json`. Use NIP-98 authentication for all write operations.
+
+Example:
+```bash
+curl -X GET https://your-domain.com/api/repos/list
+```
+
+## How It Works
+
+### Repository Creation Flow
+
+1. **User Creates Announcement**:
+   - **Web**: Visit `/signup` and connect NIP-07 extension
+   - **CLI**: Run `gitrep publish repo-announcement <repo-name>`
+   - **API**: POST to `/api/repos/[npub]/[repo]` with announcement event
+   - System automatically creates a self-transfer event (kind 1641) for initial ownership proof
+   - Both announcement and self-transfer are published to Nostr relays
+
+2. **Auto-Provisioning**:
+   - Server polls Nostr relays for new repository announcements (kind 30617)
+   - When found, server:
+     - Creates a bare git repository at `/repos/{npub}/{repo-name}.git`
+     - Fetches the self-transfer event for ownership verification
+     - Creates initial commit with README.md and saves announcement/transfer events to `nostr/repo-events.jsonl` for offline papertrail
+     - If repository has `clone` tags pointing to other remotes, syncs from those remotes
+
+3. **Repository Access**:
+   - Public repositories: Anyone can clone and view
+   - Private repositories: Only owners and maintainers can access
+   - Access is checked via NIP-98 authentication for git operations
+
+### Git Operations Flow
+
+1. **Clone/Fetch**:
+   - **CLI**: `gitrep clone https://{domain}/api/git/{npub}/{repo}.git`
+   - **Git**: `git clone https://{domain}/api/git/{npub}/{repo}.git`
+   - Server handles GET requests to `info/refs?service=git-upload-pack`
+   - For private repos, verifies NIP-98 authentication
+   - Proxies request to `git-http-backend` which serves the repository
+
+2. **Push**:
+   - **CLI**: `gitrep push origin main` (automatic authentication)
+   - **Git**: `git push origin main` (requires credential helper setup)
+   - Before push, client creates a NIP-98 event (kind 27235) with:
+     - `u` tag: Request URL
+     - `method` tag: HTTP method (POST)
+     - `payload` tag: SHA256 hash of request body
+   - Client signs event and includes in `Authorization: Nostr {event}` header
+   - Server verifies:
+     - Event signature
+     - Event timestamp (within 60 seconds)
+     - URL and method match
+     - Payload hash matches request body
+     - Pubkey is current owner or maintainer
+   - Server checks repository size limit (2 GB)
+   - Server proxies to `git-http-backend`
+   - After successful push, server:
+     - Extracts other `clone` URLs from announcement
+     - Syncs to all other remotes using `git push --all`
+
+### Ownership Transfer Flow
+
+1. **Current Owner Initiates Transfer**:
+   - **Web**: Use transfer UI in repository settings
+   - **CLI**: `gitrep transfer <npub> <repo> <new-owner-npub>`
+   - **API**: POST to `/api/repos/[npub]/[repo]/transfer`
+   - Owner creates a kind 1641 event with:
+     - `a` tag: Repository identifier (`30617:{owner}:{repo}`)
+     - `p` tag: New owner pubkey
+     - `d` tag: Repository name
+   - Signs and publishes event to Nostr relays
+   - Transfer event is saved to repository in `nostr/repo-events.jsonl` for offline papertrail
+
+2. **New Owner Completes Transfer**:
+   - New owner is notified when logging into GitRepublic web
+   - New owner publishes a new repository announcement (kind 30617) to complete the transfer
+   - New announcement is saved to repository for verification
+
+3. **Server Processes Transfer**:
+   - Server fetches all ownership transfer events for repository
+   - Validates chain of ownership chronologically
+   - Updates current owner for all permission checks
+   - Maintainers remain valid (checked against current owner)
 
 ## Nostr Event Kinds Used
 
@@ -100,140 +287,6 @@ These are not part of any NIP but are used by this application:
   - Tags: `d` (repo name), `a` (repo identifier), `branch` (branch name and protection settings)
   - See [docs/NIP_COMPLIANCE.md](./docs/NIP_COMPLIANCE.md#30620---branch_protection) for complete example
 
-## How It Works
-
-### Repository Creation Flow
-
-1. **User Creates Announcement**:
-   - User visits `/signup` and connects NIP-07 extension
-   - Enters repository name, description, and optional clone URLs
-   - System automatically creates a self-transfer event (kind 1641) for initial ownership proof
-   - Both announcement and self-transfer are published to Nostr relays
-
-2. **Auto-Provisioning**:
-   - Server polls Nostr relays for new repository announcements (kind 30617)
-   - When found, server:
-     - Creates a bare git repository at `/repos/{npub}/{repo-name}.git`
-     - Fetches the self-transfer event for ownership verification
-     - Creates initial commit with README.md and saves announcement/transfer events to `nostr/repo-events.jsonl` for offline papertrail
-     - If repository has `clone` tags pointing to other remotes, syncs from those remotes
-
-3. **Repository Access**:
-   - Public repositories: Anyone can clone and view
-   - Private repositories: Only owners and maintainers can access
-   - Access is checked via NIP-98 authentication for git operations
-
-### Git Operations Flow
-
-1. **Clone/Fetch**:
-   - User runs `git clone https://{domain}/api/git/{npub}/{repo}.git` (or `/repos/` path)
-   - Server handles GET requests to `info/refs?service=git-upload-pack`
-   - For private repos, verifies NIP-98 authentication
-   - Proxies request to `git-http-backend` which serves the repository
-
-2. **Push**:
-   - User configures git with NIP-98 authentication
-   - Before push, client creates a NIP-98 event (kind 27235) with:
-     - `u` tag: Request URL
-     - `method` tag: HTTP method (POST)
-     - `payload` tag: SHA256 hash of request body
-   - Client signs event and includes in `Authorization: Nostr {event}` header
-   - Server verifies:
-     - Event signature
-     - Event timestamp (within 60 seconds)
-     - URL and method match
-     - Payload hash matches request body
-     - Pubkey is current owner or maintainer
-   - Server checks repository size limit (2 GB)
-   - Server proxies to `git-http-backend`
-   - After successful push, server:
-     - Extracts other `clone` URLs from announcement
-     - Syncs to all other remotes using `git push --all`
-
-### Ownership Transfer Flow
-
-1. **Current Owner Initiates Transfer**:
-   - Owner creates a kind 1641 event with:
-     - `a` tag: Repository identifier (`30617:{owner}:{repo}`)
-     - `p` tag: New owner pubkey
-     - `d` tag: Repository name
-   - Signs and publishes event to Nostr relays
-   - Transfer event is saved to repository in `nostr/repo-events.jsonl` for offline papertrail
-
-2. **New Owner Completes Transfer**:
-   - New owner is notified when logging into GitRepublic web
-   - New owner publishes a new repository announcement (kind 30617) to complete the transfer
-   - New announcement is saved to repository for verification
-
-3. **Server Processes Transfer**:
-   - Server fetches all ownership transfer events for repository
-   - Validates chain of ownership chronologically
-   - Updates current owner for all permission checks
-   - Maintainers remain valid (checked against current owner)
-
-### Pull Requests & Issues Flow
-
-1. **Creating a PR/Issue**:
-   - User creates a kind 1618 (PR) or 1621 (Issue) event
-   - Includes repository identifier in tags
-   - Publishes to Nostr relays
-
-2. **Status Management**:
-   - Owner/maintainer creates status events (kind 1630-1633)
-   - Links to PR/Issue via event references
-   - Status changes: open → applied/closed/draft
-   - **PR Merging**: Creates merge commit and publishes status event (kind 1631) with merge commit ID
-   - **PR Updates**: PR author can update PR tip commit using kind 1619 events
-   - **Issue Management**: Owners, maintainers, and issue authors can update issue status
-
-3. **Highlights & Comments**:
-   - User selects code in PR diff view
-   - Creates kind 9802 highlight event with code selection metadata
-   - Users can comment on highlights using kind 1111 events
-   - Comments are threaded using `A`, `K`, `P` tags (root) and `a`, `k`, `p` tags (parent)
-
-### Forking Flow
-
-1. **User Forks Repository**:
-   - User clicks "Fork" button on repository page
-   - Server:
-     - Clones original repository
-     - Creates new repository at `/repos/{user-npub}/{fork-name}.git`
-     - Creates new NIP-34 announcement for fork
-     - Creates self-transfer event for fork ownership
-     - Publishes both to Nostr relays
-
-2. **Fork Identification**:
-   - Fork announcement includes reference to original repository
-   - UI displays "Forked from" badge
-
-### Private Repository Access
-
-1. **Privacy Setting**:
-   - Repository announcement includes `private` tag (or `t` tag with value `private`)
-   - Server marks repository as private
-
-2. **Access Control**:
-   - All API endpoints check privacy status
-   - For private repos, requires NIP-98 authentication
-   - Verifies user is current owner or listed maintainer
-   - Returns 403 if unauthorized
-
-### Relay Write Proof
-
-Instead of traditional rate limiting, users must prove they can write to at least one default Nostr relay:
-
-1. **Proof Mechanism**:
-   - User publishes a NIP-98 event (kind 27235) to a default relay
-   - Event must be within 60 seconds (per NIP-98 spec)
-   - Server verifies event exists on relay
-   - Alternative: User publishes kind 24 public message (5-minute window)
-
-2. **Verification**:
-   - Server queries relay for the proof event
-   - Validates timestamp and signature
-   - Grants access if proof is valid
-
 ## Architecture
 
 ### Frontend
@@ -258,7 +311,150 @@ Instead of traditional rate limiting, users must prove they can write to at leas
 - **HighlightsService**: Manages NIP-84 highlights and NIP-22 comments
 - **RelayWriteProof**: Verifies user can write to Nostr relays
 
-## Project Structure
+## Security Features
+
+### Lightweight Mode (Single Container) - Default
+- **Resource Limits**: Per-user repository count and disk quota limits
+- **Rate Limiting**: Per-IP and per-user rate limiting for all operations
+- **Audit Logging**: Comprehensive logging of all security-relevant events
+- **Path Validation**: Strict path validation to prevent traversal attacks
+- **git-http-backend Hardening**: Timeouts, process isolation, scoped access
+- **Mode**: Set `ENTERPRISE_MODE=false` or leave unset (default)
+
+### Enterprise Mode (Kubernetes)
+- **Process Isolation**: Container-per-tenant architecture
+- **Network Isolation**: Kubernetes Network Policies
+- **Resource Quotas**: Per-tenant CPU, memory, and storage limits
+- **Separate Volumes**: Each tenant has their own PersistentVolume
+- **Mode**: Set `ENTERPRISE_MODE=true` environment variable
+- **Deployment**: See `k8s/ENTERPRISE_MODE.md` for setup instructions
+
+See `docs/SECURITY.md` and `docs/SECURITY_IMPLEMENTATION.md` for detailed information.
+
+## Environment Variables
+
+### Core Configuration
+- `ENTERPRISE_MODE`: Enable enterprise mode with Kubernetes (default: `false`). When `true`, expects container-per-tenant architecture. See `k8s/ENTERPRISE_MODE.md` for details.
+- `GIT_REPO_ROOT`: Path to store git repositories (default: `/repos`)
+- `GIT_DOMAIN`: Domain for git repositories (default: `localhost:6543`)
+- `NOSTR_RELAYS`: Comma-separated list of Nostr relays (default: `wss://theforest.nostr1.com`)
+- `NOSTR_SEARCH_RELAYS`: Comma-separated list of Nostr relays for searching (default: includes multiple relays)
+
+### Git Operations
+- `NOSTRGIT_SECRET_KEY`: User's Nostr private key (nsec bech32 or hex) for git command-line operations via credential helper. Required for `git clone`, `git push`, and `git pull` operations from the command line. **Note**: Install via `npm install -g gitrepublic-cli` to use this.
+
+### Tor Support
+- `TOR_SOCKS_PROXY`: Tor SOCKS proxy address (format: `host:port`, default: `127.0.0.1:9050`). Set to empty string to disable Tor support. When configured, the server will automatically route `.onion` addresses through Tor for both Nostr relay connections and git operations.
+- `TOR_ONION_ADDRESS`: Tor hidden service .onion address (optional). If not set, the server will attempt to read it from Tor's hostname file. When configured, every repository will automatically get a `.onion` clone URL in addition to the regular domain URL, making repositories accessible via Tor even if the server is only running on localhost.
+
+### Security Configuration
+- `MAX_REPOS_PER_USER`: Maximum repositories per user (default: `100`)
+- `MAX_DISK_QUOTA_PER_USER`: Maximum disk quota per user in bytes (default: `10737418240` = 10GB)
+- `RATE_LIMIT_ENABLED`: Enable rate limiting (default: `true`)
+- `AUDIT_LOGGING_ENABLED`: Enable audit logging (default: `true`)
+
+## Usage Examples
+
+### Web Interface
+
+#### Creating a Repository
+1. Go to `/signup`
+2. Connect your NIP-07 extension
+3. Enter repository name and description
+4. Optionally add clone URLs (your domain will be added automatically)
+5. Optionally add images/banners for OpenGraph previews
+6. Publish the announcement
+
+The server will automatically provision the repository.
+
+#### Viewing Repositories
+- Go to `/` to see all public repositories
+- Go to `/repos/{npub}/{repo}` to view a specific repository
+- Go to `/users/{npub}` to view a user's repositories
+- Go to `/search` to search for repositories
+
+#### Managing Repositories
+- **Settings**: Visit `/repos/{npub}/{repo}/settings` to manage privacy, maintainers, and description
+- **Forking**: Click "Fork" button on repository page
+- **Transfer Ownership**: Use the transfer UI in repository settings
+
+### Command Line Interface
+
+#### Cloning a Repository
+```bash
+# Using GitRepublic CLI (recommended)
+gitrep clone https://{domain}/api/git/{npub}/{repo-name}.git
+
+# Or using standard git (requires credential helper setup)
+git clone https://{domain}/api/git/{npub}/{repo-name}.git
+```
+
+**Note**: Use `/api/git/` or `/repos/` paths to ensure proper detection by the commit signing hook. All three paths (`/api/git/`, `/repos/`, and root `/`) work for cloning, but `/api/git/` is recommended for best compatibility.
+
+#### Pushing to a Repository
+```bash
+# Using GitRepublic CLI (automatic authentication)
+gitrep push origin main
+
+# Or using standard git (requires credential helper)
+git push origin main
+```
+
+The credential helper will automatically generate NIP-98 authentication tokens for push operations. The commit signing hook will automatically sign commits for GitRepublic repositories.
+
+#### API Commands
+```bash
+# List repositories
+gitrep repos list
+
+# Get repository details
+gitrep repos get <npub> <repo>
+
+# Push to all remotes
+gitrep push-all main
+
+# Publish repository announcement
+gitrep publish repo-announcement <repo-name>
+```
+
+For complete CLI documentation, see [gitrepublic-cli/README.md](./gitrepublic-cli/README.md).
+
+### API Access
+
+All API endpoints are documented in OpenAPI format. Access the API documentation at:
+- **Development**: `http://localhost:5173/api/openapi.json`
+- **Production**: `https://your-domain.com/api/openapi.json`
+
+#### Authentication
+All write operations require NIP-98 HTTP authentication:
+
+```bash
+# Example: Create a file (requires NIP-98 auth)
+curl -X POST https://your-domain.com/api/repos/{npub}/{repo}/file \
+  -H "Authorization: Nostr <base64-encoded-event-json>" \
+  -H "Content-Type: application/json" \
+  -d '{"path": "test.txt", "content": "Hello World"}'
+```
+
+The CLI handles authentication automatically. For manual API access, see the [NIP-98 specification](https://github.com/nostr-protocol/nips/blob/master/98.md).
+
+## Development
+
+### Prerequisites
+- Node.js 18+
+- Git with `git-http-backend` installed
+- NIP-07 browser extension (for web UI)
+
+### Setup
+
+```bash
+npm install  # Installs dependencies for both web and CLI (workspace)
+npm run dev
+```
+
+**Note**: This repository uses npm workspaces. The CLI (`gitrepublic-cli`) is included as a workspace package but can also be published independently. See `gitrepublic-cli/SYNC.md` for details on syncing to a separate repository.
+
+### Project Structure
 
 ```
 src/
@@ -281,7 +477,7 @@ src/
 │   │       └── file-manager.ts           # File operations with validation
 │   ├── components/
 │   │   ├── CodeEditor.svelte             # Code editor with syntax highlighting
-│   │   └── PRDetail.svelte               # Pull request detail view
+│   │   └── PRDetail.svelte                # Pull request detail view
 │   └── types/
 │       └── nostr.ts                      # TypeScript types for Nostr events
 ├── routes/
@@ -304,277 +500,26 @@ src/
 │           ├── file/+server.ts           # File read/write API
 │           ├── tree/+server.ts           # Directory listing API
 │           ├── branches/+server.ts        # Branch management API
-│           ├── commits/+server.ts        # Commit history API
+│           ├── commits/+server.ts         # Commit history API
 │           ├── tags/+server.ts           # Tag management API
 │           ├── issues/+server.ts         # Issues API
 │           ├── prs/+server.ts            # Pull requests API
 │           ├── highlights/+server.ts     # Highlights & comments API
 │           ├── fork/+server.ts           # Fork repository API
 │           ├── readme/+server.ts         # README fetching API
-│           ├── raw/+server.ts             # Raw file view API
-│           ├── download/+server.ts       # Download repository as ZIP
-│           ├── settings/+server.ts       # Repository settings API
-│           ├── transfer/+server.ts       # Ownership transfer API
+│           ├── raw/+server.ts            # Raw file view API
+│           ├── download/+server.ts      # Download repository as ZIP
+│           ├── settings/+server.ts      # Repository settings API
+│           ├── transfer/+server.ts      # Ownership transfer API
 │           └── verify/+server.ts         # Ownership verification API
 └── hooks.server.ts                       # Server initialization (starts polling)
 ```
 
-## Development
+## Additional Documentation
 
-### Prerequisites
-- Node.js 18+
-- Git with `git-http-backend` installed
-- NIP-07 browser extension (for web UI)
-
-### Setup
-
-```bash
-npm install  # Installs dependencies for both web and CLI (workspace)
-npm run dev
-```
-
-**Note**: This repository uses npm workspaces. The CLI (`gitrepublic-cli`) is included as a workspace package but can also be published independently. See `gitrepublic-cli/SYNC.md` for details on syncing to a separate repository.
-
-## Security Features
-
-### Lightweight Mode (Single Container)
-- **Resource Limits**: Per-user repository count and disk quota limits
-- **Rate Limiting**: Per-IP and per-user rate limiting for all operations
-- **Audit Logging**: Comprehensive logging of all security-relevant events
-- **Path Validation**: Strict path validation to prevent traversal attacks
-- **git-http-backend Hardening**: Timeouts, process isolation, scoped access
-
-### Enterprise Mode (Kubernetes)
-- **Process Isolation**: Container-per-tenant architecture
-- **Network Isolation**: Kubernetes Network Policies
-- **Resource Quotas**: Per-tenant CPU, memory, and storage limits
-- **Separate Volumes**: Each tenant has their own PersistentVolume
-
-See `docs/SECURITY.md` and `docs/SECURITY_IMPLEMENTATION.md` for detailed information.
-
-## Environment Variables
-
-- `NOSTRGIT_SECRET_KEY`: User's Nostr private key (nsec bech32 or hex) for git command-line operations via credential helper. Required for `git clone`, `git push`, and `git pull` operations from the command line. See [Git Command Line Setup](#git-command-line-setup) above. **Note**: Install the [GitRepublic CLI](https://github.com/your-org/gitrepublic-cli) package to use this.
-- `GIT_REPO_ROOT`: Path to store git repositories (default: `/repos`)
-- `GIT_DOMAIN`: Domain for git repositories (default: `localhost:6543`)
-- `NOSTR_RELAYS`: Comma-separated list of Nostr relays (default: `wss://theforest.nostr1.com`)
-- `TOR_SOCKS_PROXY`: Tor SOCKS proxy address (format: `host:port`, default: `127.0.0.1:9050`). Set to empty string to disable Tor support. When configured, the server will automatically route `.onion` addresses through Tor for both Nostr relay connections and git operations.
-- `TOR_ONION_ADDRESS`: Tor hidden service .onion address (optional). If not set, the server will attempt to read it from Tor's hostname file. When configured, every repository will automatically get a `.onion` clone URL in addition to the regular domain URL, making repositories accessible via Tor even if the server is only running on localhost.
-
-### Tor Hidden Service Setup
-
-To provide `.onion` addresses for all repositories, you need to set up a Tor hidden service:
-
-1. **Install and configure Tor**:
-   ```bash
-   # On Debian/Ubuntu
-   sudo apt-get install tor
-   
-   # Edit Tor configuration
-   sudo nano /etc/tor/torrc
-   ```
-
-2. **Add hidden service configuration**:
-   ```
-   HiddenServiceDir /var/lib/tor/gitrepublic
-   HiddenServicePort 80 127.0.0.1:6543
-   ```
-
-3. **Restart Tor**:
-   ```bash
-   sudo systemctl restart tor
-   ```
-
-4. **Get your .onion address**:
-   ```bash
-   sudo cat /var/lib/tor/gitrepublic/hostname
-   ```
-
-5. **Set environment variable** (optional, if hostname file is in a different location):
-   ```bash
-   export TOR_ONION_ADDRESS=your-onion-address.onion
-   ```
-
-The server will automatically:
-- Detect the `.onion` address from the hostname file or environment variable
-- Add a `.onion` clone URL to every repository announcement
-- Make repositories accessible via Tor even if the server is only on localhost
-
-**Note**: The `.onion` address works even if your server is only accessible on `localhost` - Tor will handle the routing!
-
-### Security Configuration
-
-- `SECURITY_MODE`: `lightweight` (single container) or `enterprise` (Kubernetes) (default: `lightweight`)
-- `MAX_REPOS_PER_USER`: Maximum repositories per user (default: `100`)
-- `MAX_DISK_QUOTA_PER_USER`: Maximum disk quota per user in bytes (default: `10737418240` = 10GB)
-- `RATE_LIMIT_ENABLED`: Enable rate limiting (default: `true`)
-- `RATE_LIMIT_WINDOW_MS`: Rate limit window in milliseconds (default: `60000` = 1 minute)
-- `RATE_LIMIT_GIT_MAX`: Max git operations per window (default: `60`)
-- `RATE_LIMIT_API_MAX`: Max API requests per window (default: `120`)
-- `RATE_LIMIT_FILE_MAX`: Max file operations per window (default: `30`)
-- `RATE_LIMIT_SEARCH_MAX`: Max search requests per window (default: `20`)
-- `AUDIT_LOGGING_ENABLED`: Enable audit logging (default: `true`)
-- `AUDIT_LOG_FILE`: Optional file path for audit logs (default: console only)
-  - If set, logs are written to files with daily rotation (e.g., `audit-2024-01-01.log`)
-  - Example: `/var/log/gitrepublic/audit.log` → creates `audit-2024-01-01.log`, `audit-2024-01-02.log`, etc.
-- `AUDIT_LOG_RETENTION_DAYS`: Number of days to keep audit log files (default: `90`)
-  - Old log files are automatically deleted after this period
-  - Set to `0` to disable automatic cleanup
-
-### Git HTTP Backend Setup
-
-The server uses `git-http-backend` for git operations. Ensure it's installed:
-
-```bash
-# On Debian/Ubuntu
-sudo apt-get install git
-
-# Verify installation
-which git-http-backend
-```
-
-The server will automatically locate `git-http-backend` in common locations.
-
-## Usage
-
-### Creating a Repository
-
-1. Go to `/signup`
-2. Connect your NIP-07 extension
-3. Enter repository name and description
-4. Optionally add clone URLs (your domain will be added automatically)
-5. Optionally add images/banners for OpenGraph previews
-6. Publish the announcement
-
-The server will automatically provision the repository.
-
-### Git Command Line Setup
-
-To use git from the command line with GitRepublic, install the [GitRepublic CLI](https://github.com/your-org/gitrepublic-cli) tools. This lightweight package provides the credential helper and commit signing hook.
-
-**Quick Setup:**
-
-1. **Install via npm** (recommended):
-   ```bash
-   npm install -g gitrepublic-cli
-   ```
-   
-   Or clone from GitHub:
-   ```bash
-   git clone https://github.com/your-org/gitrepublic-cli.git
-   cd gitrepublic-cli
-   npm install
-   ```
-
-2. **Set your Nostr private key**:
-   ```bash
-   export NOSTRGIT_SECRET_KEY="nsec1..."
-   # Or add to ~/.bashrc or ~/.zshrc for persistence
-   echo 'export NOSTRGIT_SECRET_KEY="nsec1..."' >> ~/.bashrc
-   ```
-
-3. **Run automatic setup**:
-   ```bash
-   # Setup everything automatically
-   gitrepublic-setup
-   
-   # Or with options:
-   gitrepublic-setup --domain your-domain.com    # Configure for specific domain
-   gitrepublic-setup --global-hook               # Install hook globally
-   ```
-   
-   The setup script automatically:
-   - Finds the scripts (works with npm install or git clone)
-   - Configures git credential helper
-   - Installs commit signing hook
-   - Checks if `NOSTRGIT_SECRET_KEY` is set
-
-**Important Notes:**
-- The `NOSTRGIT_SECRET_KEY` must match the repository owner or you must have maintainer permissions
-- The credential helper generates fresh NIP-98 tokens for each request (per-request authentication)
-- The commit signing hook only signs commits for GitRepublic repositories (detects `/api/git/npub` or `/repos/npub` URL patterns)
-- Never commit your private key to version control
-
-**CLI Features:**
-- Full API access: `gitrepublic repos list`, `gitrepublic file get`, etc.
-- Server configuration: `gitrepublic config server`
-- JSON output support: `gitrepublic --json repos get <npub> <repo>`
-
-For complete setup instructions, API commands, and troubleshooting, see the [GitRepublic CLI README](https://github.com/your-org/gitrepublic-cli).
-
-### Cloning a Repository
-
-```bash
-# Using GitRepublic API endpoint (recommended for commit signing detection)
-git clone https://{domain}/api/git/{npub}/{repo-name}.git
-
-# Or using repos endpoint
-git clone https://{domain}/repos/{npub}/{repo-name}.git
-
-# Direct path (also works, but may conflict with GRASP servers)
-git clone https://{domain}/{npub}/{repo-name}.git
-```
-
-**Note**: Use `/api/git/` or `/repos/` paths to ensure proper detection by the commit signing hook and to distinguish from GRASP servers. All three paths work for cloning, but `/api/git/` is recommended for best compatibility.
-
-### Pushing to a Repository
-
-```bash
-# Add remote (use /api/git/ or /repos/ path for best compatibility)
-git remote add origin https://{domain}/api/git/{npub}/{repo-name}.git
-
-# Push (requires credential helper setup)
-git push origin main
-```
-
-The credential helper will automatically generate NIP-98 authentication tokens for push operations. The commit signing hook will automatically sign commits for GitRepublic repositories.
-
-### Viewing Repositories
-
-- Go to `/` to see all public repositories
-- Go to `/repos/{npub}/{repo}` to view a specific repository
-- Go to `/users/{npub}` to view a user's repositories
-- Go to `/search` to search for repositories
-
-### Managing Repositories
-
-- **Settings**: Visit `/repos/{npub}/{repo}/settings` to manage privacy, maintainers, and description
-- **Forking**: Click "Fork" button on repository page
-- **Transfer Ownership**: Use the transfer API endpoint or create a kind 1641 event manually
-
-## Security Features
-
-### Lightweight Mode (Single Container)
-- **Resource Limits**: Per-user repository count and disk quota limits
-- **Rate Limiting**: Per-IP and per-user rate limiting for all operations
-- **Audit Logging**: Comprehensive logging of all security-relevant events
-- **Path Validation**: Strict path validation to prevent traversal attacks
-- **git-http-backend Hardening**: Timeouts, process isolation, scoped access
-
-### Enterprise Mode (Kubernetes)
-- **Process Isolation**: Container-per-tenant architecture
-- **Network Isolation**: Kubernetes Network Policies
-- **Resource Quotas**: Per-tenant CPU, memory, and storage limits
-- **Separate Volumes**: Each tenant has their own PersistentVolume
-
-### Security Considerations
-
-- **Path Traversal Protection**: All file paths are validated and sanitized
-- **Input Validation**: Commit messages, author info, and file paths are validated
-- **Size Limits**: 2 GB per repository, 500 MB per file
-- **Authentication**: All write operations require NIP-98 authentication
-- **Authorization**: Ownership and maintainer checks for all operations
-- **Private Repositories**: Access restricted to owners and maintainers
-- **Resource Limits**: Per-user repository count and disk quota limits (configurable)
-- **Rate Limiting**: Per-IP and per-user rate limiting (configurable)
-- **Audit Logging**: All security-relevant events are logged
-
-See `docs/SECURITY.md` and `docs/SECURITY_IMPLEMENTATION.md` for detailed information.
-
-## License
-
-[Add your license here]
-
-## Contributing
-
-[Add contribution guidelines here]
+- [Architecture FAQ](./docs/ARCHITECTURE_FAQ.md) - Answers to common architecture questions
+- [NIP Compliance](./docs/NIP_COMPLIANCE.md) - Complete event kind reference with JSON examples
+- [Security Documentation](./docs/SECURITY.md) - Security features and considerations
+- [CLI Documentation](./gitrepublic-cli/README.md) - Complete CLI usage guide
+- [Enterprise Mode](./k8s/ENTERPRISE_MODE.md) - Kubernetes deployment guide
+- [API Documentation](./src/routes/api/openapi.json) - OpenAPI specification

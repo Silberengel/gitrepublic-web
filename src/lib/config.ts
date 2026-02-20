@@ -94,6 +94,20 @@ export function isOnionAddress(url: string): boolean {
 }
 
 /**
+ * Enterprise mode configuration
+ * When enabled, the system expects to run in Kubernetes with container-per-tenant architecture
+ * Default: false (lightweight mode - single container)
+ * Can be overridden by ENTERPRISE_MODE env var (set to "true" to enable)
+ */
+export const ENTERPRISE_MODE = 
+  typeof process !== 'undefined' && process.env?.ENTERPRISE_MODE === 'true';
+
+/**
+ * Security mode string (for logging/debugging)
+ */
+export const SECURITY_MODE = ENTERPRISE_MODE ? 'enterprise' : 'lightweight';
+
+/**
  * Combine default relays with user's relays (from kind 10002)
  * Returns a deduplicated list with user relays first, then defaults
  */

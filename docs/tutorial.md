@@ -140,7 +140,7 @@ Private repositories require authentication. You'll need to set up NIP-98 authen
 
 #### Setting Up NIP-98 Authentication
 
-For command-line git operations, you need to install the [GitRepublic CLI](https://github.com/your-org/gitrepublic-cli) which provides:
+For command-line git operations, you need to install the [GitRepublic CLI](https://github.com/silberengel/gitrepublic-cli) which provides:
 
 1. **Credential Helper**: Automatically generates NIP-98 authentication tokens for git operations
 2. **Commit Signing Hook**: Automatically signs commits for GitRepublic repositories
@@ -171,7 +171,7 @@ This automatically configures the credential helper and commit signing hook. See
 
    When prompted, the credential helper will automatically generate and use a NIP-98 authentication token.
 
-**Note**: For command-line git operations, you'll need to install the [GitRepublic CLI](https://github.com/your-org/gitrepublic-cli) and set up the credential helper. See the README for complete setup instructions.
+**Note**: For command-line git operations, you'll need to install the [GitRepublic CLI](https://github.com/silberengel/gitrepublic-cli) via `npm install -g gitrepublic-cli` and set up the credential helper. See the README for complete setup instructions.
 
 ### Cloning from Multiple Remotes
 

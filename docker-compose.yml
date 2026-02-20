@@ -16,6 +16,8 @@ services:
     #   - "6543"  # Internal only, accessed via reverse proxy container
     environment:
       - NODE_ENV=production
+      # ENTERPRISE_MODE: Not set (defaults to false) - this is lightweight mode
+      # For enterprise mode with Kubernetes, see k8s/ENTERPRISE_MODE.md
       - GIT_REPO_ROOT=/repos
       - GIT_DOMAIN=${GIT_DOMAIN:-gitrepublic.imwald.eu}  # Set to your domain for production (without https://)
       - NOSTR_RELAYS=${NOSTR_RELAYS:-wss://theforest.nostr1.com}

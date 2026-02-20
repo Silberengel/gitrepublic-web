@@ -1,0 +1,31 @@
+# Ingress for gitrepublic tenant
+# Routes external traffic to the tenant's service
+# Each tenant can have their own subdomain or path-based routing
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gitrepublic-ingress
+  namespace: gitrepublic-tenant-${TENANT_ID}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    # Optional: SSL/TLS configuration
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: ${TENANT_SUBDOMAIN}.${GIT_DOMAIN}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: gitrepublic
+            port:
+              number: 80
+  # Optional: TLS configuration
+  # tls:
+  # - hosts:
+  #   - ${TENANT_SUBDOMAIN}.${GIT_DOMAIN}
+  #   secretName: gitrepublic-tls

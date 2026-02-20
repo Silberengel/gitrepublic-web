@@ -36,13 +36,40 @@ k8s/
 
 ## Usage
 
-### Single Container (Lightweight)
+### Single Container (Lightweight) - Default Mode
 
 Use the existing `docker-compose.yml` or `Dockerfile`. Security improvements are application-level and work automatically.
 
-### Kubernetes (Enterprise)
+**Environment Variable**: `ENTERPRISE_MODE` is not set (defaults to `false`)
 
-#### Option 1: Manual Deployment
+### Kubernetes (Enterprise Mode)
+
+**Enable Enterprise Mode**: Set `ENTERPRISE_MODE=true` environment variable
+
+Enterprise mode provides:
+- Container-per-tenant isolation
+- Separate volumes per tenant
+- Network isolation
+- Resource quotas
+- Process isolation
+
+#### Option 1: Using Deployment Script (Recommended)
+
+Use the provided deployment script:
+
+```bash
+# Deploy a tenant
+./k8s/deploy-tenant.sh npub1abc123... \
+  --domain git.example.com \
+  --storage-class fast-ssd \
+  --storage-size 50Gi \
+  --subdomain user1
+
+# Delete a tenant
+./k8s/delete-tenant.sh npub1abc123...
+```
+
+#### Option 2: Manual Deployment
 
 1. **Create namespace for tenant**:
 ```bash
@@ -50,8 +77,10 @@ export TENANT_ID="npub1abc123..."
 export GIT_DOMAIN="git.example.com"
 export NOSTR_RELAYS="wss://relay1.com,wss://relay2.com"
 export STORAGE_CLASS="fast-ssd"
+export STORAGE_SIZE="100Gi"
+export TENANT_SUBDOMAIN="user1"
 
-# Replace variables in templatesa
+# Replace variables in templates
 envsubst < k8s/base/namespace.yaml | kubectl apply -f -
 envsubst < k8s/base/resource-quota.yaml | kubectl apply -f -
 envsubst < k8s/base/limit-range.yaml | kubectl apply -f -
@@ -59,9 +88,10 @@ envsubst < k8s/base/pvc.yaml | kubectl apply -f -
 envsubst < k8s/base/deployment.yaml | kubectl apply -f -
 envsubst < k8s/base/service.yaml | kubectl apply -f -
 envsubst < k8s/base/network-policy.yaml | kubectl apply -f -
+envsubst < k8s/base/ingress.yaml | kubectl apply -f -
 ```
 
-#### Option 2: Operator Pattern (Recommended)
+#### Option 3: Operator Pattern (Advanced)
 
 Create a Kubernetes operator that:
 - Watches for new repository announcements
@@ -69,7 +99,7 @@ Create a Kubernetes operator that:
 - Manages tenant lifecycle
 - Handles scaling and resource allocation
 
-#### Option 3: Helm Chart
+#### Option 4: Helm Chart
 
 Package as Helm chart for easier deployment:
 ```bash

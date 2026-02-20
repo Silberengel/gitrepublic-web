@@ -455,7 +455,7 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
       const git = simpleGit(repoPath);
       
       // Get current branch name
-      const currentBranch = await git.revParse(['--abbrev-ref', 'HEAD']);
+      const currentBranch = await git.revparse(['--abbrev-ref', 'HEAD']);
       if (!currentBranch) {
         return false; // Can't determine current branch
       }
@@ -468,15 +468,15 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
       
       // Check if remote branch exists
       try {
-        await git.revParse([`refs/remotes/${remoteBranch}`]);
+        await git.revparse([`refs/remotes/${remoteBranch}`]);
       } catch {
         // Remote branch doesn't exist yet - safe to push (first push)
         return true;
       }
       
       // Get local and remote commit SHAs
-      const localSha = await git.revParse(['HEAD']);
-      const remoteSha = await git.revParse([`refs/remotes/${remoteBranch}`]);
+      const localSha = await git.revparse(['HEAD']);
+      const remoteSha = await git.revparse([`refs/remotes/${remoteBranch}`]);
       
       // If they're the same, it's safe (no-op)
       if (localSha === remoteSha) {

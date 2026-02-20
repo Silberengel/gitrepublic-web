@@ -4057,7 +4057,7 @@
                     {repo}
                     {repoOwnerPubkey}
                     isMaintainer={isMaintainer}
-                    userPubkeyHex={userPubkeyHex}
+                    userPubkeyHex={userPubkeyHex ?? undefined}
                     onStatusUpdate={loadPRs}
                   />
                   <button onclick={() => selectedPR = null} class="back-btn">← Back to PR List</button>
@@ -5373,7 +5373,6 @@
       width: 100%;
       margin-bottom: 1rem;
       padding: 0.75rem;
-    }
     }
 
     .non-maintainer-notice {
