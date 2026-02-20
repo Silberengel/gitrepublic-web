@@ -11,6 +11,7 @@
   import { determineUserLevel, decodePubkey } from '$lib/services/nostr/user-level-service.js';
   import { userStore } from '$lib/stores/user-store.js';
   import { updateActivity } from '$lib/services/activity-tracker.js';
+  import { settingsStore } from '$lib/services/settings-store.js';
 
   // Accept children as a snippet prop (Svelte 5)
   let { children }: { children: Snippet } = $props();
@@ -36,17 +37,25 @@
   let pendingTransfers = $state<PendingTransfer[]>([]);
   let dismissedTransfers = $state<Set<string>>(new Set());
 
-  onMount(() => {
+  onMount(async () => {
     // Only run client-side code
     if (typeof window === 'undefined') return;
     
-    // Check for saved theme preference or default to gitrepublic-dark
-    const savedTheme = localStorage.getItem('theme') as 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black' | null;
-    if (savedTheme === 'gitrepublic-light' || savedTheme === 'gitrepublic-dark' || savedTheme === 'gitrepublic-black') {
-      theme = savedTheme;
-    } else {
-      // Default to gitrepublic-dark (purple)
-      theme = 'gitrepublic-dark';
+    // Load theme from settings store
+    try {
+      const settings = await settingsStore.getSettings();
+      theme = settings.theme;
+    } catch (err) {
+      console.warn('Failed to load theme from settings, using default:', err);
+      // Fallback to localStorage for migration
+      const savedTheme = localStorage.getItem('theme') as 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black' | null;
+      if (savedTheme === 'gitrepublic-light' || savedTheme === 'gitrepublic-dark' || savedTheme === 'gitrepublic-black') {
+        theme = savedTheme;
+        // Migrate to settings store
+        settingsStore.setSetting('theme', theme).catch(console.error);
+      } else {
+        theme = 'gitrepublic-dark';
+      }
     }
     applyTheme();
     
@@ -185,7 +194,8 @@
     } else if (theme === 'gitrepublic-black') {
       document.documentElement.setAttribute('data-theme', 'black');
     }
-    localStorage.setItem('theme', theme);
+    // Save to settings store (async, don't await)
+    settingsStore.setSetting('theme', theme).catch(console.error);
   }
 
   function toggleTheme() {

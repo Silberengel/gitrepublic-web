@@ -20,6 +20,7 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
 import { extractRequestContext } from '$lib/utils/api-context.js';
+import { fetchUserEmail, fetchUserName } from '$lib/utils/user-profile.js';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
@@ -306,8 +307,40 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
       }
     }
 
-    if (!path || !commitMessage || !authorName || !authorEmail) {
-      return error(400, 'Missing required fields: path, commitMessage, authorName, authorEmail');
+    if (!path || !commitMessage) {
+      return error(400, 'Missing required fields: path, commitMessage');
+    }
+
+    // Fetch authorName and authorEmail from kind 0 event if not provided
+    let finalAuthorName = authorName;
+    let finalAuthorEmail = authorEmail;
+
+    if (!finalAuthorName || !finalAuthorEmail) {
+      if (!userPubkey) {
+        return error(400, 'Missing userPubkey. Cannot fetch author information without userPubkey.');
+      }
+
+      const userPubkeyHexForProfile = decodeNpubToHex(userPubkey) || userPubkey;
+      
+      try {
+        if (!finalAuthorName) {
+          finalAuthorName = await fetchUserName(userPubkeyHexForProfile, userPubkey, DEFAULT_NOSTR_RELAYS);
+        }
+        if (!finalAuthorEmail) {
+          finalAuthorEmail = await fetchUserEmail(userPubkeyHexForProfile, userPubkey, DEFAULT_NOSTR_RELAYS);
+        }
+      } catch (err) {
+        logger.warn({ error: err, userPubkey }, 'Failed to fetch user profile for author info, using fallbacks');
+        // Use fallbacks if fetch fails
+        if (!finalAuthorName) {
+          const npub = userPubkey.startsWith('npub') ? userPubkey : nip19.npubEncode(userPubkeyHexForProfile);
+          finalAuthorName = npub.substring(0, 20);
+        }
+        if (!finalAuthorEmail) {
+          const npub = userPubkey.startsWith('npub') ? userPubkey : nip19.npubEncode(userPubkeyHexForProfile);
+          finalAuthorEmail = `${npub.substring(0, 20)}@gitrepublic.web`;
+        }
+      }
     }
 
     if (!userPubkey) {
@@ -406,8 +439,8 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
           repo,
           path,
           commitMessage,
-          authorName,
-          authorEmail,
+          finalAuthorName,
+          finalAuthorEmail,
           targetBranch,
           Object.keys(signingOptions).length > 0 ? signingOptions : undefined
         );
@@ -446,8 +479,8 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
           path,
           content,
           commitMessage,
-          authorName,
-          authorEmail,
+          finalAuthorName,
+          finalAuthorEmail,
           targetBranch,
           Object.keys(signingOptions).length > 0 ? signingOptions : undefined
         );

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import CodeEditor from '$lib/components/CodeEditor.svelte';
@@ -15,9 +15,11 @@
   import { KIND } from '$lib/types/nostr.js';
   import { nip19 } from 'nostr-tools';
   import { userStore } from '$lib/stores/user-store.js';
+  import { settingsStore } from '$lib/services/settings-store.js';
   import { generateVerificationFile, VERIFICATION_FILE_PATH } from '$lib/services/nostr/repo-verification.js';
   import type { NostrEvent } from '$lib/types/nostr.js';
   import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
+  import { fetchUserEmail, fetchUserName } from '$lib/utils/user-profile.js';
 
   // Get page data for OpenGraph metadata - use $derived to make it reactive
   const pageData = $derived($page.data as {
@@ -61,6 +63,9 @@
   let showCommitDialog = $state(false);
   let activeTab = $state<'files' | 'history' | 'tags' | 'issues' | 'prs' | 'docs' | 'discussions'>('discussions');
   let showRepoMenu = $state(false);
+  
+  // Auto-save
+  let autoSaveInterval: ReturnType<typeof setInterval> | null = null;
 
   // Load maintainers when page data changes (only once per repo, with guard)
   let lastRepoKey = $state<string | null>(null);
@@ -92,6 +97,25 @@
         console.warn('Failed to load maintainers:', err);
       });
     }
+  });
+
+  // Watch for auto-save setting changes
+  $effect(() => {
+    // Check auto-save setting and update interval (async, but don't await)
+    settingsStore.getSettings().then(settings => {
+      if (settings.autoSave && !autoSaveInterval) {
+        // Auto-save was enabled, set it up
+        setupAutoSave();
+      } else if (!settings.autoSave && autoSaveInterval) {
+        // Auto-save was disabled, clear interval
+        if (autoSaveInterval) {
+          clearInterval(autoSaveInterval);
+          autoSaveInterval = null;
+        }
+      }
+    }).catch(err => {
+      console.warn('Failed to check auto-save setting:', err);
+    });
   });
 
   // Sync with userStore
@@ -1432,6 +1456,17 @@
     await loadReadme();
     await loadForkInfo();
     await loadRepoImages();
+    
+    // Set up auto-save if enabled
+    setupAutoSave().catch(err => console.warn('Failed to setup auto-save:', err));
+  });
+  
+  // Cleanup on destroy
+  onDestroy(() => {
+    if (autoSaveInterval) {
+      clearInterval(autoSaveInterval);
+      autoSaveInterval = null;
+    }
   });
 
   async function checkAuth() {
@@ -2122,6 +2157,17 @@
   let fetchingUserName = $state(false);
 
   async function getUserEmail(): Promise<string> {
+    // Check settings store first
+    try {
+      const settings = await settingsStore.getSettings();
+      if (settings.userEmail && settings.userEmail.trim()) {
+        cachedUserEmail = settings.userEmail.trim();
+        return cachedUserEmail;
+      }
+    } catch (err) {
+      console.warn('Failed to get userEmail from settings:', err);
+    }
+
     // Return cached email if available
     if (cachedUserEmail) {
       return cachedUserEmail;
@@ -2142,53 +2188,20 @@
     }
 
     fetchingUserEmail = true;
-    let nip05Email: string | null = null;
+    let prefillEmail: string;
     
     try {
-      const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
-      const profileEvents = await client.fetchEvents([
-        {
-          kinds: [0], // Kind 0 = profile metadata
-          authors: [userPubkeyHex],
-          limit: 1
-        }
-      ]);
-
-      if (profileEvents.length > 0) {
-        const event = profileEvents[0];
-        
-        // First check tags (newer format where NIP-05 might be in tags)
-        const nip05Tag = event.tags.find((tag: string[]) => 
-          (tag[0] === 'nip05' || tag[0] === 'l') && tag[1]
-        );
-        if (nip05Tag && nip05Tag[1]) {
-          nip05Email = nip05Tag[1];
-        }
-        
-        // Also check JSON content (traditional format)
-        if (!nip05Email) {
-          try {
-            const profile = JSON.parse(event.content);
-            // NIP-05 is stored as 'nip05' in the profile JSON
-            if (profile.nip05 && typeof profile.nip05 === 'string') {
-              nip05Email = profile.nip05;
-            }
-          } catch {
-            // Invalid JSON, ignore
-          }
-        }
-      }
+      // Fetch from kind 0 event (cache or relays)
+      prefillEmail = await fetchUserEmail(userPubkeyHex, userPubkey || undefined, DEFAULT_NOSTR_RELAYS);
     } catch (err) {
       console.warn('Failed to fetch user profile for email:', err);
+      // Fallback to shortenednpub@gitrepublic.web
+      const npubFromPubkey = userPubkeyHex ? nip19.npubEncode(userPubkeyHex) : (userPubkey || 'unknown');
+      const shortenedNpub = npubFromPubkey.substring(0, 20);
+      prefillEmail = `${shortenedNpub}@gitrepublic.web`;
     } finally {
       fetchingUserEmail = false;
     }
-
-    // Always prompt user for email address (they might want to use a different domain)
-    // Always use userPubkeyHex to generate npub (userPubkey might be hex instead of npub)
-    const npubFromPubkey = userPubkeyHex ? nip19.npubEncode(userPubkeyHex) : (userPubkey || 'unknown');
-    const fallbackEmail = `${npubFromPubkey}@nostr`;
-    const prefillEmail = nip05Email || fallbackEmail;
     
     // Prompt user for email address
     const userEmail = prompt(
@@ -2203,6 +2216,8 @@
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (emailRegex.test(userEmail.trim())) {
         cachedUserEmail = userEmail.trim();
+        // Save to settings store
+        settingsStore.setSetting('userEmail', cachedUserEmail).catch(console.error);
         return cachedUserEmail;
       } else {
         alert('Invalid email format. Using fallback email address.');
@@ -2210,11 +2225,22 @@
     }
 
     // Use fallback if user cancelled or entered invalid email
-    cachedUserEmail = fallbackEmail;
+    cachedUserEmail = prefillEmail;
     return cachedUserEmail;
   }
 
   async function getUserName(): Promise<string> {
+    // Check settings store first
+    try {
+      const settings = await settingsStore.getSettings();
+      if (settings.userName && settings.userName.trim()) {
+        cachedUserName = settings.userName.trim();
+        return cachedUserName;
+      }
+    } catch (err) {
+      console.warn('Failed to get userName from settings:', err);
+    }
+
     // Return cached name if available
     if (cachedUserName) {
       return cachedUserName;
@@ -2235,40 +2261,19 @@
     }
 
     fetchingUserName = true;
-    let profileName: string | null = null;
+    let prefillName: string;
     
     try {
-      const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
-      const profileEvents = await client.fetchEvents([
-        {
-          kinds: [0], // Kind 0 = profile metadata
-          authors: [userPubkeyHex],
-          limit: 1
-        }
-      ]);
-
-      if (profileEvents.length > 0) {
-        try {
-          const profile = JSON.parse(profileEvents[0].content);
-          // Name is stored as 'name' in the profile JSON
-          if (profile.name && typeof profile.name === 'string') {
-            profileName = profile.name;
-          }
-        } catch {
-          // Invalid JSON, ignore
-        }
-      }
+      // Fetch from kind 0 event (cache or relays)
+      prefillName = await fetchUserName(userPubkeyHex, userPubkey || undefined, DEFAULT_NOSTR_RELAYS);
     } catch (err) {
       console.warn('Failed to fetch user profile for name:', err);
+      // Fallback to shortened npub (20 chars)
+      const npubFromPubkey = userPubkeyHex ? nip19.npubEncode(userPubkeyHex) : (userPubkey || 'unknown');
+      prefillName = npubFromPubkey.substring(0, 20);
     } finally {
       fetchingUserName = false;
     }
-
-    // Always prompt user for name (they might want to use a different name)
-    // Always use userPubkeyHex to generate npub (userPubkey might be hex instead of npub)
-    const npubFromPubkey = userPubkeyHex ? nip19.npubEncode(userPubkeyHex) : (userPubkey || 'unknown');
-    const fallbackName = npubFromPubkey;
-    const prefillName = profileName || fallbackName;
     
     // Prompt user for name
     const userName = prompt(
@@ -2280,12 +2285,131 @@
 
     if (userName && userName.trim()) {
       cachedUserName = userName.trim();
+      // Save to settings store
+      settingsStore.setSetting('userName', cachedUserName).catch(console.error);
       return cachedUserName;
     }
 
     // Use fallback if user cancelled
-    cachedUserName = fallbackName;
+    cachedUserName = prefillName;
     return cachedUserName;
+  }
+
+  async function setupAutoSave() {
+    // Clear existing interval if any
+    if (autoSaveInterval) {
+      clearInterval(autoSaveInterval);
+      autoSaveInterval = null;
+    }
+    
+    // Check if auto-save is enabled
+    try {
+      const settings = await settingsStore.getSettings();
+      if (!settings.autoSave) {
+        return; // Auto-save disabled
+      }
+    } catch (err) {
+      console.warn('Failed to check auto-save setting:', err);
+      return;
+    }
+    
+    // Set up interval to auto-save every 10 minutes
+    autoSaveInterval = setInterval(async () => {
+      await autoSaveFile();
+    }, 10 * 60 * 1000); // 10 minutes
+  }
+  
+  async function autoSaveFile() {
+    // Only auto-save if:
+    // 1. There are changes
+    // 2. A file is open
+    // 3. User is logged in
+    // 4. User is a maintainer
+    // 5. Not currently saving
+    // 6. Not in clone state
+    if (!hasChanges || !currentFile || !userPubkey || !isMaintainer || saving || needsClone) {
+      return;
+    }
+    
+    // Check auto-save setting again (in case it changed)
+    try {
+      const settings = await settingsStore.getSettings();
+      if (!settings.autoSave) {
+        // Auto-save was disabled, clear interval
+        if (autoSaveInterval) {
+          clearInterval(autoSaveInterval);
+          autoSaveInterval = null;
+        }
+        return;
+      }
+    } catch (err) {
+      console.warn('Failed to check auto-save setting:', err);
+      return;
+    }
+    
+    // Generate a default commit message
+    const autoCommitMessage = `Auto-save: ${new Date().toLocaleString()}`;
+    
+    try {
+      // Get user email and name from settings
+      const authorEmail = await getUserEmail();
+      const authorName = await getUserName();
+      
+      // Sign commit with NIP-07 (client-side)
+      let commitSignatureEvent: NostrEvent | null = null;
+      if (isNIP07Available()) {
+        try {
+          const { KIND } = await import('$lib/types/nostr.js');
+          const timestamp = Math.floor(Date.now() / 1000);
+          const eventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
+            kind: KIND.COMMIT_SIGNATURE,
+            pubkey: '', // Will be filled by NIP-07
+            created_at: timestamp,
+            tags: [
+              ['author', authorName, authorEmail],
+              ['message', autoCommitMessage]
+            ],
+            content: `Signed commit: ${autoCommitMessage}`
+          };
+          commitSignatureEvent = await signEventWithNIP07(eventTemplate);
+        } catch (err) {
+          console.warn('Failed to sign commit with NIP-07:', err);
+          // Continue without signature if signing fails
+        }
+      }
+      
+      const response = await fetch(`/api/repos/${npub}/${repo}/file`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildApiHeaders()
+        },
+        body: JSON.stringify({
+          path: currentFile,
+          content: editedContent,
+          commitMessage: autoCommitMessage,
+          authorName: authorName,
+          authorEmail: authorEmail,
+          branch: currentBranch,
+          userPubkey: userPubkey,
+          commitSignatureEvent: commitSignatureEvent
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: response.statusText }));
+        console.warn('Auto-save failed:', errorData.message || 'Failed to save file');
+        return;
+      }
+
+      // Reload file to get updated content
+      await loadFile(currentFile);
+      // Note: We don't show an alert for auto-save, it's silent
+      console.log('Auto-saved file:', currentFile);
+    } catch (err) {
+      console.warn('Error during auto-save:', err);
+      // Don't show error to user, it's silent
+    }
   }
 
   async function saveFile() {

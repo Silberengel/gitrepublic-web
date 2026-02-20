@@ -4,6 +4,7 @@
   import { getPublicKeyWithNIP07, isNIP07Available } from '../services/nostr/nip07-signer.js';
   import { nip19 } from 'nostr-tools';
   import ThemeToggle from './ThemeToggle.svelte';
+  import SettingsButton from './SettingsButton.svelte';
   import UserBadge from './UserBadge.svelte';
   import { onMount } from 'svelte';
   import { userStore } from '../stores/user-store.js';
@@ -227,6 +228,7 @@
       </div>
     </nav>
     <div class="auth-section">
+      <SettingsButton />
       <ThemeToggle />
       {#if userPubkey}
         {@const userNpub = (() => {
