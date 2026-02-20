@@ -7,31 +7,70 @@
   import UserBadge from './UserBadge.svelte';
   import { onMount } from 'svelte';
   import { userStore } from '../stores/user-store.js';
-  import { clearActivity, updateActivity } from '../services/activity-tracker.js';
+  import { clearActivity, updateActivity, isSessionExpired } from '../services/activity-tracker.js';
   import { determineUserLevel, decodePubkey } from '../services/nostr/user-level-service.js';
 
   let userPubkey = $state<string | null>(null);
   let mobileMenuOpen = $state(false);
 
+  // Sync with userStore changes
+  $effect(() => {
+    const currentUser = $userStore;
+    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
+      // Check if session expired
+      if (isSessionExpired()) {
+        userStore.reset();
+        userPubkey = null;
+      } else {
+        userPubkey = currentUser.userPubkey;
+        updateActivity();
+      }
+    } else {
+      userPubkey = null;
+    }
+  });
+
   onMount(() => {
-    // Check auth asynchronously (don't await in onMount cleanup)
-    checkAuth();
-    
-    // Update activity on mount
-    updateActivity();
+    // User store already checks session expiry on initialization
+    // Just restore state from store (which loads from localStorage)
+    const currentState = $userStore;
+    if (currentState.userPubkey && currentState.userPubkeyHex) {
+      // User is logged in - restore state (already synced by $effect, but ensure it's set)
+      userPubkey = currentState.userPubkey;
+      // Update activity to extend session
+      updateActivity();
+    } else {
+      // User not logged in - check auth
+      checkAuth();
+    }
     
     // Set up activity tracking for user interactions
-    const updateActivityOnInteraction = () => updateActivity();
+    const updateActivityOnInteraction = () => {
+      if (userPubkey) {
+        updateActivity();
+      }
+    };
     
     // Track various user interactions
     document.addEventListener('click', updateActivityOnInteraction, { passive: true });
     document.addEventListener('keydown', updateActivityOnInteraction, { passive: true });
     document.addEventListener('scroll', updateActivityOnInteraction, { passive: true });
     
+    // Check session expiry periodically (every 5 minutes)
+    const expiryCheckInterval = setInterval(() => {
+      if (isSessionExpired()) {
+        // Session expired - logout user
+        userStore.reset();
+        userPubkey = null;
+        clearInterval(expiryCheckInterval);
+      }
+    }, 5 * 60 * 1000); // Check every 5 minutes
+    
     return () => {
       document.removeEventListener('click', updateActivityOnInteraction);
       document.removeEventListener('keydown', updateActivityOnInteraction);
       document.removeEventListener('scroll', updateActivityOnInteraction);
+      clearInterval(expiryCheckInterval);
     };
   });
 
@@ -117,6 +156,30 @@
       
       // Update activity tracking on successful login
       updateActivity();
+      
+      // Check for pending transfer events
+      if (levelResult.userPubkeyHex) {
+        try {
+          const response = await fetch('/api/transfers/pending', {
+            headers: {
+              'X-User-Pubkey': levelResult.userPubkeyHex
+            }
+          });
+          if (response.ok) {
+            const data = await response.json();
+            if (data.pendingTransfers && data.pendingTransfers.length > 0) {
+              // Trigger a custom event to notify layout about pending transfers
+              // The layout component will handle displaying the notifications
+              window.dispatchEvent(new CustomEvent('pendingTransfers', { 
+                detail: { transfers: data.pendingTransfers } 
+              }));
+            }
+          }
+        } catch (err) {
+          console.error('Failed to check for pending transfers:', err);
+          // Don't fail login if transfer check fails
+        }
+      }
       
       // Show success message
       const { hasUnlimitedAccess } = await import('../../lib/utils/user-access.js');

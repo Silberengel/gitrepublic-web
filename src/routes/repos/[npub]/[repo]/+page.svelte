@@ -1436,30 +1436,95 @@
       // Re-check maintainer status and bookmark status after login
       await checkMaintainerStatus();
       await loadBookmarkStatus();
+      // Check for pending transfers (user is already logged in via store)
+      if (userPubkeyHex) {
+        try {
+          const response = await fetch('/api/transfers/pending', {
+            headers: {
+              'X-User-Pubkey': userPubkeyHex
+            }
+          });
+          if (response.ok) {
+            const data = await response.json();
+            if (data.pendingTransfers && data.pendingTransfers.length > 0) {
+              window.dispatchEvent(new CustomEvent('pendingTransfers', { 
+                detail: { transfers: data.pendingTransfers } 
+              }));
+            }
+          }
+        } catch (err) {
+          console.error('Failed to check for pending transfers:', err);
+        }
+      }
       return;
     }
     
-    // Fallback: try NIP-07
+    // Fallback: try NIP-07 - need to check write access and update store
     try {
       if (!isNIP07Available()) {
         alert('NIP-07 extension not found. Please install a Nostr extension like Alby or nos2x.');
         return;
       }
       const pubkey = await getPublicKeyWithNIP07();
-      userPubkey = pubkey;
+      let pubkeyHex: string;
       // Convert to hex if needed
       if (/^[0-9a-f]{64}$/i.test(pubkey)) {
-        userPubkeyHex = pubkey.toLowerCase();
+        pubkeyHex = pubkey.toLowerCase();
+        userPubkey = pubkey;
       } else {
         try {
           const decoded = nip19.decode(pubkey);
           if (decoded.type === 'npub') {
-            userPubkeyHex = decoded.data as string;
+            pubkeyHex = decoded.data as string;
+            userPubkey = pubkey;
+          } else {
+            throw new Error('Invalid pubkey format');
           }
         } catch {
-          userPubkeyHex = pubkey;
+          error = 'Invalid public key format';
+          return;
         }
       }
+      
+      userPubkeyHex = pubkeyHex;
+      
+      // Check write access and update user store
+      const { determineUserLevel } = await import('$lib/services/nostr/user-level-service.js');
+      const levelResult = await determineUserLevel(userPubkey, userPubkeyHex);
+      
+      // Update user store with write access level
+      userStore.setUser(
+        levelResult.userPubkey,
+        levelResult.userPubkeyHex,
+        levelResult.level,
+        levelResult.error || null
+      );
+      
+      // Update activity tracking
+      const { updateActivity } = await import('$lib/services/activity-tracker.js');
+      updateActivity();
+      
+      // Check for pending transfer events
+      if (userPubkeyHex) {
+        try {
+          const response = await fetch('/api/transfers/pending', {
+            headers: {
+              'X-User-Pubkey': userPubkeyHex
+            }
+          });
+          if (response.ok) {
+            const data = await response.json();
+            if (data.pendingTransfers && data.pendingTransfers.length > 0) {
+              window.dispatchEvent(new CustomEvent('pendingTransfers', { 
+                detail: { transfers: data.pendingTransfers } 
+              }));
+            }
+          }
+        } catch (err) {
+          console.error('Failed to check for pending transfers:', err);
+        }
+      }
+      
       // Re-check maintainer status and bookmark status after login
       await checkMaintainerStatus();
       await loadBookmarkStatus();

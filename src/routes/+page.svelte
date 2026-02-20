@@ -6,7 +6,7 @@
   import { nip19 } from 'nostr-tools';
   import { determineUserLevel, decodePubkey } from '../lib/services/nostr/user-level-service.js';
   import { userStore } from '../lib/stores/user-store.js';
-  import { updateActivity } from '../lib/services/activity-tracker.js';
+  import { updateActivity, isSessionExpired } from '../lib/services/activity-tracker.js';
 
   let userPubkey = $state<string | null>(null);
   let userPubkeyHex = $state<string | null>(null);
@@ -32,19 +32,29 @@
     // Prevent body scroll when splash page is shown
     document.body.style.overflow = 'hidden';
     
-    // Check userStore first - if user is already logged in, use store values
-    const currentUser = $userStore;
-    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
-      // User is already logged in - use store values
-      userPubkey = currentUser.userPubkey;
-      userPubkeyHex = currentUser.userPubkeyHex;
-      checkingAuth = false;
-      // Don't redirect immediately - let the user see they're logged in
-      // They can click "View Repositories" or navigate away
-    } else {
-      // User not logged in - check if extension is available
+    // Check for session expiry first
+    if (isSessionExpired()) {
+      // Session expired - logout user
+      userStore.reset();
       checkingAuth = true;
       checkAuth();
+    } else {
+      // Check userStore first - if user is already logged in, use store values
+      const currentUser = $userStore;
+      if (currentUser.userPubkey && currentUser.userPubkeyHex) {
+        // User is already logged in - use store values
+        userPubkey = currentUser.userPubkey;
+        userPubkeyHex = currentUser.userPubkeyHex;
+        checkingAuth = false;
+        // Update activity to extend session
+        updateActivity();
+        // Don't redirect immediately - let the user see they're logged in
+        // They can click "View Repositories" or navigate away
+      } else {
+        // User not logged in - check if extension is available
+        checkingAuth = true;
+        checkAuth();
+      }
     }
     
     // Return cleanup function
@@ -166,6 +176,30 @@
       
       // Update activity tracking on successful login
       updateActivity();
+      
+      // Check for pending transfer events
+      if (levelResult.userPubkeyHex) {
+        try {
+          const response = await fetch('/api/transfers/pending', {
+            headers: {
+              'X-User-Pubkey': levelResult.userPubkeyHex
+            }
+          });
+          if (response.ok) {
+            const data = await response.json();
+            if (data.pendingTransfers && data.pendingTransfers.length > 0) {
+              // Trigger a custom event to notify layout about pending transfers
+              // The layout component will handle displaying the notifications
+              window.dispatchEvent(new CustomEvent('pendingTransfers', { 
+                detail: { transfers: data.pendingTransfers } 
+              }));
+            }
+          }
+        } catch (err) {
+          console.error('Failed to check for pending transfers:', err);
+          // Don't fail login if transfer check fails
+        }
+      }
       
       checkingLevel = false;
       levelMessage = null;

@@ -10,7 +10,7 @@
   import { getPublicKeyWithNIP07, isNIP07Available } from '$lib/services/nostr/nip07-signer.js';
   import { determineUserLevel, decodePubkey } from '$lib/services/nostr/user-level-service.js';
   import { userStore } from '$lib/stores/user-store.js';
-  import { isSessionExpired, updateActivity, clearActivity } from '$lib/services/activity-tracker.js';
+  import { updateActivity } from '$lib/services/activity-tracker.js';
 
   // Accept children as a snippet prop (Svelte 5)
   let { children }: { children: Snippet } = $props();
@@ -50,14 +50,10 @@
     }
     applyTheme();
     
-    // Check for session expiry (24 hours)
-    if (isSessionExpired()) {
-      // Session expired - logout user
-      userStore.reset();
-      clearActivity();
-      console.log('Session expired after 24 hours of inactivity');
-    } else {
-      // Update activity on mount
+    // Update activity on mount (if user is logged in)
+    // Session expiry is handled by user store initialization and NavBar
+    const currentState = $userStore;
+    if (currentState.userPubkey && currentState.userPubkeyHex) {
       updateActivity();
     }
     
@@ -71,21 +67,27 @@
       }
     }
     
-    // Set up periodic session expiry check (every 5 minutes)
-    const expiryCheckInterval = setInterval(() => {
-      if (isSessionExpired()) {
-        userStore.reset();
-        clearActivity();
-        console.log('Session expired after 24 hours of inactivity');
-        // Optionally redirect to home page
-        if ($page.url.pathname !== '/') {
-          goto('/');
-        }
+    // Listen for pending transfers events from login functions
+    const handlePendingTransfersEvent = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail?.transfers) {
+        // Filter out dismissed transfers
+        pendingTransfers = customEvent.detail.transfers.filter(
+          (t: { eventId: string }) => !dismissedTransfers.has(t.eventId)
+        );
       }
-    }, 5 * 60 * 1000); // Check every 5 minutes
+    };
+    
+    window.addEventListener('pendingTransfers', handlePendingTransfersEvent);
+    
+    // Session expiry checking is handled by:
+    // 1. User store initialization (checks on load)
+    // 2. NavBar component (checks on mount and periodically)
+    // 3. Splash page (+page.svelte) (checks on mount)
+    // No need for redundant checks here
     
     return () => {
-      clearInterval(expiryCheckInterval);
+      window.removeEventListener('pendingTransfers', handlePendingTransfersEvent);
     };
   });
   
@@ -221,6 +223,7 @@
       dismissedTransfers.clear();
     }
   });
+
 </script>
 
 {#if !isSplashPage}
