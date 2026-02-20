@@ -3,7 +3,17 @@
  * Stores: auto-save, user.name, user.email, theme, messagingPreferences
  */
 
-import logger from './logger.js';
+// Lazy import logger to avoid initialization order issues
+import type { Logger } from '../types/logger.js';
+
+let loggerCache: Logger | null = null;
+const getLogger = async (): Promise<Logger> => {
+  if (!loggerCache) {
+    const loggerModule = await import('./logger.js');
+    loggerCache = loggerModule.default;
+  }
+  return loggerCache;
+};
 
 const DB_NAME = 'gitrepublic_settings';
 const DB_VERSION = 1;
@@ -47,32 +57,36 @@ export class SettingsStore {
     }
 
     if (typeof window === 'undefined' || !window.indexedDB) {
+      const logger = await getLogger();
       logger.debug('IndexedDB not available, using in-memory cache only');
       return;
     }
 
-    this.initPromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
+    this.initPromise = (async () => {
+      const logger = await getLogger();
+      return new Promise<void>((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-      request.onerror = () => {
-        logger.error('Failed to open settings IndexedDB');
-        reject(new Error('Failed to open settings IndexedDB'));
-      };
+        request.onerror = () => {
+          logger.error('Failed to open settings IndexedDB');
+          reject(new Error('Failed to open settings IndexedDB'));
+        };
 
-      request.onsuccess = () => {
-        this.db = request.result;
-        resolve();
-      };
+        request.onsuccess = () => {
+          this.db = request.result;
+          resolve();
+        };
 
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
+        request.onupgradeneeded = (event) => {
+          const db = (event.target as IDBOpenDBRequest).result;
 
-        // Settings store - stores all settings as a single object
-        if (!db.objectStoreNames.contains(STORE_SETTINGS)) {
-          db.createObjectStore(STORE_SETTINGS, { keyPath: 'id' });
-        }
-      };
-    });
+          // Settings store - stores all settings as a single object
+          if (!db.objectStoreNames.contains(STORE_SETTINGS)) {
+            db.createObjectStore(STORE_SETTINGS, { keyPath: 'id' });
+          }
+        };
+      });
+    })();
 
     return this.initPromise;
   }
@@ -114,6 +128,7 @@ export class SettingsStore {
       this.settingsCache = result;
       return result;
     } catch (error) {
+      const logger = await getLogger();
       logger.error({ error }, 'Error reading settings from IndexedDB');
       return { ...DEFAULT_SETTINGS };
     }
@@ -124,6 +139,8 @@ export class SettingsStore {
    */
   async updateSettings(updates: Partial<Settings>): Promise<void> {
     await this.init();
+
+    const logger = await getLogger();
 
     if (!this.db) {
       logger.debug('IndexedDB not available, cannot save settings');
@@ -191,6 +208,7 @@ export class SettingsStore {
       // Clear cache
       this.settingsCache = null;
     } catch (error) {
+      const logger = await getLogger();
       logger.error({ error }, 'Error clearing settings');
     }
   }
