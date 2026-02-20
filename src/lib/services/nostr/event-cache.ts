@@ -9,12 +9,32 @@ import { KIND } from '../../types/nostr.js';
 import type { Logger } from '../../types/logger.js';
 
 let loggerCache: Logger | null = null;
+let loggerPromise: Promise<Logger> | null = null;
+
 const getLogger = async (): Promise<Logger> => {
-  if (!loggerCache) {
-    const loggerModule = await import('../logger.js');
-    loggerCache = loggerModule.default;
+  if (loggerCache) {
+    return loggerCache;
   }
-  return loggerCache;
+  
+  if (!loggerPromise) {
+    loggerPromise = import('../logger.js').then(module => {
+      loggerCache = module.default;
+      return loggerCache!;
+    }).catch(err => {
+      // Fallback to console logger if import fails
+      loggerCache = {
+        info: (...args: unknown[]) => console.log('[INFO]', ...args),
+        error: (...args: unknown[]) => console.error('[ERROR]', ...args),
+        warn: (...args: unknown[]) => console.warn('[WARN]', ...args),
+        debug: (...args: unknown[]) => console.debug('[DEBUG]', ...args),
+        trace: (...args: unknown[]) => console.trace('[TRACE]', ...args),
+        fatal: (...args: unknown[]) => console.error('[FATAL]', ...args)
+      } as Logger;
+      return loggerCache!;
+    });
+  }
+  
+  return loggerPromise;
 };
 
 interface CacheEntry {

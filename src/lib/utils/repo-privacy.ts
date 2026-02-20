@@ -3,11 +3,19 @@
  */
 
 import { nip19 } from 'nostr-tools';
-import { MaintainerService } from '../services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '../config.js';
 import type { NostrEvent } from '../types/nostr.js';
 
-const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
+// Lazy initialization to avoid initialization order issues
+let maintainerServiceInstance: import('../services/nostr/maintainer-service.js').MaintainerService | null = null;
+
+const getMaintainerService = async (): Promise<import('../services/nostr/maintainer-service.js').MaintainerService> => {
+  if (!maintainerServiceInstance) {
+    const { MaintainerService } = await import('../services/nostr/maintainer-service.js');
+    maintainerServiceInstance = new MaintainerService(DEFAULT_NOSTR_RELAYS);
+  }
+  return maintainerServiceInstance;
+};
 
 /**
  * Check if a repository is private based on announcement event
@@ -55,6 +63,7 @@ export async function checkRepoAccess(
     }
 
     // Check if user can view
+    const maintainerService = await getMaintainerService();
     const canView = await maintainerService.canView(userPubkey, repoOwnerPubkey, repo);
     
     return {

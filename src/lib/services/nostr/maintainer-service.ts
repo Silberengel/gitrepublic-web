@@ -8,8 +8,34 @@ import { KIND } from '../../types/nostr.js';
 import type { NostrEvent } from '../../types/nostr.js';
 import { nip19 } from 'nostr-tools';
 import { OwnershipTransferService } from './ownership-transfer-service.js';
-import logger from '../logger.js';
+import type { Logger } from '../../types/logger.js';
 import { isPrivateRepo as checkIsPrivateRepo } from '../../utils/repo-privacy.js';
+
+// Lazy logger import to avoid initialization order issues
+let loggerCache: Logger | null = null;
+let loggerPromise: Promise<Logger> | null = null;
+
+const getLogger = async (): Promise<Logger> => {
+  if (loggerCache) return loggerCache;
+  if (!loggerPromise) {
+    loggerPromise = import('../logger.js').then(m => {
+      loggerCache = m.default;
+      return loggerCache!;
+    }).catch(() => {
+      // Fallback console logger
+      loggerCache = {
+        info: (...args: unknown[]) => console.log('[INFO]', ...args),
+        error: (...args: unknown[]) => console.error('[ERROR]', ...args),
+        warn: (...args: unknown[]) => console.warn('[WARN]', ...args),
+        debug: (...args: unknown[]) => console.debug('[DEBUG]', ...args),
+        trace: (...args: unknown[]) => console.trace('[TRACE]', ...args),
+        fatal: (...args: unknown[]) => console.error('[FATAL]', ...args)
+      } as Logger;
+      return loggerCache!;
+    });
+  }
+  return loggerPromise;
+};
 
 export interface RepoPrivacyInfo {
   isPrivate: boolean;
@@ -115,6 +141,7 @@ export class MaintainerService {
       this.cache.set(cacheKey, { ...result, timestamp: Date.now() });
       return result;
     } catch (error) {
+      const logger = await getLogger();
       logger.error({ error, repoOwnerPubkey, repoId }, 'Error fetching maintainers');
       // Fallback: only owner is maintainer, repo is public by default
       const result = { owner: repoOwnerPubkey, maintainers: [repoOwnerPubkey], isPrivate: false };
@@ -138,6 +165,7 @@ export class MaintainerService {
    */
   async canView(userPubkey: string | null, repoOwnerPubkey: string, repoId: string): Promise<boolean> {
     const { isPrivate, maintainers, owner } = await this.getMaintainers(repoOwnerPubkey, repoId);
+    const logger = await getLogger();
     
     logger.debug({ 
       isPrivate, 
