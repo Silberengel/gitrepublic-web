@@ -7,6 +7,28 @@ import logger from '../logger.js';
 import { isNIP07Available, getPublicKeyWithNIP07, signEventWithNIP07 } from './nip07-signer.js';
 import { shouldUseTor, getTorProxy } from '../../utils/tor.js';
 import { eventCache } from './event-cache.js';
+import { KIND } from '../../types/nostr.js';
+
+// Replaceable event kinds (only latest per pubkey matters)
+const REPLACEABLE_KINDS = [0, 3, 10002]; // Profile, Contacts, Relay List
+
+// Lazy load persistent cache (only in browser)
+let persistentEventCache: typeof import('./persistent-event-cache.js').persistentEventCache | null = null;
+async function getPersistentCache() {
+  if (typeof window === 'undefined') {
+    return null; // Server-side, no IndexedDB
+  }
+  if (!persistentEventCache) {
+    try {
+      const module = await import('./persistent-event-cache.js');
+      persistentEventCache = module.persistentEventCache;
+    } catch (error) {
+      logger.debug({ error }, 'Persistent cache not available');
+      return null;
+    }
+  }
+  return persistentEventCache;
+}
 
 // Polyfill WebSocket for Node.js environments (lazy initialization)
 // Note: The 'module' import warning in browser builds is expected and harmless.
@@ -127,6 +149,7 @@ async function createWebSocketWithTor(url: string): Promise<WebSocket> {
 export class NostrClient {
   private relays: string[] = [];
   private authenticatedRelays: Set<string> = new Set();
+  private processingDeletions: boolean = false; // Guard to prevent recursive deletion processing
 
   constructor(relays: string[]) {
     this.relays = relays;
@@ -193,13 +216,63 @@ export class NostrClient {
   }
 
   async fetchEvents(filters: NostrFilter[]): Promise<NostrEvent[]> {
-    // Check cache first
-    const cached = eventCache.get(filters);
-    if (cached !== null) {
-      logger.debug({ filters, cachedCount: cached.length }, 'Returning cached events');
-      return cached;
+    // Strategy: Check persistent cache first, return immediately if available
+    // Then fetch from relays in background and merge results
+    
+    // Skip cache for search queries - search results should always be fresh
+    const hasSearchQuery = filters.some(f => f.search && f.search.trim().length > 0);
+    
+    if (!hasSearchQuery) {
+      // 1. Check persistent cache first (IndexedDB) - only in browser
+      const persistentCache = await getPersistentCache();
+      if (persistentCache) {
+        try {
+          const cachedEvents = await persistentCache.get(filters);
+          if (cachedEvents && cachedEvents.length > 0) {
+            logger.debug({ filters, cachedCount: cachedEvents.length }, 'Returning cached events from IndexedDB');
+            
+            // Return cached events immediately, but also fetch from relays in background to update cache
+            this.fetchAndMergeFromRelays(filters, cachedEvents).catch(err => {
+              logger.debug({ error: err, filters }, 'Background fetch failed, using cached events');
+            });
+            
+            return cachedEvents;
+          }
+        } catch (error) {
+          logger.debug({ error, filters }, 'Error reading from persistent cache, falling back');
+        }
+      }
+      
+      // 2. Check in-memory cache as fallback
+      const memoryCached = eventCache.get(filters);
+      if (memoryCached !== null && memoryCached.length > 0) {
+        logger.debug({ filters, cachedCount: memoryCached.length }, 'Returning cached events from memory');
+        
+        // Also store in persistent cache and fetch from relays in background
+        if (persistentCache) {
+          persistentCache.set(filters, memoryCached).catch(err => {
+            logger.debug({ error: err }, 'Failed to persist cache');
+          });
+        }
+        this.fetchAndMergeFromRelays(filters, memoryCached).catch(err => {
+          logger.debug({ error: err, filters }, 'Background fetch failed');
+        });
+        
+        return memoryCached;
+      }
+    } else {
+      logger.debug({ filters }, 'Skipping cache for search query');
     }
     
+    // 3. No cache available (or search query), fetch from relays
+    return this.fetchAndMergeFromRelays(filters, []);
+  }
+
+  /**
+   * Fetch events from relays and merge with existing events
+   * Never deletes valid events, only appends/integrates new ones
+   */
+  private async fetchAndMergeFromRelays(filters: NostrFilter[], existingEvents: NostrEvent[]): Promise<NostrEvent[]> {
     const events: NostrEvent[] = [];
     
     // Fetch from all relays in parallel
@@ -212,32 +285,162 @@ export class NostrClient {
       }
     }
     
-    // Deduplicate by event ID
-    const uniqueEvents = new Map<string, NostrEvent>();
+    // Merge with existing events - never delete valid events
+    const eventMap = new Map<string, NostrEvent>();
+    
+    // Add existing events first
+    for (const event of existingEvents) {
+      eventMap.set(event.id, event);
+    }
+    
+    // Add/update with new events from relays
+    // For replaceable events (kind 0, 3, 10002), use latest per pubkey
+    const replaceableEvents = new Map<string, NostrEvent>(); // pubkey -> latest event
+    
     for (const event of events) {
-      if (!uniqueEvents.has(event.id) || event.created_at > uniqueEvents.get(event.id)!.created_at) {
-        uniqueEvents.set(event.id, event);
+      if (REPLACEABLE_KINDS.includes(event.kind)) {
+        // Replaceable event - only keep latest per pubkey
+        const existing = replaceableEvents.get(event.pubkey);
+        if (!existing || event.created_at > existing.created_at) {
+          replaceableEvents.set(event.pubkey, event);
+        }
+      } else {
+        // Regular event - add if newer or doesn't exist
+        const existing = eventMap.get(event.id);
+        if (!existing || event.created_at > existing.created_at) {
+          eventMap.set(event.id, event);
+        }
       }
     }
     
-    const finalEvents = Array.from(uniqueEvents.values());
+    // Add replaceable events to the map (replacing older versions)
+    for (const [pubkey, event] of replaceableEvents.entries()) {
+      // Remove any existing replaceable events for this pubkey
+      for (const [id, existingEvent] of eventMap.entries()) {
+        if (existingEvent.pubkey === pubkey && REPLACEABLE_KINDS.includes(existingEvent.kind)) {
+          eventMap.delete(id);
+        }
+      }
+      eventMap.set(event.id, event);
+    }
     
-    // For kind 0 (profile) events, also cache individually by pubkey for faster lookups
+    const finalEvents = Array.from(eventMap.values());
+    
+    // Sort by created_at descending
+    finalEvents.sort((a, b) => b.created_at - a.created_at);
+    
+    // Get persistent cache once (if available)
+    const persistentCache = await getPersistentCache();
+    
+    // Cache in both persistent and in-memory caches
+    // For kind 0 (profile) events, also cache individually by pubkey
     const profileEvents = finalEvents.filter(e => e.kind === 0);
     for (const profileEvent of profileEvents) {
       eventCache.setProfile(profileEvent.pubkey, profileEvent);
+      // Also cache in persistent cache if available
+      if (persistentCache) {
+        persistentCache.setProfile(profileEvent.pubkey, profileEvent).catch(err => {
+          logger.debug({ error: err, pubkey: profileEvent.pubkey }, 'Failed to cache profile');
+        });
+      }
     }
     
-    // Cache the results (use longer TTL for successful fetches)
-    if (finalEvents.length > 0 || results.some(r => r.status === 'fulfilled')) {
-      // Cache successful fetches for 5 minutes, empty results for 1 minute
-      // Profile events get longer TTL (handled in eventCache.set)
-      const ttl = finalEvents.length > 0 ? 5 * 60 * 1000 : 60 * 1000;
-      eventCache.set(filters, finalEvents, ttl);
-      logger.debug({ filters, eventCount: finalEvents.length, ttl, profileEvents: profileEvents.length }, 'Cached events');
+    // Cache the merged results (skip cache for search queries)
+    const hasSearchQuery = filters.some(f => f.search && f.search.trim().length > 0);
+    if (!hasSearchQuery) {
+      if (finalEvents.length > 0 || results.some(r => r.status === 'fulfilled')) {
+        // Cache successful fetches for 5 minutes, empty results for 1 minute
+        const ttl = finalEvents.length > 0 ? 5 * 60 * 1000 : 60 * 1000;
+        
+        // Update in-memory cache
+        eventCache.set(filters, finalEvents, ttl);
+        
+        // Update persistent cache (async, don't wait) - only in browser
+        if (persistentCache) {
+          persistentCache.set(filters, finalEvents, ttl).catch(err => {
+            logger.debug({ error: err, filters }, 'Failed to update persistent cache');
+          });
+        }
+        
+        logger.debug({ 
+          filters, 
+          eventCount: finalEvents.length, 
+          existingCount: existingEvents.length,
+          newCount: events.length,
+          mergedCount: finalEvents.length,
+          ttl, 
+          profileEvents: profileEvents.length 
+        }, 'Merged and cached events');
+      }
+    } else {
+      logger.debug({ filters }, 'Skipping cache for search query results');
     }
+    
+    // Process deletion events in the background (non-blocking)
+    // Fetch recent deletion events and remove deleted events from cache
+    this.processDeletionsInBackground().catch(err => {
+      logger.debug({ error: err }, 'Error processing deletions in background');
+    });
     
     return finalEvents;
+  }
+
+  /**
+   * Process deletion events in the background
+   * Fetches recent deletion events and removes deleted events from both caches
+   */
+  private async processDeletionsInBackground(): Promise<void> {
+    if (typeof window === 'undefined' || this.processingDeletions) {
+      return; // Only run in browser, and prevent recursive calls
+    }
+
+    this.processingDeletions = true;
+
+    try {
+      // Fetch recent deletion events (last 24 hours)
+      // Use fetchFromRelay directly to avoid triggering another deletion processing cycle
+      const since = Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
+      const events: NostrEvent[] = [];
+      
+      // Fetch from all relays in parallel, bypassing cache to avoid recursion
+      const promises = this.relays.map(relay => this.fetchFromRelay(relay, [{
+        kinds: [KIND.DELETION_REQUEST],
+        since,
+        limit: 100
+      }]));
+      const results = await Promise.allSettled(promises);
+      
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          events.push(...result.value);
+        }
+      }
+
+      // Deduplicate deletion events by ID
+      const uniqueDeletionEvents = new Map<string, NostrEvent>();
+      for (const event of events) {
+        if (!uniqueDeletionEvents.has(event.id) || event.created_at > uniqueDeletionEvents.get(event.id)!.created_at) {
+          uniqueDeletionEvents.set(event.id, event);
+        }
+      }
+
+      const deletionEvents = Array.from(uniqueDeletionEvents.values());
+
+      if (deletionEvents.length > 0) {
+        // Process deletions in in-memory cache
+        eventCache.processDeletionEvents(deletionEvents);
+
+        // Process deletions in persistent cache
+        const persistentCache = await getPersistentCache();
+        if (persistentCache && typeof persistentCache.processDeletionEvents === 'function') {
+          await persistentCache.processDeletionEvents(deletionEvents);
+        }
+      }
+    } catch (error) {
+      logger.debug({ error }, 'Error processing deletions in background');
+    } finally {
+      this.processingDeletions = false;
+    }
   }
 
   private async fetchFromRelay(relay: string, filters: NostrFilter[]): Promise<NostrEvent[]> {
@@ -397,6 +600,15 @@ export class NostrClient {
     // This ensures fresh data on next fetch
     if (success.length > 0) {
       eventCache.invalidatePubkey(event.pubkey);
+      
+      // Also invalidate persistent cache
+      const persistentCache = await getPersistentCache();
+      if (persistentCache) {
+        persistentCache.invalidatePubkey(event.pubkey).catch(err => {
+          logger.debug({ error: err, pubkey: event.pubkey }, 'Failed to invalidate persistent cache');
+        });
+      }
+      
       logger.debug({ eventId: event.id, pubkey: event.pubkey }, 'Invalidated cache after event publish');
     }
     

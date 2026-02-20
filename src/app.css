@@ -44,6 +44,9 @@
   --success-text: #034a2e; /* Darker for better contrast */
   --warning-bg: #fef3c7;
   --warning-text: #6a3000; /* Darker for better contrast */
+  --shadow-color: rgba(0, 0, 0, 0.15); /* Shadow for light theme */
+  --shadow-color-light: rgba(0, 0, 0, 0.1); /* Lighter shadow for light theme */
+  --focus-ring: rgba(123, 30, 109, 0.15); /* Focus ring for light theme */
 }
 
 /* GitRepublic Dark Theme (Purple) - Default */
@@ -86,6 +89,9 @@
   --success-text: #6aff9a; /* Brighter for better contrast */
   --warning-bg: #4a3a1f;
   --warning-text: #ffcc44; /* Brighter for better contrast */
+  --shadow-color: rgba(0, 0, 0, 0.3); /* Shadow for dark theme */
+  --shadow-color-light: rgba(0, 0, 0, 0.2); /* Lighter shadow for dark theme */
+  --focus-ring: rgba(123, 30, 109, 0.15); /* Focus ring for dark theme */
 }
 
 /* GitRepublic Black Theme - GitHub-style all black */
@@ -128,6 +134,9 @@
   --success-text: #3fb950; /* GitHub's success color */
   --warning-bg: #3d2f1f;
   --warning-text: #d29922; /* GitHub's warning color */
+  --shadow-color: rgba(0, 0, 0, 0.4); /* Shadow for black theme */
+  --shadow-color-light: rgba(0, 0, 0, 0.3); /* Lighter shadow for black theme */
+  --focus-ring: rgba(196, 30, 58, 0.15); /* Focus ring for black theme (crimson) */
 }
 
 /* Base styles */
@@ -532,7 +541,7 @@ textarea:disabled::placeholder {
   background: var(--card-bg);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 12px var(--shadow-color);
   width: 600px;
   max-width: 90vw;
   max-height: 500px;
@@ -1066,7 +1075,7 @@ button.theme-option.active img.theme-icon-option,
   background: var(--bg-secondary);
   border-color: var(--accent);
   transform: translateY(-1px);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 4px var(--shadow-color-light);
 }
 
 .repo-badge-image {
@@ -1142,7 +1151,7 @@ button.theme-option.active img.theme-icon-option,
 
 .card:hover, .repo-card:hover {
   border-color: var(--accent);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px var(--shadow-color-light);
 }
 
 .repo-card-banner {
@@ -1180,7 +1189,7 @@ button.theme-option.active img.theme-icon-option,
 }
 
 .repo-item:hover, .code-item:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px var(--shadow-color-light);
   border-color: var(--accent);
 }
 
@@ -1496,7 +1505,7 @@ pre code {
   background: var(--card-bg);
   border-radius: 8px;
   padding: 2rem;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 4px var(--shadow-color-light);
   border: 1px solid var(--border-color);
 }
 
@@ -1592,8 +1601,15 @@ pre code {
 
 .search-bar-container .search-input:focus {
   outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(126, 40, 94, 0.1);
+  border-color: var(--input-focus);
+  /* Use theme-aware focus ring - will be crimson in black theme, purple in others */
+}
+
+/* Theme-specific focus rings */
+[data-theme="black"] .search-bar-container .search-input:focus,
+[data-theme="dark"] .search-bar-container .search-input:focus,
+[data-theme="light"] .search-bar-container .search-input:focus {
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .search-bar-container .search-input:disabled {
@@ -1678,7 +1694,7 @@ label.filter-checkbox > span,
 
 .repo-card-local {
   border-left: 4px solid var(--warning, #f59e0b);
-  background: var(--bg-secondary, rgba(245, 158, 11, 0.05));
+  background: var(--bg-secondary);
 }
 
 /* Repo actions */
@@ -1701,7 +1717,7 @@ label.filter-checkbox > span,
 }
 
 .delete-button {
-  background: var(--error-bg, rgba(239, 68, 68, 0.1));
+  background: var(--error-bg);
   color: var(--error, #ef4444);
   border-color: var(--error, #ef4444);
 }
@@ -1733,7 +1749,7 @@ label.filter-checkbox > span,
 .register-button:hover {
   opacity: 0.9;
   transform: translateY(-1px);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 4px var(--shadow-color-light);
 }
 
 .repo-header {

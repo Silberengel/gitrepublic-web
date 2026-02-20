@@ -88,21 +88,32 @@ export class MaintainerService {
       const maintainers: string[] = [currentOwner]; // Current owner is always a maintainer
 
       // Extract maintainers from tags
+      // Maintainers tag format: ['maintainers', 'pubkey1', 'pubkey2', 'pubkey3', ...]
       for (const tag of announcement.tags) {
-        if (tag[0] === 'maintainers' && tag[1]) {
-          // Maintainers can be npub or hex pubkey
-          let pubkey = tag[1];
-          try {
-            // Try to decode if it's an npub
-            const decoded = nip19.decode(pubkey);
-            if (decoded.type === 'npub') {
-              pubkey = decoded.data as string;
+        if (tag[0] === 'maintainers') {
+          // Iterate through all maintainers in the tag (skip index 0 which is 'maintainers')
+          for (let i = 1; i < tag.length; i++) {
+            const maintainerValue = tag[i];
+            if (!maintainerValue || typeof maintainerValue !== 'string') {
+              continue;
             }
-          } catch {
-            // Assume it's already a hex pubkey
-          }
-          if (pubkey && !maintainers.includes(pubkey)) {
-            maintainers.push(pubkey);
+            
+            // Maintainers can be npub or hex pubkey
+            let pubkey = maintainerValue;
+            try {
+              // Try to decode if it's an npub
+              const decoded = nip19.decode(pubkey);
+              if (decoded.type === 'npub') {
+                pubkey = decoded.data as string;
+              }
+            } catch {
+              // Assume it's already a hex pubkey
+            }
+            
+            // Add maintainer if it's valid and not already in the list (case-insensitive check)
+            if (pubkey && !maintainers.some(m => m.toLowerCase() === pubkey.toLowerCase())) {
+              maintainers.push(pubkey);
+            }
           }
         }
       }

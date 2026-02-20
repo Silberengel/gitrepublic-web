@@ -8,9 +8,9 @@
   import { userStore } from '$lib/stores/user-store.js';
 
   let query = $state('');
-  let searchType = $state<'repos' | 'code' | 'all'>('repos');
   let loading = $state(false);
   let userPubkeyHex = $state<string | null>(null);
+  let searchAbortController: AbortController | null = null;
 
   // Sync with userStore
   $effect(() => {
@@ -35,8 +35,14 @@
     }
   });
   let results = $state<{
-    repos: Array<{ id: string; name: string; description: string; owner: string; npub: string }>;
-    code: Array<{ repo: string; npub: string; file: string; matches: number }>;
+    repos: Array<{ 
+      id: string; 
+      name: string; 
+      description: string; 
+      owner: string; 
+      npub: string;
+      maintainers?: Array<{ pubkey: string; isOwner: boolean }>;
+    }>;
     total: number;
   } | null>(null);
   let error = $state<string | null>(null);
@@ -76,8 +82,18 @@
 
   async function performSearch() {
     if (!query.trim() || query.length < 2) {
+      results = null;
       return;
     }
+
+    // Cancel any ongoing search
+    if (searchAbortController) {
+      searchAbortController.abort();
+    }
+
+    // Create new abort controller for this search
+    searchAbortController = new AbortController();
+    const currentAbortController = searchAbortController;
 
     loading = true;
     error = null;
@@ -89,18 +105,30 @@
         headers['X-User-Pubkey'] = userPubkeyHex;
       }
       
-      const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=${searchType}`, {
-        headers
+      const response = await fetch(`/api/search?q=${encodeURIComponent(query.trim())}`, {
+        headers,
+        signal: currentAbortController.signal
       });
+      
+      // Check if request was aborted
+      if (currentAbortController.signal.aborted) {
+        return;
+      }
+      
       if (response.ok) {
         const data = await response.json();
-        // The API returns { query, type, results: { repos, code }, total }
+        // Verify the response matches our current query (in case of race conditions)
+        if (data.query !== query.trim()) {
+          // Response is for a different query, ignore it
+          return;
+        }
+        
+        // The API returns { query, results: { repos }, total }
         // Extract the nested results structure
         const apiResults = data.results || {};
         results = {
           repos: Array.isArray(apiResults.repos) ? apiResults.repos : [],
-          code: Array.isArray(apiResults.code) ? apiResults.code : [],
-          total: typeof data.total === 'number' ? data.total : (apiResults.repos?.length || 0) + (apiResults.code?.length || 0)
+          total: typeof data.total === 'number' ? data.total : (apiResults.repos?.length || 0)
         };
       } else {
         const data = await response.json();
@@ -108,11 +136,33 @@
         results = null; // Clear results on error
       }
     } catch (err) {
+      // Ignore abort errors
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
       error = err instanceof Error ? err.message : 'Search failed';
       results = null; // Clear results on error
     } finally {
-      loading = false;
+      // Only update loading state if this is still the current search
+      if (currentAbortController === searchAbortController) {
+        loading = false;
+      }
     }
+  }
+
+  function cancelSearch() {
+    if (searchAbortController) {
+      searchAbortController.abort();
+      searchAbortController = null;
+    }
+    loading = false;
+    results = null;
+    error = null;
+  }
+
+  function clearSearch() {
+    query = '';
+    cancelSearch();
   }
 
   function handleSearch(e: Event) {
@@ -131,21 +181,21 @@
       <input
         type="text"
         bind:value={query}
-        placeholder="Search repositories or code... (NIP-50 search)"
+        placeholder="Search repositories by name, description, pubkey (hex/npub/nprofile/NIP-05), or clone URL..."
         class="search-input"
       />
       <div class="search-controls">
-        <select bind:value={searchType} class="search-type-select">
-          <option value="repos">Repositories</option>
-          <option value="code">Code</option>
-          <option value="all">All</option>
-        </select>
         <button type="submit" disabled={loading || !query.trim()} class="search-button">
           {loading ? 'Searching...' : 'Search'}
         </button>
+        {#if loading || results || query.trim()}
+          <button type="button" onclick={clearSearch} class="cancel-button">
+            Cancel
+          </button>
+        {/if}
       </div>
       <div class="search-info">
-        <small>Using NIP-50 search across multiple relays for better results</small>
+        <small>Search repositories by name, description, pubkey (hex/npub/nprofile/NIP-05), or clone URL.</small>
       </div>
     </form>
 
@@ -159,7 +209,7 @@
           <h2>Results ({results.total || 0})</h2>
         </div>
 
-        {#if (searchType === 'repos' || searchType === 'all') && results.repos && results.repos.length > 0}
+        {#if results.repos && results.repos.length > 0}
           <section class="results-section">
             <h3>Repositories ({results.repos.length})</h3>
             <div class="repo-list">
@@ -181,38 +231,34 @@
                     <p class="repo-description">{repo.description}</p>
                   {/if}
                   <div class="repo-meta">
-                    <a href={`/users/${repo.npub}`} onclick={(e) => e.stopPropagation()}>
-                      <UserBadge pubkey={repo.owner} />
-                    </a>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          </section>
-        {/if}
-
-        {#if (searchType === 'code' || searchType === 'all') && results.code && results.code.length > 0}
-          <section class="results-section">
-            <h3>Code Files ({results.code.length})</h3>
-            <div class="code-list">
-              {#each results.code as file}
-                <div 
-                  class="code-item" 
-                  role="button"
-                  tabindex="0"
-                  onclick={() => goto(`/repos/${file.npub}/${file.repo}?file=${encodeURIComponent(file.file)}`)}
-                  onkeydown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      goto(`/repos/${file.npub}/${file.repo}?file=${encodeURIComponent(file.file)}`);
-                    }
-                  }}
-                  style="cursor: pointer;">
-                  <div class="code-file-path">{file.file}</div>
-                  <div class="code-repo">
-                    <a href={`/repos/${file.npub}/${file.repo}`} onclick={(e) => e.stopPropagation()}>
-                      {file.repo}
-                    </a>
+                    {#if repo.maintainers && repo.maintainers.length > 0}
+                      <div class="repo-contributors">
+                        <span class="contributors-label">Owners & Maintainers:</span>
+                        <div class="contributors-list">
+                          {#each repo.maintainers as maintainer}
+                            {@const maintainerNpub = nip19.npubEncode(maintainer.pubkey)}
+                            <a 
+                              href={`/users/${maintainerNpub}`} 
+                              class="contributor-item"
+                              class:contributor-owner={maintainer.isOwner}
+                              onclick={(e) => e.stopPropagation()}
+                            >
+                              <UserBadge pubkey={maintainer.pubkey} />
+                              {#if maintainer.isOwner}
+                                <span class="contributor-badge owner">Owner</span>
+                              {:else}
+                                <span class="contributor-badge maintainer">Maintainer</span>
+                              {/if}
+                            </a>
+                          {/each}
+                        </div>
+                      </div>
+                    {:else}
+                      <!-- Fallback: show owner if maintainers not available -->
+                      <a href={`/users/${repo.npub}`} onclick={(e) => e.stopPropagation()}>
+                        <UserBadge pubkey={repo.owner} />
+                      </a>
+                    {/if}
                   </div>
                 </div>
               {/each}
@@ -237,5 +283,108 @@
 
   .search-info small {
     color: inherit;
+  }
+
+  .search-controls {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .cancel-button {
+    padding: 0.5rem 1rem;
+    background: var(--bg-secondary, #e8e8e8);
+    color: var(--text-primary, #1a1a1a);
+    border: 1px solid var(--border-color, #ccc);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: background-color 0.2s;
+  }
+
+  .cancel-button:hover {
+    background: var(--bg-tertiary, #d0d0d0);
+  }
+
+  .cancel-button:active {
+    background: var(--bg-quaternary, #b8b8b8);
+  }
+
+  .repo-contributors {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  .contributors-label {
+    font-size: 0.875rem;
+    color: var(--text-muted, #666);
+    font-weight: 500;
+  }
+
+  .contributors-list {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .contributor-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    text-decoration: none;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.5rem;
+    background: var(--bg-secondary, #f0f0f0);
+    border: 1px solid var(--border-color, #ddd);
+    transition: all 0.2s ease;
+  }
+
+  .contributor-item:hover {
+    border-color: var(--accent, #8a2be2);
+    background: var(--card-bg, #fff);
+  }
+
+  .contributor-item.contributor-owner {
+    background: var(--accent-light, var(--bg-tertiary));
+    border: 2px solid var(--accent, var(--border-color));
+    font-weight: 600;
+    box-shadow: 0 0 0 1px var(--accent-light, transparent);
+  }
+
+  .contributor-item.contributor-owner:hover {
+    background: var(--accent-light, var(--bg-tertiary));
+    border-color: var(--accent, var(--border-color));
+    box-shadow: 0 0 0 2px var(--accent-light, transparent);
+  }
+
+  .contributor-badge {
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    white-space: nowrap;
+    letter-spacing: 0.05em;
+    border: 1px solid transparent;
+    min-height: 1.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .contributor-badge.owner {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+  }
+
+  .contributor-badge.maintainer {
+    background: var(--success-bg);
+    color: var(--success-text);
+    border-color: var(--border-color);
   }
 </style>

@@ -4,6 +4,7 @@
  */
 
 import type { NostrEvent, NostrFilter } from '../../types/nostr.js';
+import { KIND } from '../../types/nostr.js';
 import logger from '../logger.js';
 
 interface CacheEntry {
@@ -282,6 +283,88 @@ export class EventCache {
       maxSize: this.maxCacheSize,
       entries: Array.from(this.cache.values()).reduce((sum, entry) => sum + entry.events.length, 0)
     };
+  }
+
+  /**
+   * Process deletion events (NIP-09) and remove deleted events from cache
+   * @param deletionEvents - Array of kind 5 deletion events
+   */
+  processDeletionEvents(deletionEvents: NostrEvent[]): void {
+    if (deletionEvents.length === 0) {
+      return;
+    }
+
+    const deletedEventIds = new Set<string>();
+    const deletedAddresses = new Set<string>(); // Format: kind:pubkey:d-tag
+
+    // Extract deleted event IDs and addresses from deletion events
+    for (const deletionEvent of deletionEvents) {
+      if (deletionEvent.kind !== KIND.DELETION_REQUEST) {
+        continue;
+      }
+
+      // Extract 'e' tags (deleted event IDs)
+      for (const tag of deletionEvent.tags) {
+        if (tag[0] === 'e' && tag[1]) {
+          deletedEventIds.add(tag[1]);
+        }
+        // Extract 'a' tags (deleted parameterized replaceable events)
+        if (tag[0] === 'a' && tag[1]) {
+          deletedAddresses.add(tag[1]);
+        }
+      }
+    }
+
+    if (deletedEventIds.size === 0 && deletedAddresses.size === 0) {
+      return; // No deletions to process
+    }
+
+    let removedCount = 0;
+
+    // Remove events from all cache entries
+    for (const [key, entry] of this.cache.entries()) {
+      const originalLength = entry.events.length;
+      
+      // Filter out deleted events
+      entry.events = entry.events.filter(event => {
+        // Check if event ID is deleted
+        if (deletedEventIds.has(event.id)) {
+          removedCount++;
+          return false;
+        }
+        
+        // Check if event matches a deleted address (parameterized replaceable)
+        for (const deletedAddr of deletedAddresses) {
+          const parts = deletedAddr.split(':');
+          if (parts.length === 3) {
+            const [kindStr, pubkey, dTag] = parts;
+            const kind = parseInt(kindStr, 10);
+            
+            if (event.kind === kind && event.pubkey === pubkey) {
+              const eventDTag = event.tags.find(t => t[0] === 'd')?.[1];
+              if (eventDTag === dTag) {
+                removedCount++;
+                return false;
+              }
+            }
+          }
+        }
+        
+        return true;
+      });
+
+      // If all events were removed, remove the cache entry
+      if (entry.events.length === 0) {
+        this.cache.delete(key);
+      } else if (entry.events.length !== originalLength) {
+        // Update timestamp since we modified the entry
+        entry.timestamp = Date.now();
+      }
+    }
+
+    if (removedCount > 0) {
+      logger.debug({ removedCount, deletedEventIds: deletedEventIds.size, deletedAddresses: deletedAddresses.size }, 'Processed deletion events and removed from in-memory cache');
+    }
   }
 }
 

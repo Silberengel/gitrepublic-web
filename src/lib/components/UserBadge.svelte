@@ -23,7 +23,7 @@
 
   async function loadUserProfile() {
     try {
-      // Check cache first for faster lookups
+      // Check in-memory cache first for fastest lookups
       const cachedProfile = eventCache.getProfile(pubkey);
       if (cachedProfile) {
         try {
@@ -33,13 +33,92 @@
             picture: profile.picture
           };
           loading = false;
+          
+          // Fetch fresh data in background to update cache (non-blocking)
+          nostrClient.fetchEvents([
+            {
+              kinds: [0],
+              authors: [pubkey],
+              limit: 1
+            }
+          ]).then(profileEvents => {
+            if (profileEvents.length > 0) {
+              try {
+                const freshProfile = JSON.parse(profileEvents[0].content);
+                // Update if profile changed
+                if (freshProfile.name !== profile.name || freshProfile.picture !== profile.picture) {
+                  userProfile = {
+                    name: freshProfile.name,
+                    picture: freshProfile.picture
+                  };
+                }
+              } catch {
+                // Invalid JSON, ignore
+              }
+            }
+          }).catch(() => {
+            // Ignore background fetch errors
+          });
+          
           return;
         } catch {
           // Invalid JSON in cache, continue to fetch fresh
         }
       }
+      
+      // Check persistent cache (IndexedDB) if available (browser only)
+      if (typeof window !== 'undefined') {
+        try {
+          const { persistentEventCache } = await import('../services/nostr/persistent-event-cache.js');
+          const persistentProfile = await persistentEventCache.getProfile(pubkey);
+          if (persistentProfile) {
+            try {
+              const profile = JSON.parse(persistentProfile.content);
+              userProfile = {
+                name: profile.name,
+                picture: profile.picture
+              };
+              loading = false;
+              
+              // Also update in-memory cache for faster future lookups
+              eventCache.setProfile(pubkey, persistentProfile);
+              
+              // Fetch fresh data in background (non-blocking)
+              nostrClient.fetchEvents([
+                {
+                  kinds: [0],
+                  authors: [pubkey],
+                  limit: 1
+                }
+              ]).then(profileEvents => {
+                if (profileEvents.length > 0) {
+                  try {
+                    const freshProfile = JSON.parse(profileEvents[0].content);
+                    if (freshProfile.name !== profile.name || freshProfile.picture !== profile.picture) {
+                      userProfile = {
+                        name: freshProfile.name,
+                        picture: freshProfile.picture
+                      };
+                    }
+                  } catch {
+                    // Invalid JSON, ignore
+                  }
+                }
+              }).catch(() => {
+                // Ignore background fetch errors
+              });
+              
+              return;
+            } catch {
+              // Invalid JSON in persistent cache, continue to fetch fresh
+            }
+          }
+        } catch {
+          // Persistent cache not available, continue to fetch
+        }
+      }
 
-      // Fetch user profile (kind 0 - metadata) if not in cache
+      // No cache available, fetch from relays
       const profileEvents = await nostrClient.fetchEvents([
         {
           kinds: [0],

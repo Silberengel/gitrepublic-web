@@ -62,6 +62,38 @@
   let activeTab = $state<'files' | 'history' | 'tags' | 'issues' | 'prs' | 'docs' | 'discussions'>('discussions');
   let showRepoMenu = $state(false);
 
+  // Load maintainers when page data changes (only once per repo, with guard)
+  let lastRepoKey = $state<string | null>(null);
+  let maintainersEffectRan = $state(false);
+  
+  $effect(() => {
+    const data = $page.data as typeof pageData;
+    const currentRepoKey = `${npub}/${repo}`;
+    
+    // Reset flags if repo changed
+    if (currentRepoKey !== lastRepoKey) {
+      maintainersLoaded = false;
+      maintainersEffectRan = false;
+      lastRepoKey = currentRepoKey;
+    }
+    
+    // Only load if:
+    // 1. We have page data
+    // 2. Effect hasn't run yet for this repo
+    // 3. We're not currently loading
+    if ((data.repoOwnerPubkey || (data.repoMaintainers && data.repoMaintainers.length > 0)) && 
+        !maintainersEffectRan && 
+        !loadingMaintainers) {
+      maintainersEffectRan = true; // Mark as ran to prevent re-running
+      maintainersLoaded = true; // Set flag before loading to prevent concurrent calls
+      loadAllMaintainers().catch(err => {
+        maintainersLoaded = false; // Reset on error so we can retry
+        maintainersEffectRan = false; // Allow retry
+        console.warn('Failed to load maintainers:', err);
+      });
+    }
+  });
+
   // Sync with userStore
   $effect(() => {
     const currentUser = $userStore;
@@ -82,6 +114,11 @@
         
         checkMaintainerStatus().catch(err => console.warn('Failed to reload maintainer status after login:', err));
         loadBookmarkStatus().catch(err => console.warn('Failed to reload bookmark status after login:', err));
+        // Reset flags to allow reload
+        maintainersLoaded = false;
+        maintainersEffectRan = false;
+        lastRepoKey = null;
+        loadAllMaintainers().catch(err => console.warn('Failed to reload maintainers after login:', err));
         // Recheck clone status after login (force refresh) - delay slightly to ensure auth headers are ready
         setTimeout(() => {
           checkCloneStatus(true).catch(err => console.warn('Failed to recheck clone status after login:', err));
@@ -107,6 +144,11 @@
       if (wasLoggedIn) {
         checkMaintainerStatus().catch(err => console.warn('Failed to reload maintainer status after logout:', err));
         loadBookmarkStatus().catch(err => console.warn('Failed to reload bookmark status after logout:', err));
+        // Reset flags to allow reload
+        maintainersLoaded = false;
+        maintainersEffectRan = false;
+        lastRepoKey = null;
+        loadAllMaintainers().catch(err => console.warn('Failed to reload maintainers after logout:', err));
         // If repo is private and user logged out, reload to trigger access check
         if (!loading && activeTab === 'files') {
           loadFiles().catch(err => console.warn('Failed to reload files after logout:', err));
@@ -145,6 +187,11 @@
   // Maintainer status
   let isMaintainer = $state(false);
   let loadingMaintainerStatus = $state(false);
+  
+  // All maintainers (including owner) for display
+  let allMaintainers = $state<Array<{ pubkey: string; isOwner: boolean }>>([]);
+  let loadingMaintainers = $state(false);
+  let maintainersLoaded = $state(false); // Guard to prevent repeated loads
   
   // Clone status
   let isRepoCloned = $state<boolean | null>(null); // null = unknown, true = cloned, false = not cloned
@@ -1377,6 +1424,7 @@
     await loadTags();
     await checkMaintainerStatus();
     await loadBookmarkStatus();
+    await loadAllMaintainers();
     
     // Check clone status (needed to disable write operations)
     await checkCloneStatus();
@@ -1595,6 +1643,77 @@
       isMaintainer = false;
     } finally {
       loadingMaintainerStatus = false;
+    }
+  }
+
+  async function loadAllMaintainers() {
+    if (repoNotFound || loadingMaintainers) return;
+    
+    loadingMaintainers = true;
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/maintainers`);
+      if (response.ok) {
+        const data = await response.json();
+        const owner = data.owner;
+        const maintainers = data.maintainers || [];
+        
+        // Create array with all maintainers, marking the owner
+        const allMaintainersList: Array<{ pubkey: string; isOwner: boolean }> = [];
+        const seen = new Set<string>();
+        const ownerLower = owner?.toLowerCase();
+        
+        // Process all maintainers, marking owner and deduplicating
+        for (const maintainer of maintainers) {
+          const maintainerLower = maintainer.toLowerCase();
+          
+          // Skip if we've already added this pubkey (case-insensitive check)
+          if (seen.has(maintainerLower)) {
+            continue;
+          }
+          
+          // Mark as seen
+          seen.add(maintainerLower);
+          
+          // Determine if this is the owner
+          const isOwner = ownerLower && maintainerLower === ownerLower;
+          
+          // Add to list
+          allMaintainersList.push({ 
+            pubkey: maintainer, 
+            isOwner: !!isOwner
+          });
+        }
+        
+        // Sort: owner first, then other maintainers
+        allMaintainersList.sort((a, b) => {
+          if (a.isOwner && !b.isOwner) return -1;
+          if (!a.isOwner && b.isOwner) return 1;
+          return 0;
+        });
+        
+        // Ensure owner is always included (in case they weren't in maintainers list)
+        if (owner && !seen.has(ownerLower)) {
+          allMaintainersList.unshift({ pubkey: owner, isOwner: true });
+        }
+        
+        allMaintainers = allMaintainersList;
+      }
+    } catch (err) {
+      console.error('Failed to load maintainers:', err);
+      maintainersLoaded = false; // Reset flag on error
+      // Fallback to pageData if available
+      if (pageData.repoOwnerPubkey) {
+        allMaintainers = [{ pubkey: pageData.repoOwnerPubkey, isOwner: true }];
+        if (pageData.repoMaintainers) {
+          for (const maintainer of pageData.repoMaintainers) {
+            if (maintainer.toLowerCase() !== pageData.repoOwnerPubkey.toLowerCase()) {
+              allMaintainers.push({ pubkey: maintainer, isOwner: false });
+            }
+          }
+        }
+      }
+    } finally {
+      loadingMaintainers = false;
     }
   }
 
@@ -3040,23 +3159,40 @@
           <span class="fork-badge">Forked from <a href={`/repos/${forkInfo.originalRepo.npub}/${forkInfo.originalRepo.repo}`}>{forkInfo.originalRepo.repo}</a></span>
         {/if}
       </div>
-      {#if pageData.repoOwnerPubkey || (pageData.repoMaintainers && pageData.repoMaintainers.length > 0)}
+      {#if allMaintainers.length > 0 || pageData.repoOwnerPubkey}
         <div class="repo-contributors">
-          <span class="contributors-label">Contributors:</span>
+          <span class="contributors-label">Owners & Maintainers:</span>
           <div class="contributors-list">
-            {#if pageData.repoOwnerPubkey}
-              <a href={`/users/${npub}`} class="contributor-item">
+            {#if allMaintainers.length > 0}
+              {#each allMaintainers as maintainer}
+                {@const maintainerNpub = nip19.npubEncode(maintainer.pubkey)}
+                <a 
+                  href={`/users/${maintainerNpub}`} 
+                  class="contributor-item"
+                  class:contributor-owner={maintainer.isOwner}
+                >
+                  <UserBadge pubkey={maintainer.pubkey} />
+                  {#if maintainer.isOwner}
+                    <span class="contributor-badge owner">Owner</span>
+                  {:else}
+                    <span class="contributor-badge maintainer">Maintainer</span>
+                  {/if}
+                </a>
+              {/each}
+            {:else if pageData.repoOwnerPubkey}
+              <!-- Fallback to pageData if maintainers not loaded yet -->
+              <a href={`/users/${npub}`} class="contributor-item contributor-owner">
                 <UserBadge pubkey={pageData.repoOwnerPubkey} />
                 <span class="contributor-badge owner">Owner</span>
               </a>
-            {/if}
-            {#if pageData.repoMaintainers}
-              {#each pageData.repoMaintainers.filter(m => m !== pageData.repoOwnerPubkey) as maintainerPubkey}
-                <a href={`/users/${nip19.npubEncode(maintainerPubkey)}`} class="contributor-item">
-                  <UserBadge pubkey={maintainerPubkey} />
-                  <span class="contributor-badge maintainer">Maintainer</span>
-                </a>
-              {/each}
+              {#if pageData.repoMaintainers}
+                {#each pageData.repoMaintainers.filter(m => m !== pageData.repoOwnerPubkey) as maintainerPubkey}
+                  <a href={`/users/${nip19.npubEncode(maintainerPubkey)}`} class="contributor-item">
+                    <UserBadge pubkey={maintainerPubkey} />
+                    <span class="contributor-badge maintainer">Maintainer</span>
+                  </a>
+                {/each}
+              {/if}
             {/if}
           </div>
         </div>
@@ -5040,6 +5176,19 @@
   .contributor-item:hover {
     border-color: var(--accent);
     background: var(--card-bg);
+  }
+
+  .contributor-item.contributor-owner {
+    background: var(--accent-light);
+    border: 2px solid var(--accent);
+    font-weight: 600;
+    box-shadow: 0 0 0 1px var(--accent-light);
+  }
+
+  .contributor-item.contributor-owner:hover {
+    background: var(--accent-light);
+    border-color: var(--accent-hover);
+    box-shadow: 0 0 0 2px var(--accent-light);
   }
 
   .contributor-badge {
