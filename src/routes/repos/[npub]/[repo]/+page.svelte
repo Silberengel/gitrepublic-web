@@ -290,6 +290,7 @@
   let newIssueSubject = $state('');
   let newIssueContent = $state('');
   let newIssueLabels = $state<string[]>(['']);
+  let updatingIssueStatus = $state<Record<string, boolean>>({});
 
   // Pull Requests
   let prs = $state<Array<{ id: string; subject: string; content: string; status: string; author: string; created_at: number; commitId?: string; kind: number }>>([]);
@@ -301,6 +302,12 @@
   let newPRBranchName = $state('');
   let newPRLabels = $state<string[]>(['']);
   let selectedPR = $state<string | null>(null);
+
+  // Patches
+  let showCreatePatchDialog = $state(false);
+  let newPatchContent = $state('');
+  let newPatchSubject = $state('');
+  let creatingPatch = $state(false);
 
   // Documentation
   let documentationContent = $state<string | null>(null);
@@ -2980,6 +2987,47 @@
     }
   }
 
+  async function updateIssueStatus(issueId: string, issueAuthor: string, status: 'open' | 'closed' | 'resolved' | 'draft') {
+    if (!userPubkeyHex) {
+      alert('Please connect your NIP-07 extension');
+      return;
+    }
+
+    // Check if user is maintainer or issue author
+    const isAuthor = userPubkeyHex === issueAuthor;
+    if (!isMaintainer && !isAuthor) {
+      alert('Only repository maintainers or issue authors can update issue status');
+      return;
+    }
+
+    updatingIssueStatus = { ...updatingIssueStatus, [issueId]: true };
+    error = null;
+
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/issues`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          issueId,
+          issueAuthor,
+          status
+        })
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to update issue status');
+      }
+
+      await loadIssues();
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to update issue status';
+      console.error('Error updating issue status:', err);
+    } finally {
+      updatingIssueStatus = { ...updatingIssueStatus, [issueId]: false };
+    }
+  }
+
   async function loadPRs() {
     loadingPRs = true;
     error = null;
@@ -3062,6 +3110,74 @@
       console.error('Error creating PR:', err);
     } finally {
       saving = false;
+    }
+  }
+
+  async function createPatch() {
+    if (!newPatchContent.trim()) {
+      alert('Please enter patch content');
+      return;
+    }
+
+    if (!userPubkey || !userPubkeyHex) {
+      alert('Please connect your NIP-07 extension');
+      return;
+    }
+
+    creatingPatch = true;
+    error = null;
+
+    try {
+      const decoded = nip19.decode(npub);
+      if (decoded.type !== 'npub') {
+        throw new Error('Invalid npub format');
+      }
+      const repoOwnerPubkey = decoded.data as string;
+      const repoAddress = `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkey}:${repo}`;
+
+      // Get user's relays and combine with defaults
+      const tempClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+      const { outbox } = await getUserRelays(userPubkey, tempClient);
+      const combinedRelays = combineRelays(outbox);
+
+      // Create patch event (kind 1617)
+      const patchEventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
+        kind: KIND.PATCH,
+        pubkey: userPubkeyHex,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [
+          ['a', repoAddress],
+          ['p', repoOwnerPubkey],
+          ['t', 'root']
+        ],
+        content: newPatchContent.trim()
+      };
+
+      // Add subject if provided
+      if (newPatchSubject.trim()) {
+        patchEventTemplate.tags.push(['subject', newPatchSubject.trim()]);
+      }
+
+      // Sign the event using NIP-07
+      const signedEvent = await signEventWithNIP07(patchEventTemplate);
+
+      // Publish to all available relays
+      const publishClient = new NostrClient(combinedRelays);
+      const result = await publishClient.publishEvent(signedEvent, combinedRelays);
+
+      if (result.failed.length > 0 && result.success.length === 0) {
+        throw new Error('Failed to publish patch to all relays');
+      }
+
+      showCreatePatchDialog = false;
+      newPatchContent = '';
+      newPatchSubject = '';
+      alert('Patch created successfully!');
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to create patch';
+      console.error('Error creating patch:', err);
+    } finally {
+      creatingPatch = false;
     }
   }
 
@@ -3211,6 +3327,15 @@
                       {#if userPubkey}
                         <button onclick={() => { forkRepository(); showRepoMenu = false; }} disabled={forking} class="repo-menu-item">
                           {forking ? 'Forking...' : 'Fork'}
+                        </button>
+                        <button onclick={() => { showCreateIssueDialog = true; showRepoMenu = false; }} class="repo-menu-item">
+                          Create Issue
+                        </button>
+                        <button onclick={() => { showCreatePRDialog = true; showRepoMenu = false; }} class="repo-menu-item">
+                          Create Pull Request
+                        </button>
+                        <button onclick={() => { showCreatePatchDialog = true; showRepoMenu = false; }} class="repo-menu-item">
+                          Create Patch
                         </button>
                         {#if hasUnlimitedAccess($userStore.userLevel) && (isRepoCloned === false || (isRepoCloned === null && !checkingCloneStatus))}
                           <button 
@@ -3695,6 +3820,22 @@
                   <span>{new Date(issue.created_at * 1000).toLocaleDateString()}</span>
                   <EventCopyButton eventId={issue.id} kind={issue.kind} pubkey={issue.author} />
                 </div>
+                {#if userPubkeyHex && (isMaintainer || userPubkeyHex === issue.author)}
+                  <div class="issue-actions">
+                    {#if issue.status === 'open'}
+                      <button onclick={() => updateIssueStatus(issue.id, issue.author, 'closed')} disabled={updatingIssueStatus[issue.id]} class="issue-action-btn close-btn">
+                        {updatingIssueStatus[issue.id] ? 'Closing...' : 'Close'}
+                      </button>
+                      <button onclick={() => updateIssueStatus(issue.id, issue.author, 'resolved')} disabled={updatingIssueStatus[issue.id]} class="issue-action-btn resolve-btn">
+                        {updatingIssueStatus[issue.id] ? 'Resolving...' : 'Resolve'}
+                      </button>
+                    {:else if issue.status === 'closed' || issue.status === 'resolved'}
+                      <button onclick={() => updateIssueStatus(issue.id, issue.author, 'open')} disabled={updatingIssueStatus[issue.id]} class="issue-action-btn reopen-btn">
+                        {updatingIssueStatus[issue.id] ? 'Reopening...' : 'Reopen'}
+                      </button>
+                    {/if}
+                  </div>
+                {/if}
               </li>
             {/each}
           </ul>
@@ -3915,6 +4056,9 @@
                     {npub}
                     {repo}
                     {repoOwnerPubkey}
+                    isMaintainer={isMaintainer}
+                    userPubkeyHex={userPubkeyHex}
+                    onStatusUpdate={loadPRs}
                   />
                   <button onclick={() => selectedPR = null} class="back-btn">← Back to PR List</button>
                 {/if}
@@ -4551,6 +4695,44 @@
     </div>
   {/if}
 
+  <!-- Create Patch Dialog -->
+  {#if showCreatePatchDialog && userPubkey}
+    <div 
+      class="modal-overlay" 
+      role="dialog"
+      aria-modal="true"
+      aria-label="Create new patch"
+      onclick={() => showCreatePatchDialog = false}
+      onkeydown={(e) => e.key === 'Escape' && (showCreatePatchDialog = false)}
+      tabindex="-1"
+    >
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div 
+        class="modal" 
+        role="document"
+        onclick={(e) => e.stopPropagation()}
+      >
+        <h3>Create New Patch</h3>
+        <p class="help-text">Enter your patch content in git format-patch format. Patches should be under 60KB.</p>
+        <label>
+          Subject (optional):
+          <input type="text" bind:value={newPatchSubject} placeholder="Patch title..." />
+        </label>
+        <label>
+          Patch Content:
+          <textarea bind:value={newPatchContent} rows="15" placeholder="Paste your git format-patch output here..."></textarea>
+        </label>
+        <div class="modal-actions">
+          <button onclick={() => showCreatePatchDialog = false} class="cancel-button">Cancel</button>
+          <button onclick={createPatch} disabled={!newPatchContent.trim() || creatingPatch} class="save-button">
+            {creatingPatch ? 'Creating...' : 'Create Patch'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <!-- Commit Dialog -->
   {#if showCommitDialog && userPubkey && isMaintainer}
     <div 
@@ -5055,6 +5237,143 @@
       justify-content: flex-end;
       min-width: 0;
       gap: 0.5rem;
+    }
+
+    /* Modal responsive styles */
+    .modal {
+      width: 95%;
+      max-width: 95%;
+      max-height: 90vh;
+      margin: 1rem;
+      padding: 1rem;
+      overflow-y: auto;
+    }
+
+    .modal h3 {
+      font-size: 1.25rem;
+      margin-bottom: 1rem;
+    }
+
+    .modal label {
+      display: block;
+      margin-bottom: 0.75rem;
+      font-size: 0.9rem;
+    }
+
+    .modal input,
+    .modal textarea,
+    .modal select {
+      width: 100%;
+      font-size: 0.9rem;
+      padding: 0.5rem;
+    }
+
+    .modal-actions {
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .modal-actions button {
+      width: 100%;
+      padding: 0.75rem;
+    }
+
+    /* Tab buttons responsive */
+    .tabs {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    .tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .tab-button {
+      font-size: 0.85rem;
+      padding: 0.5rem 0.75rem;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    /* Repo menu dropdown responsive */
+    .repo-menu-dropdown {
+      right: 0;
+      left: auto;
+      min-width: 200px;
+      max-width: calc(100vw - 2rem);
+    }
+
+    /* Issue and PR lists responsive */
+    .issue-item, .pr-item {
+      padding: 0.5rem;
+    }
+
+    .issue-header, .pr-header {
+      flex-wrap: wrap;
+      gap: 0.25rem;
+    }
+
+    .issue-subject, .pr-subject {
+      font-size: 0.9rem;
+      word-break: break-word;
+    }
+
+    .issue-meta, .pr-meta {
+      flex-wrap: wrap;
+      font-size: 0.7rem;
+      gap: 0.5rem;
+    }
+
+    .issue-actions {
+      flex-direction: column;
+      width: 100%;
+    }
+
+    .issue-action-btn {
+      width: 100%;
+      padding: 0.5rem;
+    }
+
+    /* Sidebars responsive */
+    .prs-sidebar, .issues-sidebar {
+      width: 100%;
+      max-width: 100%;
+    }
+
+    .prs-header, .issues-header {
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .create-pr-button, .create-issue-button {
+      width: 100%;
+      padding: 0.75rem;
+    }
+
+    /* File tree responsive */
+    .file-tree-header {
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .file-tree-actions {
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .create-file-button {
+      font-size: 0.85rem;
+      padding: 0.5rem 0.75rem;
+    }
+
+    /* Back button responsive */
+    .back-btn {
+      width: 100%;
+      margin-bottom: 1rem;
+      padding: 0.75rem;
+    }
     }
 
     .non-maintainer-notice {
@@ -6507,6 +6826,55 @@
     margin: 0;
     overflow-y: auto;
     flex: 1;
+  }
+
+  .issue-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .issue-action-btn {
+    padding: 0.4rem 0.8rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-family: 'IBM Plex Serif', serif;
+    transition: background 0.2s ease;
+  }
+
+  .issue-action-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .issue-action-btn.close-btn {
+    background: var(--error-text, #dc3545);
+    color: white;
+  }
+
+  .issue-action-btn.close-btn:hover:not(:disabled) {
+    background: var(--error-hover, #c82333);
+  }
+
+  .issue-action-btn.resolve-btn {
+    background: var(--success-text, #28a745);
+    color: white;
+  }
+
+  .issue-action-btn.resolve-btn:hover:not(:disabled) {
+    background: var(--success-hover, #218838);
+  }
+
+  .issue-action-btn.reopen-btn {
+    background: var(--accent, #007bff);
+    color: white;
+  }
+
+  .issue-action-btn.reopen-btn:hover:not(:disabled) {
+    background: var(--accent-hover, #0056b3);
   }
 
   .issue-item, .pr-item {

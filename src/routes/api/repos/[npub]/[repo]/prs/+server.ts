@@ -55,3 +55,36 @@ export const POST: RequestHandler = withRepoValidation(
   },
   { operation: 'createPR', requireRepoAccess: false } // PRs can be created by anyone with access
 );
+
+export const PATCH: RequestHandler = withRepoValidation(
+  async ({ repoContext, requestContext, event }) => {
+    const body = await event.request.json();
+    const { prId, prAuthor, status, mergeCommitId } = body;
+
+    if (!prId || !prAuthor || !status) {
+      throw handleValidationError('Missing required fields: prId, prAuthor, status', { operation: 'updatePRStatus', npub: repoContext.npub, repo: repoContext.repo });
+    }
+
+    // Check if user is maintainer
+    const { MaintainerService } = await import('$lib/services/nostr/maintainer-service.js');
+    const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
+    const isMaintainer = await maintainerService.isMaintainer(requestContext.userPubkeyHex || '', repoContext.repoOwnerPubkey, repoContext.repo);
+    
+    if (!isMaintainer && requestContext.userPubkeyHex !== repoContext.repoOwnerPubkey) {
+      throw handleApiError(new Error('Only repository owners and maintainers can update PR status'), { operation: 'updatePRStatus', npub: repoContext.npub, repo: repoContext.repo }, 'Unauthorized');
+    }
+
+    // Update PR status
+    const statusEvent = await prsService.updatePRStatus(
+      prId,
+      prAuthor,
+      repoContext.repoOwnerPubkey,
+      repoContext.repo,
+      status,
+      mergeCommitId
+    );
+
+    return json({ success: true, event: statusEvent });
+  },
+  { operation: 'updatePRStatus', requireRepoAccess: false }
+);

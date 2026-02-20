@@ -320,9 +320,118 @@ Pull requests can have the following statuses:
 
 Only repository owners and maintainers can merge PRs:
 
-1. **Review the PR** and ensure all checks pass
-2. **Click "Merge"** or change the status to "Applied"
-3. **The changes will be merged** into the target branch
+1. **Open the PR detail view** by clicking on a PR
+2. **Review the changes** in the diff view
+3. **Click "Merge"** button
+4. **Select target branch** (default: main)
+5. **Optionally add a merge message**
+6. **Click "Merge"** to:
+   - Create a merge commit in the target branch
+   - Update PR status to "merged" (kind 1631)
+   - Include merge commit ID in the status event
+
+### Managing PR Status
+
+Repository owners and maintainers can manage PR status:
+
+- **Close PR**: Click "Close" button to mark PR as closed (kind 1632)
+- **Reopen PR**: Click "Reopen" button on a closed PR to reopen it (kind 1630)
+- **Mark as Draft**: Click "Mark as Draft" to mark PR as draft (kind 1633)
+
+### PR Updates (Kind 1619)
+
+Only the PR author can update their PR:
+
+- PR updates change the tip commit of the PR
+- Use this when you've pushed new commits to your branch
+- The update creates a kind 1619 event with the new commit ID
+
+---
+
+## Patches
+
+Patches (kind 1617) are an alternative to pull requests for proposing changes to a repository. They're particularly useful for smaller changes or when you want to send code changes directly without creating a full pull request.
+
+### Patches vs. Pull Requests
+
+**When to use Patches:**
+- **Small changes**: Each patch event should be under 60KB (per NIP-34 specification)
+- **Simple fixes**: Bug fixes, typo corrections, or small feature additions
+- **Direct code submission**: When you want to send code changes directly without maintaining a fork
+- **Email-style workflow**: Similar to traditional git email-based patch workflows
+
+**When to use Pull Requests:**
+- **Large changes**: Changes that exceed 60KB per event
+- **Complex features**: Multi-file changes that need discussion and review
+- **Ongoing collaboration**: When you need to iterate on changes with maintainers
+- **Branch-based workflow**: When you're working with forks and branches
+
+### Key Differences
+
+| Feature | Patches | Pull Requests |
+|---------|---------|---------------|
+| **Size Limit** | Under 60KB per event | No strict limit |
+| **Format** | Git format-patch output | Markdown description + commit reference |
+| **Workflow** | Email-style, sequential | Branch-based, iterative |
+| **Series Support** | Yes (linked via NIP-10 reply tags) | Yes (via PR updates) |
+| **Content** | Full patch content in event | Reference to commits in clone URL |
+| **Use Case** | Small, self-contained changes | Large, complex changes |
+
+### Creating a Patch
+
+wPatches are created as Nostr events (kind 1617). The patch content is embedded directly in the event, making it easy to share and review without requiring access to a git repository.
+
+#### Via Web Interface
+
+1. **Navigate to the repository** you want to contribute to
+2. **Click the repository menu** (three dots) and select "Create Patch"
+3. **Fill in the patch details**:
+   - **Subject** (optional): A brief title for your patch
+   - **Patch Content**: Enter your patch content (can be in git format-patch format, but any patch format is acceptable)
+4. **Submit the patch** - it will be published as a Nostr event (kind 1617) to the repository's relays
+
+#### Patch Content Format
+
+The patch content can be in any format that describes code changes. Common formats include:
+- **Git format-patch output**: Standard git patch format
+- **Unified diff format**: `git diff` output
+- **Plain text description**: For simple changes, you can describe the changes in plain text
+
+The key advantage of event-based patches is that they're self-contained Nostr events that can be discovered, shared, and reviewed without requiring access to the original git repository.
+
+### Patch Series
+
+For multiple related patches, you can create a patch series:
+
+1. **First patch**: Marked with `t` tag `"root"`
+2. **Subsequent patches**: Include NIP-10 `e` reply tags pointing to the previous patch
+3. **Patch revisions**: If you need to revise a patch, mark the first revision with `t` tag `"root-revision"` and link to the original root patch
+
+### Patch Status
+
+Like pull requests, patches can have status events:
+- **Open**: The patch is active and ready for review
+- **Applied/Merged**: The patch has been applied to the repository
+- **Closed**: The patch was closed without applying
+- **Draft**: The patch is still a work in progress
+
+### Applying Patches
+
+Repository owners and maintainers can apply patches from Nostr events:
+
+1. **Review the patch event** - patches are stored as Nostr events (kind 1617) and can be found on relays
+2. **Extract the patch content** from the event content field
+3. **Apply the patch** using git (if in git format):
+   ```bash
+   # If the patch content is in git format-patch format, save it to a file and apply:
+   echo "<patch-content-from-event>" > patch.patch
+   git am patch.patch
+   ```
+   Or manually apply the changes if the patch is in a different format
+4. **Create a status event** (kind 1631) marking the patch as applied, referencing the patch event ID
+5. **Push the changes** to the repository
+
+The status event creates a permanent record that the patch was applied, linking the patch event to the resulting commits.
 
 ---
 
@@ -349,6 +458,15 @@ Issues can have the following statuses:
 - **Resolved**: The issue has been fixed or addressed
 - **Closed**: The issue was closed (e.g., duplicate, won't fix)
 - **Draft**: The issue is still being written
+
+### Managing Issue Status
+
+Repository owners, maintainers, and issue authors can update issue status:
+
+- **Close Issue**: Click "Close" button to mark issue as closed (kind 1632)
+- **Resolve Issue**: Click "Resolve" button to mark issue as resolved (kind 1631)
+- **Reopen Issue**: Click "Reopen" button on a closed or resolved issue to reopen it (kind 1630)
+- **Mark as Draft**: Mark issue as draft (kind 1633)
 
 ### Managing Issues
 

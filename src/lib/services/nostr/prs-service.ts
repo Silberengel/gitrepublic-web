@@ -200,4 +200,48 @@ export class PRsService {
 
     return event as StatusEvent;
   }
+
+  /**
+   * Update PR tip commit (kind 1619)
+   */
+  async updatePullRequest(
+    prId: string,
+    prAuthor: string,
+    repoOwnerPubkey: string,
+    repoId: string,
+    newCommitId: string,
+    cloneUrl: string,
+    mergeBase?: string
+  ): Promise<NostrEvent> {
+    const repoAddress = this.getRepoAddress(repoOwnerPubkey, repoId);
+    
+    const tags: string[][] = [
+      ['a', repoAddress],
+      ['p', repoOwnerPubkey],
+      ['p', prAuthor],
+      ['E', prId], // NIP-22: Root PR event
+      ['P', prAuthor], // NIP-22: Root PR author
+      ['c', newCommitId], // New tip commit
+      ['clone', cloneUrl]
+    ];
+
+    if (mergeBase) {
+      tags.push(['merge-base', mergeBase]);
+    }
+
+    const event = await signEventWithNIP07({
+      kind: KIND.PULL_REQUEST_UPDATE,
+      content: '',
+      tags,
+      created_at: Math.floor(Date.now() / 1000),
+      pubkey: ''
+    });
+
+    const result = await this.nostrClient.publishEvent(event, this.relays);
+    if (result.failed.length > 0 && result.success.length === 0) {
+      throw new Error('Failed to publish PR update to all relays');
+    }
+
+    return event;
+  }
 }

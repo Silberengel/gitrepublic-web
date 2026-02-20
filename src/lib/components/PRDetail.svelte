@@ -23,9 +23,12 @@
     npub: string;
     repo: string;
     repoOwnerPubkey: string;
+    isMaintainer?: boolean;
+    userPubkeyHex?: string;
+    onStatusUpdate?: () => void;
   }
 
-  let { pr, npub, repo, repoOwnerPubkey }: Props = $props();
+  let { pr, npub, repo, repoOwnerPubkey, isMaintainer = false, userPubkeyHex, onStatusUpdate }: Props = $props();
 
   let highlights = $state<Array<{
     id: string;
@@ -73,6 +76,13 @@
   let prFileContent = $state('');
   let currentFilePath = $state<string | null>(null);
   let loadingDiff = $state(false);
+  
+  // Status management
+  let updatingStatus = $state(false);
+  let merging = $state(false);
+  let showMergeDialog = $state(false);
+  let mergeTargetBranch = $state('main');
+  let mergeMessage = $state('');
 
   const highlightsService = new HighlightsService(DEFAULT_NOSTR_RELAYS);
   const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
@@ -288,6 +298,88 @@
       return pubkey.slice(0, 8) + '...';
     }
   }
+
+  async function updatePRStatus(status: 'open' | 'merged' | 'closed' | 'draft') {
+    if (!userPubkeyHex || !isMaintainer) {
+      alert('Only repository maintainers can update PR status');
+      return;
+    }
+
+    updatingStatus = true;
+    error = null;
+
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/prs`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prId: pr.id,
+          prAuthor: pr.author,
+          status
+        })
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to update PR status');
+      }
+
+      if (onStatusUpdate) {
+        onStatusUpdate();
+      }
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to update PR status';
+      console.error('Error updating PR status:', err);
+    } finally {
+      updatingStatus = false;
+    }
+  }
+
+  async function mergePR() {
+    if (!userPubkeyHex || !isMaintainer) {
+      alert('Only repository maintainers can merge PRs');
+      return;
+    }
+
+    if (!pr.commitId) {
+      alert('PR does not have a commit ID');
+      return;
+    }
+
+    merging = true;
+    error = null;
+
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/prs/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prId: pr.id,
+          prAuthor: pr.author,
+          prCommitId: pr.commitId,
+          targetBranch: mergeTargetBranch,
+          mergeMessage: mergeMessage.trim() || `Merge pull request ${pr.id.slice(0, 7)}`
+        })
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to merge PR');
+      }
+
+      showMergeDialog = false;
+      mergeMessage = '';
+      if (onStatusUpdate) {
+        onStatusUpdate();
+      }
+      alert('PR merged successfully!');
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to merge PR';
+      console.error('Error merging PR:', err);
+    } finally {
+      merging = false;
+    }
+  }
 </script>
 
 <div class="pr-detail-view">
@@ -302,6 +394,27 @@
       {/if}
       <span>Created {new Date(pr.created_at * 1000).toLocaleString()}</span>
     </div>
+    {#if isMaintainer && userPubkeyHex}
+      <div class="pr-actions">
+        {#if pr.status === 'open'}
+          <button onclick={() => showMergeDialog = true} disabled={merging || !pr.commitId} class="action-btn merge-btn">
+            {merging ? 'Merging...' : 'Merge'}
+          </button>
+          <button onclick={() => updatePRStatus('closed')} disabled={updatingStatus} class="action-btn close-btn">
+            {updatingStatus ? 'Closing...' : 'Close'}
+          </button>
+        {:else if pr.status === 'closed'}
+          <button onclick={() => updatePRStatus('open')} disabled={updatingStatus} class="action-btn reopen-btn">
+            {updatingStatus ? 'Reopening...' : 'Reopen'}
+          </button>
+        {/if}
+        {#if pr.status !== 'draft'}
+          <button onclick={() => updatePRStatus('draft')} disabled={updatingStatus} class="action-btn draft-btn">
+            {updatingStatus ? 'Updating...' : 'Mark as Draft'}
+          </button>
+        {/if}
+      </div>
+    {/if}
   </div>
 
   <div class="pr-body">
@@ -751,4 +864,113 @@
     border: 1px solid var(--error-text);
     border-radius: 4px;
   }
+
+  .pr-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .action-btn {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: 'IBM Plex Serif', serif;
+    font-size: 0.9rem;
+    transition: background 0.2s ease;
+  }
+
+  .action-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .merge-btn {
+    background: var(--success-text, #28a745);
+    color: white;
+  }
+
+  .merge-btn:hover:not(:disabled) {
+    background: var(--success-hover, #218838);
+  }
+
+  .close-btn {
+    background: var(--error-text, #dc3545);
+    color: white;
+  }
+
+  .close-btn:hover:not(:disabled) {
+    background: var(--error-hover, #c82333);
+  }
+
+  .reopen-btn {
+    background: var(--accent, #007bff);
+    color: white;
+  }
+
+  .reopen-btn:hover:not(:disabled) {
+    background: var(--accent-hover, #0056b3);
+  }
+
+  .draft-btn {
+    background: var(--bg-tertiary, #6c757d);
+    color: white;
+  }
+
+  .draft-btn:hover:not(:disabled) {
+    background: var(--bg-secondary, #5a6268);
+  }
+
+  @media (max-width: 768px) {
+    .pr-actions {
+      flex-direction: column;
+    }
+
+    .action-btn {
+      width: 100%;
+    }
+
+    .pr-content {
+      grid-template-columns: 1fr;
+    }
+  }
 </style>
+
+<!-- Merge Dialog -->
+{#if showMergeDialog}
+  <div 
+    class="modal-overlay" 
+    role="dialog"
+    aria-modal="true"
+    aria-label="Merge pull request"
+    tabindex="-1"
+    onclick={() => showMergeDialog = false}
+    onkeydown={(e) => {
+      if (e.key === 'Escape') {
+        showMergeDialog = false;
+      }
+    }}
+  >
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div class="modal" role="document" onclick={(e) => e.stopPropagation()}>
+      <h3>Merge Pull Request</h3>
+      <label>
+        Target Branch:
+        <input type="text" bind:value={mergeTargetBranch} placeholder="main" />
+      </label>
+      <label>
+        Merge Message (optional):
+        <textarea bind:value={mergeMessage} rows="3" placeholder="Merge pull request..."></textarea>
+      </label>
+      <div class="modal-actions">
+        <button onclick={() => { showMergeDialog = false; mergeMessage = ''; }} class="cancel-btn">Cancel</button>
+        <button onclick={mergePR} disabled={merging || !mergeTargetBranch.trim()} class="save-btn">
+          {merging ? 'Merging...' : 'Merge'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}

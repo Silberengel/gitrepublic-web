@@ -9,8 +9,11 @@ import { createRepoGetHandler, withRepoValidation } from '$lib/utils/api-handler
 import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
 import { handleValidationError, handleApiError } from '$lib/utils/error-handler.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
+import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { forwardEventIfEnabled } from '$lib/services/messaging/event-forwarder.js';
 import logger from '$lib/services/logger.js';
+
+const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
 
 export const GET: RequestHandler = createRepoGetHandler(
   async (context: RepoRequestContext) => {
@@ -53,4 +56,37 @@ export const POST: RequestHandler = withRepoValidation(
     return json({ success: true, event: issueEvent, published: result });
   },
   { operation: 'createIssue', requireRepoAccess: false } // Issues can be created by anyone with access
+);
+
+export const PATCH: RequestHandler = withRepoValidation(
+  async ({ repoContext, requestContext, event }) => {
+    const body = await event.request.json();
+    const { issueId, issueAuthor, status } = body;
+
+    if (!issueId || !issueAuthor || !status) {
+      throw handleValidationError('Missing required fields: issueId, issueAuthor, status', { operation: 'updateIssueStatus', npub: repoContext.npub, repo: repoContext.repo });
+    }
+
+    // Check if user is maintainer or issue author
+    const { IssuesService } = await import('$lib/services/nostr/issues-service.js');
+    const issuesService = new IssuesService(DEFAULT_NOSTR_RELAYS);
+    const isMaintainer = await maintainerService.isMaintainer(requestContext.userPubkeyHex || '', repoContext.repoOwnerPubkey, repoContext.repo);
+    const isAuthor = requestContext.userPubkeyHex === issueAuthor;
+    
+    if (!isMaintainer && !isAuthor && requestContext.userPubkeyHex !== repoContext.repoOwnerPubkey) {
+      throw handleApiError(new Error('Only repository owners, maintainers, or issue authors can update issue status'), { operation: 'updateIssueStatus', npub: repoContext.npub, repo: repoContext.repo }, 'Unauthorized');
+    }
+
+    // Update issue status
+    const statusEvent = await issuesService.updateIssueStatus(
+      issueId,
+      issueAuthor,
+      repoContext.repoOwnerPubkey,
+      repoContext.repo,
+      status
+    );
+
+    return json({ success: true, event: statusEvent });
+  },
+  { operation: 'updateIssueStatus', requireRepoAccess: false }
 );

@@ -182,6 +182,9 @@ These are not part of any NIP but are used by this application:
    - Owner/maintainer creates status events (kind 1630-1633)
    - Links to PR/Issue via event references
    - Status changes: open → applied/closed/draft
+   - **PR Merging**: Creates merge commit and publishes status event (kind 1631) with merge commit ID
+   - **PR Updates**: PR author can update PR tip commit using kind 1619 events
+   - **Issue Management**: Owners, maintainers, and issue authors can update issue status
 
 3. **Highlights & Comments**:
    - User selects code in PR diff view
