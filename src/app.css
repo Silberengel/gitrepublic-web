@@ -1905,3 +1905,24 @@ label.filter-checkbox > span,
 
 /* Code blocks use consistent dark-gray background in both themes */
 /* All syntax highlighting colors are optimized for #1e1e1e background */
+
+/* Swagger UI: Make response body backgrounds darker in light mode for better contrast */
+/* This ensures light green/blue/yellow syntax highlighting is readable */
+html[data-theme="light"] .swagger-ui .response pre,
+html[data-theme="light"] .swagger-ui .response .highlight-code,
+html[data-theme="light"] .swagger-ui .response .highlight-code pre,
+html[data-theme="light"] .swagger-ui .response-body pre,
+html[data-theme="light"] .swagger-ui .response-body .highlight-code,
+html[data-theme="light"] .swagger-ui .response-body .highlight-code pre,
+html[data-theme="light"] .swagger-ui .responses-wrapper pre,
+html[data-theme="light"] .swagger-ui .responses-wrapper .highlight-code,
+html[data-theme="light"] .swagger-ui .responses-wrapper .highlight-code pre,
+html[data-theme="light"] .swagger-ui .responses-inner pre,
+html[data-theme="light"] .swagger-ui .responses-inner .highlight-code,
+html[data-theme="light"] .swagger-ui .responses-inner .highlight-code pre,
+html[data-theme="light"] .swagger-ui .response pre.microlight,
+html[data-theme="light"] .swagger-ui .response-body pre.microlight,
+html[data-theme="light"] .swagger-ui .responses-wrapper pre.microlight {
+  background: #0f172a !important; /* Darker slate background for light mode (slate-900) */
+  color: #e2e8f0 !important; /* Light text for dark background */
+}

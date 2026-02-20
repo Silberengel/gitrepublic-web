@@ -145,6 +145,8 @@ export class PersistentEventCache {
   private defaultTTL: number = 5 * 60 * 1000; // 5 minutes
   private profileTTL: number = 30 * 60 * 1000; // 30 minutes for profiles
   private maxCacheAge: number = 7 * 24 * 60 * 60 * 1000; // 7 days max age
+  private writeQueue: Array<() => Promise<void>> = [];
+  private isProcessingQueue: boolean = false;
 
   constructor() {
     this.init();
@@ -299,11 +301,75 @@ export class PersistentEventCache {
   }
 
   /**
+   * Process write queue to prevent concurrent IndexedDB transactions
+   */
+  private async processWriteQueue(): Promise<void> {
+    if (this.isProcessingQueue || this.writeQueue.length === 0) {
+      return;
+    }
+
+    this.isProcessingQueue = true;
+
+    while (this.writeQueue.length > 0) {
+      const writeFn = this.writeQueue.shift();
+      if (writeFn) {
+        try {
+          await writeFn();
+        } catch (error) {
+          // Log but continue processing queue
+          logger.debug({ error }, 'Error in write queue item');
+        }
+      }
+    }
+
+    this.isProcessingQueue = false;
+  }
+
+  /**
    * Store events in cache, merging with existing events
    */
   async set(filters: NostrFilter[], events: NostrEvent[], ttl?: number): Promise<void> {
     await this.init();
     
+    if (!this.db) {
+      return;
+    }
+
+    // Queue the write operation to prevent concurrent transactions
+    return new Promise<void>((resolve, reject) => {
+      let resolved = false;
+      
+      this.writeQueue.push(async () => {
+        try {
+          await this._setInternal(filters, events, ttl);
+          if (!resolved) {
+            resolved = true;
+            resolve();
+          }
+        } catch (error) {
+          if (!resolved) {
+            resolved = true;
+            reject(error);
+          }
+        }
+      });
+
+      // Process queue asynchronously
+      this.processWriteQueue().catch(err => {
+        if (!resolved) {
+          resolved = true;
+          reject(err);
+        } else {
+          logger.debug({ error: err }, 'Error processing write queue');
+        }
+      });
+    });
+  }
+
+  /**
+   * Internal set method that does the actual work
+   */
+  private async _setInternal(filters: NostrFilter[], events: NostrEvent[], ttl?: number): Promise<void> {
     if (!this.db) {
       return;
     }
@@ -321,14 +387,19 @@ export class PersistentEventCache {
       // Use longer TTL for profile events
       const effectiveTTL = isProfileQuery ? this.profileTTL : cacheTTL;
 
-      // Get existing filter entry
+      // Get existing filter entry (outside transaction)
       const existingEntry = await this.getFilterEntry(filterKey);
       const existingEventIds = new Set(existingEntry?.eventIds || []);
 
-      // Store/update events
-      const eventStore = this.db.transaction([STORE_EVENTS], 'readwrite').objectStore(STORE_EVENTS);
+      // Use a single transaction for all operations
+      const transaction = this.db.transaction([STORE_EVENTS, STORE_PROFILES, STORE_FILTERS], 'readwrite');
+      const eventStore = transaction.objectStore(STORE_EVENTS);
+      const profileStore = transaction.objectStore(STORE_PROFILES);
+      const filterStore = transaction.objectStore(STORE_FILTERS);
+
       const newEventIds: string[] = [];
 
+      // Process all events in the transaction
       for (const event of events) {
         // For replaceable events, check if we have a newer version for this pubkey
         if (REPLACEABLE_KINDS.includes(event.kind)) {
@@ -364,9 +435,8 @@ export class PersistentEventCache {
 
         newEventIds.push(event.id);
 
-        // Also store in profiles store if it's a profile event
+        // Also store in profiles store if it's a profile event (using same transaction)
         if (event.kind === 0) {
-          const profileStore = this.db.transaction([STORE_PROFILES], 'readwrite').objectStore(STORE_PROFILES);
           const existingProfile = await new Promise<CachedEvent | undefined>((resolve) => {
             const req = profileStore.get(event.pubkey);
             req.onsuccess = () => resolve(req.result);
@@ -386,8 +456,7 @@ export class PersistentEventCache {
       // Merge with existing event IDs (don't delete valid events)
       const mergedEventIds = Array.from(new Set([...existingEntry?.eventIds || [], ...newEventIds]));
 
-      // Update filter cache entry
-      const filterStore = this.db.transaction([STORE_FILTERS], 'readwrite').objectStore(STORE_FILTERS);
+      // Update filter cache entry (using same transaction)
       const filterEntry: FilterCacheEntry = {
         filterKey,
         eventIds: mergedEventIds,
@@ -401,6 +470,12 @@ export class PersistentEventCache {
         request.onerror = () => reject(request.error);
       });
 
+      // Wait for transaction to complete
+      await new Promise<void>((resolve, reject) => {
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+
       logger.debug({ 
         filterKey, 
         eventCount: events.length, 
@@ -408,7 +483,18 @@ export class PersistentEventCache {
         ttl: effectiveTTL 
       }, 'Cached events in IndexedDB');
     } catch (error) {
+      // Check if it's a quota exceeded error or other recoverable error
+      if (error instanceof DOMException) {
+        if (error.name === 'QuotaExceededError') {
+          logger.warn({ error, filters }, 'IndexedDB quota exceeded, skipping cache write');
+          return; // Don't throw, just skip this write
+        } else if (error.name === 'TransactionInactiveError' || error.name === 'InvalidStateError') {
+          logger.debug({ error, filters }, 'IndexedDB transaction error, likely concurrent write, skipping');
+          return; // Don't throw, just skip this write
+        }
+      }
       logger.error({ error, filters }, 'Error writing to event cache');
+      throw error; // Re-throw other errors
     }
   }
 

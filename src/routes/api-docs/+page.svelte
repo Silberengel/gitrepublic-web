@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { isNIP07Available, getPublicKeyWithNIP07, signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
+  import type { NostrEvent } from '$lib/types/nostr.js';
 
   const browserExample = `// Get user's pubkey (hex format) from NIP-07 extension
 const userPubkey = await window.nostr.getPublicKey();
@@ -53,7 +55,7 @@ const response = await fetch('https://gitrepublic.com/api/repos/list', {
       // Then load the bundle
       bundleScript = document.createElement('script');
       bundleScript.src = '/swagger-ui/swagger-ui-bundle.js';
-      bundleScript.onload = () => {
+      bundleScript.onload = async () => {
         // @ts-ignore - SwaggerUIBundle is loaded from static files
         const ui = window.SwaggerUIBundle({
           url: '/api/openapi.json',
@@ -74,8 +76,33 @@ const response = await fetch('https://gitrepublic.com/api/repos/list', {
           defaultModelsExpandDepth: 1,
           defaultModelExpandDepth: 1,
           showExtensions: true,
-          showCommonExtensions: true
+          showCommonExtensions: true,
+          // Custom request interceptor to add NIP-98 auth
+          requestInterceptor: (request: any) => {
+            // Check if we have stored auth
+            const authData = localStorage.getItem('swagger-ui-nip98-auth');
+            if (authData) {
+              try {
+                const { token } = JSON.parse(authData);
+                if (token) {
+                  request.headers['Authorization'] = `Nostr ${token}`;
+                }
+              } catch (e) {
+                console.warn('Failed to parse stored auth data', e);
+              }
+            }
+            return request;
+          }
         });
+
+        // Wait for Swagger UI to render, then hook into the authorize button
+        setTimeout(() => {
+          const observer = setupNIP07Authorization(ui);
+          if (observer) {
+            // Store observer for cleanup
+            (window as any).__swaggerAuthObserver = observer;
+          }
+        }, 1000);
       };
       document.head.appendChild(bundleScript);
     };
@@ -86,8 +113,151 @@ const response = await fetch('https://gitrepublic.com/api/repos/list', {
       if (link.parentNode) document.head.removeChild(link);
       if (presetScript.parentNode) document.head.removeChild(presetScript);
       if (bundleScript?.parentNode) document.head.removeChild(bundleScript);
+      if ((window as any).__swaggerAuthObserver) {
+        (window as any).__swaggerAuthObserver.disconnect();
+        delete (window as any).__swaggerAuthObserver;
+      }
     };
   });
+
+  function setupNIP07Authorization(ui: any): MutationObserver | null {
+    // Check if NIP-07 is available
+    if (!isNIP07Available()) {
+      console.warn('NIP-07 extension not available');
+      return null;
+    }
+
+    // Function to handle authorization
+    const handleAuthorize = async () => {
+      try {
+        // Get public key from NIP-07
+        const npub = await getPublicKeyWithNIP07();
+        
+        // Create NIP-98 auth event template
+        const currentUrl = window.location.origin;
+        const authEventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
+          kind: 27235,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [
+            ['u', currentUrl],
+            ['method', 'GET']
+          ],
+          content: '',
+          pubkey: '' // Will be filled by NIP-07
+        };
+
+        // Sign the event with NIP-07
+        const signedEvent = await signEventWithNIP07(authEventTemplate);
+        
+        // Encode to base64
+        const base64Event = btoa(JSON.stringify(signedEvent));
+        
+        // Store in localStorage for request interceptor
+        localStorage.setItem('swagger-ui-nip98-auth', JSON.stringify({ token: base64Event }));
+        
+        // Update Swagger UI's auth state
+        if (ui.authActions) {
+          ui.authActions.authorize({
+            NIP98: {
+              name: 'NIP-98',
+              schema: {
+                type: 'http',
+                scheme: 'Nostr'
+              },
+              value: base64Event
+            }
+          });
+        }
+        
+        // Close the modal if it's open
+        const modal = document.querySelector('.auth-container');
+        if (modal) {
+          const closeBtn = modal.querySelector('.auth-btn-wrapper .btn-done, .auth-btn-wrapper button');
+          if (closeBtn) {
+            (closeBtn as HTMLElement).click();
+          }
+        }
+        
+        // Show success message
+        const successMsg = document.createElement('div');
+        successMsg.style.cssText = 'position: fixed; top: 20px; right: 20px; background: var(--success-bg); color: var(--success-text); padding: 1rem; border-radius: 0.5rem; z-index: 10000; box-shadow: 0 4px 12px var(--shadow-color);';
+        successMsg.textContent = 'Successfully authorized with NIP-07!';
+        document.body.appendChild(successMsg);
+        setTimeout(() => successMsg.remove(), 3000);
+      } catch (error) {
+        console.error('NIP-07 authorization failed:', error);
+        const errorMsg = document.createElement('div');
+        errorMsg.style.cssText = 'position: fixed; top: 20px; right: 20px; background: var(--error-bg); color: var(--error-text); padding: 1rem; border-radius: 0.5rem; z-index: 10000; box-shadow: 0 4px 12px var(--shadow-color);';
+        errorMsg.textContent = `Authorization failed: ${error instanceof Error ? error.message : String(error)}`;
+        document.body.appendChild(errorMsg);
+        setTimeout(() => errorMsg.remove(), 5000);
+      }
+    };
+
+    // Hook into Swagger UI's authorization flow
+    // Watch for the authorization modal to appear and intercept the authorize button
+    const setupAuthModalHandler = () => {
+      // Watch for authorization modal
+      const observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+          mutation.addedNodes.forEach((node) => {
+            if (node.nodeType === Node.ELEMENT_NODE) {
+              const element = node as Element;
+              
+              // Check if this is the auth modal
+              if (element.classList?.contains('auth-container') || element.querySelector?.('.auth-container')) {
+                const modal = element.classList?.contains('auth-container') ? element : element.querySelector('.auth-container');
+                
+                if (modal) {
+                  // Find the authorize/done button in the modal
+                  const authorizeBtn = modal.querySelector('.auth-btn-wrapper .btn-done, .auth-btn-wrapper button, button.btn-done');
+                  
+                  if (authorizeBtn && !(authorizeBtn as any).__nip07HandlerAdded) {
+                    // Mark as handled
+                    (authorizeBtn as any).__nip07HandlerAdded = true;
+                    
+                    // Add click handler
+                    authorizeBtn.addEventListener('click', async (e: Event) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      
+                      // Call our authorization handler
+                      await handleAuthorize();
+                    }, { capture: true });
+                  }
+                }
+              }
+            }
+          });
+        });
+      });
+      
+      // Observe the entire document for changes
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true
+      });
+      
+      // Also check immediately
+      const modal = document.querySelector('.auth-container');
+      if (modal) {
+        const authorizeBtn = modal.querySelector('.auth-btn-wrapper .btn-done, .auth-btn-wrapper button, button.btn-done');
+        if (authorizeBtn && !(authorizeBtn as any).__nip07HandlerAdded) {
+          (authorizeBtn as any).__nip07HandlerAdded = true;
+          authorizeBtn.addEventListener('click', async (e: Event) => {
+            e.preventDefault();
+            e.stopPropagation();
+            await handleAuthorize();
+          }, { capture: true });
+        }
+      }
+      
+      return observer;
+    };
+    
+    // Set up the handler and return observer for cleanup
+    return setupAuthModalHandler();
+  }
 </script>
 
 <div class="api-docs-container">
@@ -700,6 +870,15 @@ const response = await fetch('https://gitrepublic.com/api/repos/list', {
     background: transparent !important;
     padding: 0;
   }
+
+  /* Response body code blocks */
+  :global(.swagger-ui .response pre),
+  :global(.swagger-ui .response-body pre),
+  :global(.swagger-ui .response-content-type + div pre) {
+    color: var(--text-primary) !important;
+  }
+
+  /* Response body code blocks - styles moved to app.css for better priority and to ensure they apply */
 
   /* Model definitions */
   :global(.swagger-ui .model-container),
