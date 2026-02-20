@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { settingsStore } from '../services/settings-store.js';
+  import { userStore } from '../stores/user-store.js';
+  import { fetchUserEmail, fetchUserName, fetchUserProfile, extractProfileData, getUserName, getUserEmail } from '../utils/user-profile.js';
+  import { DEFAULT_NOSTR_RELAYS } from '../config.js';
 
   interface Props {
     isOpen: boolean;
@@ -15,14 +18,15 @@
   let theme = $state<'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black'>('gitrepublic-dark');
   let loading = $state(true);
   let saving = $state(false);
+  let loadingPresets = $state(false);
 
-  // Get default git user name and email (from git config if available)
-  let defaultUserName = $state('');
-  let defaultUserEmail = $state('');
+  // Preset values that will be used if user doesn't override
+  let presetUserName = $state('');
+  let presetUserEmail = $state('');
 
   onMount(async () => {
     await loadSettings();
-    await loadGitDefaults();
+    await loadPresets();
   });
 
   async function loadSettings() {
@@ -40,21 +44,53 @@
     }
   }
 
-  async function loadGitDefaults() {
-    // Try to get git config defaults from the server
-    // This would require a new API endpoint, but for now we'll just use empty strings
-    // The user can manually enter their git config values
-    defaultUserName = '';
-    defaultUserEmail = '';
+  async function loadPresets() {
+    // Get user's pubkey from store
+    const currentUser = $userStore;
+    if (!currentUser.userPubkeyHex) {
+      // User not logged in, no presets available
+      presetUserName = '';
+      presetUserEmail = '';
+      return;
+    }
+
+    loadingPresets = true;
+    try {
+      // Fetch profile from kind 0 event (cache or relays)
+      const profileEvent = await fetchUserProfile(currentUser.userPubkeyHex, DEFAULT_NOSTR_RELAYS);
+      const profile = extractProfileData(profileEvent);
+      
+      // Get preset values using the same fallback logic as the commit functions
+      presetUserName = getUserName(profile, currentUser.userPubkeyHex, currentUser.userPubkey || undefined);
+      presetUserEmail = getUserEmail(profile, currentUser.userPubkeyHex, currentUser.userPubkey || undefined);
+    } catch (err) {
+      console.warn('Failed to load presets from profile:', err);
+      // Fallback to shortened npub values
+      if (currentUser.userPubkey) {
+        presetUserName = currentUser.userPubkey.substring(0, 20);
+        presetUserEmail = `${currentUser.userPubkey.substring(0, 20)}@gitrepublic.web`;
+      } else if (currentUser.userPubkeyHex) {
+        const { nip19 } = await import('nostr-tools');
+        const npub = nip19.npubEncode(currentUser.userPubkeyHex);
+        presetUserName = npub.substring(0, 20);
+        presetUserEmail = `${npub.substring(0, 20)}@gitrepublic.web`;
+      } else {
+        presetUserName = '';
+        presetUserEmail = '';
+      }
+    } finally {
+      loadingPresets = false;
+    }
   }
 
   async function saveSettings() {
     saving = true;
     try {
+      // Save empty string if user wants to use presets, otherwise save the custom value
       await settingsStore.updateSettings({
         autoSave,
-        userName: userName.trim(),
-        userEmail: userEmail.trim(),
+        userName: userName.trim() || '', // Empty string means use preset
+        userEmail: userEmail.trim() || '', // Empty string means use preset
         theme
       });
 
@@ -96,12 +132,19 @@
   $effect(() => {
     if (isOpen) {
       loadSettings();
+      loadPresets();
     }
   });
 </script>
 
 {#if isOpen}
-  <div class="modal-overlay" onclick={(e) => e.target === e.currentTarget && onClose()}>
+  <div 
+    class="modal-overlay" 
+    role="button"
+    tabindex="0"
+    onclick={(e) => e.target === e.currentTarget && onClose()}
+    onkeydown={(e) => e.key === 'Escape' && onClose()}
+  >
     <div class="modal-content">
       <div class="modal-header">
         <h2>Settings</h2>
@@ -144,14 +187,20 @@
               type="text"
               id="user-name"
               bind:value={userName}
-              placeholder={defaultUserName || 'Enter your git user.name'}
+              placeholder={presetUserName || 'Enter your git user.name'}
               class="setting-input"
             />
-            {#if defaultUserName}
-              <p class="setting-hint">Default: {defaultUserName}</p>
+            {#if presetUserName}
+              <p class="setting-hint">
+                {#if userName.trim()}
+                  Custom value saved. Default would be: {presetUserName}
+                {:else}
+                  Will use: <strong>{presetUserName}</strong> (from your Nostr profile: display_name → name → shortened npub)
+                {/if}
+              </p>
             {/if}
             <p class="setting-description">
-              Your name as it will appear in git commits.
+              Your name as it will appear in git commits. Leave empty to use the preset value from your Nostr profile.
             </p>
           </div>
 
@@ -164,22 +213,28 @@
               type="email"
               id="user-email"
               bind:value={userEmail}
-              placeholder={defaultUserEmail || 'Enter your git user.email'}
+              placeholder={presetUserEmail || 'Enter your git user.email'}
               class="setting-input"
             />
-            {#if defaultUserEmail}
-              <p class="setting-hint">Default: {defaultUserEmail}</p>
+            {#if presetUserEmail}
+              <p class="setting-hint">
+                {#if userEmail.trim()}
+                  Custom value saved. Default would be: {presetUserEmail}
+                {:else}
+                  Will use: <strong>{presetUserEmail}</strong> (from your Nostr profile: NIP-05 → shortenednpub@gitrepublic.web)
+                {/if}
+              </p>
             {/if}
             <p class="setting-description">
-              Your email as it will appear in git commits.
+              Your email as it will appear in git commits. Leave empty to use the preset value from your Nostr profile.
             </p>
           </div>
 
           <!-- Theme Selector -->
           <div class="setting-group">
-            <label class="setting-label">
+            <div class="setting-label">
               <span class="label-text">Theme</span>
-            </label>
+            </div>
             <div class="theme-options">
               <button
                 class="theme-option"

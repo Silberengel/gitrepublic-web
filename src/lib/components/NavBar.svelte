@@ -3,7 +3,6 @@
   import { goto } from '$app/navigation';
   import { getPublicKeyWithNIP07, isNIP07Available } from '../services/nostr/nip07-signer.js';
   import { nip19 } from 'nostr-tools';
-  import ThemeToggle from './ThemeToggle.svelte';
   import SettingsButton from './SettingsButton.svelte';
   import UserBadge from './UserBadge.svelte';
   import { onMount } from 'svelte';
@@ -229,7 +228,6 @@
     </nav>
     <div class="auth-section">
       <SettingsButton />
-      <ThemeToggle />
       {#if userPubkey}
         {@const userNpub = (() => {
           try {
