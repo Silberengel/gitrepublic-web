@@ -5,7 +5,17 @@
 
 import type { NostrEvent, NostrFilter } from '../../types/nostr.js';
 import { KIND } from '../../types/nostr.js';
-import logger from '../logger.js';
+// Lazy import logger to avoid initialization order issues
+import type { Logger } from '../../types/logger.js';
+
+let loggerCache: Logger | null = null;
+const getLogger = async (): Promise<Logger> => {
+  if (!loggerCache) {
+    const loggerModule = await import('../logger.js');
+    loggerCache = loggerModule.default;
+  }
+  return loggerCache;
+};
 
 interface CacheEntry {
   events: NostrEvent[];
@@ -252,7 +262,11 @@ export class EventCache {
     }
     
     if (cleaned > 0) {
-      logger.debug({ cleaned, remaining: this.cache.size }, 'Event cache cleanup');
+      getLogger().then(logger => {
+        logger.debug({ cleaned, remaining: this.cache.size }, 'Event cache cleanup');
+      }).catch(() => {
+        // Ignore logger errors
+      });
     }
   }
 
@@ -271,7 +285,11 @@ export class EventCache {
       this.cache.delete(entries[i].key);
     }
     
-    logger.debug({ removed: toRemove, remaining: this.cache.size }, 'Event cache eviction');
+    getLogger().then(logger => {
+      logger.debug({ removed: toRemove, remaining: this.cache.size }, 'Event cache eviction');
+    }).catch(() => {
+      // Ignore logger errors
+    });
   }
 
   /**
@@ -363,7 +381,11 @@ export class EventCache {
     }
 
     if (removedCount > 0) {
-      logger.debug({ removedCount, deletedEventIds: deletedEventIds.size, deletedAddresses: deletedAddresses.size }, 'Processed deletion events and removed from in-memory cache');
+      getLogger().then(logger => {
+        logger.debug({ removedCount, deletedEventIds: deletedEventIds.size, deletedAddresses: deletedAddresses.size }, 'Processed deletion events and removed from in-memory cache');
+      }).catch(() => {
+        // Ignore logger errors
+      });
     }
   }
 }

@@ -12,8 +12,9 @@
 
 import type { NostrEvent, NostrFilter } from '../../types/nostr.js';
 import { KIND } from '../../types/nostr.js';
-import logger from '../logger.js';
 import type { NostrClient } from './nostr-client.js';
+// Import logger normally - the singleton is created lazily in the class constructor
+import logger from '../logger.js';
 
 const DB_NAME = 'gitrepublic_events';
 const DB_VERSION = 1;
@@ -21,7 +22,7 @@ const STORE_EVENTS = 'events';
 const STORE_FILTERS = 'filters';
 const STORE_PROFILES = 'profiles'; // Optimized storage for kind 0 events
 
-// Replaceable event kinds (only latest per pubkey matters)
+// Replaceable event kinds (only latest per pubkey matters)s
 const REPLACEABLE_KINDS = [0, 3, 10002]; // Profile, Contacts, Relay List
 
 /**
