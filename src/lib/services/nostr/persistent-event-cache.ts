@@ -24,6 +24,32 @@ const STORE_PROFILES = 'profiles'; // Optimized storage for kind 0 events
 // Replaceable event kinds (only latest per pubkey matters)
 const REPLACEABLE_KINDS = [0, 3, 10002]; // Profile, Contacts, Relay List
 
+/**
+ * Check if an event is a parameterized replaceable event (NIP-33)
+ * Parameterized replaceable events have kind >= 10000 && kind < 20000 and a 'd' tag
+ */
+function isParameterizedReplaceable(event: NostrEvent): boolean {
+  return event.kind >= 10000 && event.kind < 20000 && 
+         event.tags.some(t => t[0] === 'd' && t[1]);
+}
+
+/**
+ * Get the deduplication key for an event
+ * For replaceable events: kind:pubkey
+ * For parameterized replaceable events: kind:pubkey:d-tag
+ * For regular events: event.id
+ */
+function getDeduplicationKey(event: NostrEvent): string {
+  if (REPLACEABLE_KINDS.includes(event.kind)) {
+    return `${event.kind}:${event.pubkey}`;
+  }
+  if (isParameterizedReplaceable(event)) {
+    const dTag = event.tags.find(t => t[0] === 'd')?.[1] || '';
+    return `${event.kind}:${event.pubkey}:${dTag}`;
+  }
+  return event.id;
+}
+
 interface CachedEvent {
   event: NostrEvent;
   cachedAt: number;
@@ -279,22 +305,18 @@ export class PersistentEventCache {
         }
       }
 
-      // For replaceable events, ensure we only return the latest per pubkey
-      const replaceableEvents = new Map<string, NostrEvent>();
-      const regularEvents: NostrEvent[] = [];
+      // For replaceable and parameterized replaceable events, ensure we only return the latest per deduplication key
+      const deduplicatedEvents = new Map<string, NostrEvent>(); // deduplication key -> latest event
 
       for (const event of events) {
-        if (REPLACEABLE_KINDS.includes(event.kind)) {
-          const existing = replaceableEvents.get(event.pubkey);
-          if (!existing || event.created_at > existing.created_at) {
-            replaceableEvents.set(event.pubkey, event);
-          }
-        } else {
-          regularEvents.push(event);
+        const key = getDeduplicationKey(event);
+        const existing = deduplicatedEvents.get(key);
+        if (!existing || event.created_at > existing.created_at) {
+          deduplicatedEvents.set(key, event);
         }
       }
 
-      const result = [...Array.from(replaceableEvents.values()), ...regularEvents];
+      const result = Array.from(deduplicatedEvents.values());
       
       // Sort by created_at descending
       result.sort((a, b) => b.created_at - a.created_at);
@@ -501,25 +523,81 @@ export class PersistentEventCache {
       const profileStore = transaction.objectStore(STORE_PROFILES);
       const filterStore = transaction.objectStore(STORE_FILTERS);
 
-      const newEventIds: string[] = [];
+      let newEventIds: string[] = [];
+      const eventsToDelete = new Set<string>();
 
-      // Process all events in the transaction
+      // Group events by deduplication key to find the newest per key
+      const eventsByKey = new Map<string, NostrEvent>();
       for (const event of events) {
-        // For replaceable events, check if we have a newer version for this pubkey
-        if (REPLACEABLE_KINDS.includes(event.kind)) {
-          // Check if we already have a newer replaceable event for this pubkey
-          // Use the same transaction instead of calling getProfile (which creates a new transaction)
-          const existingProfile = await new Promise<CachedEvent | undefined>((resolve) => {
-            const req = profileStore.get(event.pubkey);
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => resolve(undefined);
-          });
+        const key = getDeduplicationKey(event);
+        const existing = eventsByKey.get(key);
+        if (!existing || event.created_at > existing.created_at) {
+          if (existing) {
+            eventsToDelete.add(existing.id); // Mark older version for deletion
+          }
+          eventsByKey.set(key, event);
+        } else {
+          eventsToDelete.add(event.id); // This one is older
+        }
+      }
+
+      // Check existing events in cache for same deduplication keys and mark older ones for deletion
+      for (const eventId of existingEventIds) {
+        const existingEventRequest = eventStore.get(eventId);
+        const existingCached = await new Promise<CachedEvent | undefined>((resolve) => {
+          existingEventRequest.onsuccess = () => resolve(existingEventRequest.result);
+          existingEventRequest.onerror = () => resolve(undefined);
+        });
+        
+        if (existingCached) {
+          const existingEvent = existingCached.event;
+          const key = getDeduplicationKey(existingEvent);
+          const newEvent = eventsByKey.get(key);
           
-          if (existingProfile && existingProfile.event.kind === event.kind && existingProfile.event.created_at >= event.created_at) {
-            // Existing event is newer or same, skip
-            if (existingEventIds.has(existingProfile.event.id)) {
-              newEventIds.push(existingProfile.event.id);
+          // If we have a newer event with the same key, mark the old one for deletion
+          if (newEvent && newEvent.id !== existingEvent.id && newEvent.created_at > existingEvent.created_at) {
+            eventsToDelete.add(existingEvent.id);
+          }
+        }
+      }
+
+      // Process all events in the transaction (only the newest per deduplication key)
+      for (const event of Array.from(eventsByKey.values())) {
+        const key = getDeduplicationKey(event);
+        
+        // For replaceable events (kind 0, 3, 10002), check profile store (only kind 0 uses it, but check all)
+        if (REPLACEABLE_KINDS.includes(event.kind)) {
+          // For kind 0, check profile store
+          if (event.kind === 0) {
+            const existingProfile = await new Promise<CachedEvent | undefined>((resolve) => {
+              const req = profileStore.get(event.pubkey);
+              req.onsuccess = () => resolve(req.result);
+              req.onerror = () => resolve(undefined);
+            });
+            
+            if (existingProfile && existingProfile.event.kind === event.kind && existingProfile.event.created_at >= event.created_at) {
+              // Existing event is newer or same, skip
+              if (existingEventIds.has(existingProfile.event.id)) {
+                newEventIds.push(existingProfile.event.id);
+              }
+              // Mark this one for deletion if it's different
+              if (existingProfile.event.id !== event.id) {
+                eventsToDelete.add(event.id);
+              }
+              continue;
             }
+          } else {
+            // For kind 3 and 10002, check if we already have a newer one in events store
+            // We already checked above, so just continue if it's already in existingEventIds
+            if (existingEventIds.has(event.id)) {
+              newEventIds.push(event.id);
+              continue;
+            }
+          }
+        } else if (isParameterizedReplaceable(event)) {
+          // For parameterized replaceable events, check if we already have this event
+          if (existingEventIds.has(event.id)) {
+            newEventIds.push(event.id);
             continue;
           }
         } else {
@@ -604,8 +682,42 @@ export class PersistentEventCache {
         }
       }
 
-      // Merge with existing event IDs (don't delete valid events)
-      const mergedEventIds = Array.from(new Set([...existingEntry?.eventIds || [], ...newEventIds]));
+      // Delete older events that have been superseded
+      for (const eventId of eventsToDelete) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const req = eventStore.delete(eventId);
+            req.onsuccess = () => resolve();
+            req.onerror = () => reject(req.error);
+          });
+          // Remove from existing event IDs if present
+          existingEventIds.delete(eventId);
+          newEventIds = newEventIds.filter(id => id !== eventId);
+          
+          // Also remove from profile store if it's a kind 0 event
+          const deleteProfileRequest = profileStore.openCursor();
+          await new Promise<void>((resolve) => {
+            deleteProfileRequest.onsuccess = (event) => {
+              const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
+              if (cursor) {
+                const cached = cursor.value as CachedEvent;
+                if (cached.event.id === eventId) {
+                  cursor.delete();
+                }
+                cursor.continue();
+              } else {
+                resolve();
+              }
+            };
+            deleteProfileRequest.onerror = () => resolve();
+          });
+        } catch (error) {
+          logger.debug({ error, eventId }, 'Failed to delete old event from cache');
+        }
+      }
+
+      // Merge with existing event IDs (excluding deleted ones)
+      const mergedEventIds = Array.from(new Set([...existingEntry?.eventIds.filter(id => !eventsToDelete.has(id)) || [], ...newEventIds]));
 
       // Update filter cache entry (using same transaction)
       const filterEntry: FilterCacheEntry = {
@@ -1260,6 +1372,59 @@ export class PersistentEventCache {
     } catch (error) {
       logger.error({ error, userPubkeys: userPubkeys.length }, 'Error fetching and processing deletion events');
       throw error;
+    }
+  }
+
+  /**
+   * Delete a single event from the cache by event ID
+   */
+  async deleteEvent(eventId: string): Promise<void> {
+    await this.init();
+    
+    if (!this.db) {
+      return;
+    }
+
+    try {
+      const transaction = this.db.transaction([STORE_EVENTS, STORE_FILTERS], 'readwrite');
+      const eventStore = transaction.objectStore(STORE_EVENTS);
+      const filterStore = transaction.objectStore(STORE_FILTERS);
+
+      // Delete from events store
+      await new Promise<void>((resolve, reject) => {
+        const req = eventStore.delete(eventId);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+
+      // Remove from all filter entries that reference this event
+      const filterCursor = filterStore.openCursor();
+      await new Promise<void>((resolve, reject) => {
+        filterCursor.onsuccess = (evt) => {
+          const cursor = (evt.target as IDBRequest<IDBCursorWithValue>).result;
+          if (cursor) {
+            const filterEntry = cursor.value;
+            if (filterEntry.eventIds && filterEntry.eventIds.includes(eventId)) {
+              filterEntry.eventIds = filterEntry.eventIds.filter((id: string) => id !== eventId);
+              cursor.update(filterEntry);
+            }
+            cursor.continue();
+          } else {
+            resolve();
+          }
+        };
+        filterCursor.onerror = () => reject(filterCursor.error);
+      });
+
+      // Also remove from memory cache
+      for (const [filterKey, cacheEntry] of this.memoryCache.entries()) {
+        const index = cacheEntry.events.findIndex(e => e.id === eventId);
+        if (index !== -1) {
+          cacheEntry.events.splice(index, 1);
+        }
+      }
+    } catch (error) {
+      logger.debug({ error, eventId }, 'Error deleting event from cache');
     }
   }
 }

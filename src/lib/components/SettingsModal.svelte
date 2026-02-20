@@ -16,6 +16,7 @@
   let userName = $state('');
   let userEmail = $state('');
   let theme = $state<'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black'>('gitrepublic-dark');
+  let defaultBranch = $state('master');
   let loading = $state(true);
   let saving = $state(false);
   let loadingPresets = $state(false);
@@ -37,6 +38,7 @@
       userName = settings.userName;
       userEmail = settings.userEmail;
       theme = settings.theme;
+      defaultBranch = settings.defaultBranch;
     } catch (err) {
       console.error('Failed to load settings:', err);
     } finally {
@@ -91,7 +93,8 @@
         autoSave,
         userName: userName.trim() || '', // Empty string means use preset
         userEmail: userEmail.trim() || '', // Empty string means use preset
-        theme
+        theme,
+        defaultBranch: defaultBranch.trim() || 'master'
       });
 
       // Apply theme immediately
@@ -227,6 +230,23 @@
             {/if}
             <p class="setting-description">
               Your email as it will appear in git commits. Leave empty to use the preset value from your Nostr profile.
+            </p>
+          </div>
+
+          <!-- Default Branch -->
+          <div class="setting-group">
+            <label class="setting-label" for="default-branch">
+              <span class="label-text">Default Branch Name</span>
+            </label>
+            <input
+              type="text"
+              id="default-branch"
+              bind:value={defaultBranch}
+              placeholder="master"
+              class="setting-input"
+            />
+            <p class="setting-description">
+              Default branch name to use when creating new repositories. This will be used as the base branch when creating the first branch in a new repo.
             </p>
           </div>
 

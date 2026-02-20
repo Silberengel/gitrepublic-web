@@ -140,7 +140,18 @@ export const POST: RequestHandler = createRepoPostHandler(
     }
 
     // Get default branch if fromBranch not provided
-    const sourceBranch = fromBranch || await fileManager.getDefaultBranch(context.npub, context.repo);
+    // If repo has no branches, use 'master' as default
+    let sourceBranch = fromBranch;
+    if (!sourceBranch) {
+      try {
+        sourceBranch = await fileManager.getDefaultBranch(context.npub, context.repo);
+      } catch (err) {
+        // If getDefaultBranch fails (e.g., no branches exist), use 'master' as default
+        logger.debug({ error: err, npub: context.npub, repo: context.repo }, 'No default branch found, using master');
+        sourceBranch = 'master';
+      }
+    }
+    
     await fileManager.createBranch(context.npub, context.repo, branchName, sourceBranch);
     return json({ success: true, message: 'Branch created successfully' });
   },

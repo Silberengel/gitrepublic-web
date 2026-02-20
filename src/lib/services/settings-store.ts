@@ -14,13 +14,15 @@ interface Settings {
   userName: string;
   userEmail: string;
   theme: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black';
+  defaultBranch: string;
 }
 
 const DEFAULT_SETTINGS: Settings = {
   autoSave: false,
   userName: '',
   userEmail: '',
-  theme: 'gitrepublic-dark'
+  theme: 'gitrepublic-dark',
+  defaultBranch: 'master'
 };
 
 export class SettingsStore {

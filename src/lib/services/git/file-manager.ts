@@ -1068,19 +1068,65 @@ export class FileManager {
     }
 
     try {
-      // Use git worktree instead of cloning (much more efficient)
-      const workDir = await this.getWorktree(repoPath, fromBranch, npub, repoName);
-      const workGit: SimpleGit = simpleGit(workDir);
+      const git: SimpleGit = simpleGit(repoPath);
+      
+      // Check if repo has any branches
+      let hasBranches = false;
+      try {
+        const branches = await git.branch(['-a']);
+        const branchList = branches.all
+          .map(b => b.replace(/^remotes\/origin\//, '').replace(/^remotes\//, ''))
+          .filter(b => !b.includes('HEAD') && !b.startsWith('*'));
+        hasBranches = branchList.length > 0;
+      } catch {
+        // If branch listing fails, assume no branches exist
+        hasBranches = false;
+      }
 
-      // Create and checkout new branch
-      await workGit.checkout(['-b', branchName]);
+      // If no branches exist, create an orphan branch (branch with no parent)
+      if (!hasBranches) {
+        // Create worktree for the new branch directly (orphan branch)
+        const worktreeRoot = join(this.repoRoot, npub, `${repoName}.worktrees`);
+        const worktreePath = resolve(join(worktreeRoot, branchName));
+        const { mkdir, rm } = await import('fs/promises');
+        
+        if (!existsSync(worktreeRoot)) {
+          await mkdir(worktreeRoot, { recursive: true });
+        }
+        
+        // Remove existing worktree if it exists
+        if (existsSync(worktreePath)) {
+          try {
+            await git.raw(['worktree', 'remove', worktreePath, '--force']);
+          } catch {
+            await rm(worktreePath, { recursive: true, force: true });
+          }
+        }
+        
+        // Create worktree with orphan branch
+        await git.raw(['worktree', 'add', worktreePath, '--orphan', branchName]);
+        
+        // Set the default branch to the new branch in the bare repo
+        await git.raw(['symbolic-ref', 'HEAD', `refs/heads/${branchName}`]);
+        
+        // Clean up worktree
+        await this.removeWorktree(repoPath, worktreePath);
+      } else {
+        // Repo has branches - use normal branch creation
+        // Use git worktree instead of cloning (much more efficient)
+        const workDir = await this.getWorktree(repoPath, fromBranch, npub, repoName);
+        const workGit: SimpleGit = simpleGit(workDir);
 
-      // Note: No push needed - worktrees of bare repos share the same object database,
-      // so the branch is already in the bare repository. We don't push to remote origin
-      // to avoid requiring remote authentication and to keep changes local-only.
+        // Create and checkout new branch
+        await workGit.checkout(['-b', branchName]);
 
-      // Clean up worktree
-      await this.removeWorktree(repoPath, workDir);
+        // Note: No push needed - worktrees of bare repos share the same object database,
+        // so the branch is already in the bare repository. We don't push to remote origin
+        // to avoid requiring remote authentication and to keep changes local-only.
+
+        // Clean up worktree
+        await this.removeWorktree(repoPath, workDir);
+      }
     } catch (error) {
       logger.error({ error, repoPath, branchName, npub }, 'Error creating branch');
       throw new Error(`Failed to create branch: ${error instanceof Error ? error.message : String(error)}`);

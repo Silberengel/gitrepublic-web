@@ -30,7 +30,56 @@
           }
         });
         
-        content = md.render(docContent);
+        let rendered = md.render(docContent);
+        
+        // Add IDs to headings for anchor links
+        rendered = rendered.replace(/<h([1-6])>(.*?)<\/h[1-6]>/g, (match, level, text) => {
+          // Extract text content (remove any HTML tags)
+          const textContent = text.replace(/<[^>]*>/g, '').trim();
+          // Create slug from text
+          const slug = textContent
+            .toLowerCase()
+            .replace(/[^\w\s-]/g, '') // Remove special characters
+            .replace(/\s+/g, '-') // Replace spaces with hyphens
+            .replace(/-+/g, '-') // Replace multiple hyphens with single
+            .replace(/^-|-$/g, ''); // Remove leading/trailing hyphens
+          
+          return `<h${level} id="${slug}">${text}</h${level}>`;
+        });
+        
+        content = rendered;
+        
+        // Handle anchor links after content is rendered
+        setTimeout(() => {
+          // Handle initial hash in URL
+          if (window.location.hash) {
+            const id = window.location.hash.substring(1);
+            const element = document.getElementById(id);
+            if (element) {
+              element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+          }
+          
+          // Handle clicks on anchor links
+          const markdownContent = document.querySelector('.markdown-content');
+          if (markdownContent) {
+            markdownContent.addEventListener('click', (e) => {
+              const target = e.target as HTMLElement;
+              if (target.tagName === 'A' && target.getAttribute('href')?.startsWith('#')) {
+                const id = target.getAttribute('href')?.substring(1);
+                if (id) {
+                  const element = document.getElementById(id);
+                  if (element) {
+                    e.preventDefault();
+                    element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    // Update URL without scrolling
+                    window.history.pushState(null, '', `#${id}`);
+                  }
+                }
+              }
+            });
+          }
+        }, 100);
       } else {
         error = $page.data.error || 'Failed to load NIP-34 documentation';
       }
@@ -87,6 +136,7 @@
     border-bottom: 2px solid var(--border-color);
     padding-bottom: 0.5rem;
     color: var(--text-primary);
+    scroll-margin-top: 1rem;
   }
 
   :global(.markdown-content h2) {
@@ -94,6 +144,7 @@
     margin-top: 1.5rem;
     margin-bottom: 0.75rem;
     color: var(--text-primary);
+    scroll-margin-top: 1rem;
   }
 
   :global(.markdown-content h3) {
@@ -101,6 +152,24 @@
     margin-top: 1.25rem;
     margin-bottom: 0.5rem;
     color: var(--text-primary);
+    scroll-margin-top: 1rem;
+  }
+
+  :global(.markdown-content h4) {
+    scroll-margin-top: 1rem;
+  }
+
+  :global(.markdown-content h5) {
+    scroll-margin-top: 1rem;
+  }
+
+  :global(.markdown-content h6) {
+    scroll-margin-top: 1rem;
+  }
+
+  /* Smooth scrolling for anchor links */
+  :global(.markdown-content) {
+    scroll-behavior: smooth;
   }
 
   :global(.markdown-content code) {

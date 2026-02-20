@@ -193,6 +193,7 @@
   let showCreateBranchDialog = $state(false);
   let newBranchName = $state('');
   let newBranchFrom = $state<string | null>(null);
+  let defaultBranchName = $state('master'); // Default branch from settings
 
   // Commit history
   let commits = $state<Array<{ hash: string; message: string; author: string; date: string; files: string[] }>>([]);
@@ -2709,6 +2710,13 @@
     error = null;
 
     try {
+      // If no branches exist, use default branch from settings
+      let fromBranch = newBranchFrom || currentBranch;
+      if (!fromBranch && branches.length === 0) {
+        const settings = await settingsStore.getSettings();
+        fromBranch = settings.defaultBranch || 'master';
+      }
+
       const response = await fetch(`/api/repos/${npub}/${repo}/branches`, {
         method: 'POST',
         headers: {
@@ -2717,7 +2725,7 @@
         },
         body: JSON.stringify({
           branchName: newBranchName,
-          fromBranch: newBranchFrom || currentBranch
+          fromBranch: fromBranch || 'master' // Final fallback
         })
       });
 
@@ -3237,8 +3245,15 @@
                         {/if}
                         {#if isMaintainer}
                           <button 
-                            onclick={() => {
+                            onclick={async () => {
                               if (!userPubkey || !isMaintainer || needsClone) return;
+                              // Load default branch from settings
+                              try {
+                                const settings = await settingsStore.getSettings();
+                                defaultBranchName = settings.defaultBranch || 'master';
+                              } catch {
+                                defaultBranchName = 'master';
+                              }
                               showCreateBranchDialog = true;
                               showRepoMenu = false;
                             }} 
@@ -4285,10 +4300,14 @@
         <label>
           From Branch:
           <select bind:value={newBranchFrom}>
-            {#each branches as branch}
-              {@const branchName = typeof branch === 'string' ? branch : (branch as { name: string }).name}
-              <option value={branchName}>{branchName}</option>
-            {/each}
+            {#if branches.length === 0}
+              <option value={null}>No branches - will create initial branch ({defaultBranchName})</option>
+            {:else}
+              {#each branches as branch}
+                {@const branchName = typeof branch === 'string' ? branch : (branch as { name: string }).name}
+                <option value={branchName}>{branchName}</option>
+              {/each}
+            {/if}
           </select>
         </label>
         <div class="modal-actions">

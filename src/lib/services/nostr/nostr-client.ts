@@ -12,6 +12,32 @@ import { KIND } from '../../types/nostr.js';
 // Replaceable event kinds (only latest per pubkey matters)
 const REPLACEABLE_KINDS = [0, 3, 10002]; // Profile, Contacts, Relay List
 
+/**
+ * Check if an event is a parameterized replaceable event (NIP-33)
+ * Parameterized replaceable events have kind >= 10000 && kind < 20000 and a 'd' tag
+ */
+function isParameterizedReplaceable(event: NostrEvent): boolean {
+  return event.kind >= 10000 && event.kind < 20000 && 
+         event.tags.some(t => t[0] === 'd' && t[1]);
+}
+
+/**
+ * Get the deduplication key for an event
+ * For replaceable events: kind:pubkey
+ * For parameterized replaceable events: kind:pubkey:d-tag
+ * For regular events: event.id
+ */
+function getDeduplicationKey(event: NostrEvent): string {
+  if (REPLACEABLE_KINDS.includes(event.kind)) {
+    return `${event.kind}:${event.pubkey}`;
+  }
+  if (isParameterizedReplaceable(event)) {
+    const dTag = event.tags.find(t => t[0] === 'd')?.[1] || '';
+    return `${event.kind}:${event.pubkey}:${dTag}`;
+  }
+  return event.id;
+}
+
 // Lazy load persistent cache (only in browser)
 let persistentEventCache: typeof import('./persistent-event-cache.js').persistentEventCache | null = null;
 async function getPersistentCache() {
@@ -146,13 +172,196 @@ async function createWebSocketWithTor(url: string): Promise<WebSocket> {
   }
 }
 
+// Connection pool for WebSocket connections
+interface RelayConnection {
+  ws: WebSocket;
+  lastUsed: number;
+  pendingRequests: number;
+  reconnectAttempts: number;
+  messageHandlers: Map<string, (message: any) => void>; // subscription ID -> handler
+  nextSubscriptionId: number;
+}
+
 export class NostrClient {
   private relays: string[] = [];
   private authenticatedRelays: Set<string> = new Set();
   private processingDeletions: boolean = false; // Guard to prevent recursive deletion processing
+  private connectionPool: Map<string, RelayConnection> = new Map();
+  private readonly CONNECTION_TIMEOUT = 30000; // Close idle connections after 30 seconds
+  private readonly MAX_RECONNECT_ATTEMPTS = 3;
+  private readonly RECONNECT_DELAY = 2000; // 2 seconds between reconnect attempts
+  private connectionAttempts: Map<string, { count: number; lastAttempt: number }> = new Map();
+  private readonly MAX_CONCURRENT_CONNECTIONS = 3; // Max concurrent connections per relay
+  private readonly CONNECTION_BACKOFF_BASE = 1000; // Base backoff in ms
 
   constructor(relays: string[]) {
     this.relays = relays;
+    // Clean up idle connections periodically
+    if (typeof window !== 'undefined') {
+      setInterval(() => this.cleanupIdleConnections(), 10000); // Check every 10 seconds
+    }
+  }
+
+  /**
+   * Clean up idle connections that haven't been used recently
+   */
+  private cleanupIdleConnections(): void {
+    const now = Date.now();
+    for (const [relay, conn] of this.connectionPool.entries()) {
+      // Close connections that are idle and have no pending requests
+      if (conn.pendingRequests === 0 && 
+          now - conn.lastUsed > this.CONNECTION_TIMEOUT &&
+          (conn.ws.readyState === WebSocket.OPEN || conn.ws.readyState === WebSocket.CLOSED)) {
+        try {
+          if (conn.ws.readyState === WebSocket.OPEN) {
+            conn.ws.close();
+          }
+        } catch {
+          // Ignore errors
+        }
+        this.connectionPool.delete(relay);
+      }
+    }
+  }
+
+  /**
+   * Get or create a WebSocket connection to a relay
+   */
+  private async getConnection(relay: string): Promise<WebSocket | null> {
+    const existing = this.connectionPool.get(relay);
+    
+    // Reuse existing connection if it's open
+    if (existing && existing.ws.readyState === WebSocket.OPEN) {
+      existing.lastUsed = Date.now();
+      existing.pendingRequests++;
+      return existing.ws;
+    }
+    
+    // Check connection attempt throttling
+    const attemptInfo = this.connectionAttempts.get(relay) || { count: 0, lastAttempt: 0 };
+    const now = Date.now();
+    const timeSinceLastAttempt = now - attemptInfo.lastAttempt;
+    
+    // If we've had too many recent failures, apply exponential backoff
+    if (attemptInfo.count > 0) {
+      const backoffTime = this.CONNECTION_BACKOFF_BASE * Math.pow(2, Math.min(attemptInfo.count - 1, 5));
+      if (timeSinceLastAttempt < backoffTime) {
+        logger.debug({ relay, backoffTime, timeSinceLastAttempt }, 'Throttling connection attempt');
+        return null; // Don't attempt connection yet
+      }
+    }
+    
+    // Check if we have too many concurrent connections to this relay
+    const openConnections = Array.from(this.connectionPool.values())
+      .filter(c => c.ws === existing?.ws || (c.ws.readyState === WebSocket.OPEN || c.ws.readyState === WebSocket.CONNECTING))
+      .length;
+    
+    if (openConnections >= this.MAX_CONCURRENT_CONNECTIONS) {
+      logger.debug({ relay, openConnections }, 'Too many concurrent connections, skipping');
+      return null;
+    }
+    
+    // Remove dead connection
+    if (existing) {
+      this.connectionPool.delete(relay);
+      try {
+        if (existing.ws.readyState !== WebSocket.CLOSED) {
+          existing.ws.close();
+        }
+      } catch {
+        // Ignore errors
+      }
+    }
+
+    // Update attempt tracking
+    this.connectionAttempts.set(relay, { count: attemptInfo.count + 1, lastAttempt: now });
+
+    // Create new connection
+    try {
+      const ws = await createWebSocketWithTor(relay);
+      const conn: RelayConnection = {
+        ws,
+        lastUsed: Date.now(),
+        pendingRequests: 1,
+        reconnectAttempts: 0,
+        messageHandlers: new Map(),
+        nextSubscriptionId: 1
+      };
+      
+      // Set up shared message handler for routing
+      ws.onmessage = (event: MessageEvent) => {
+        try {
+          const message = JSON.parse(event.data);
+          
+          // Route to appropriate handler based on message type
+          if (message[0] === 'EVENT' && message[1]) {
+            // message[1] is the subscription ID
+            const handler = conn.messageHandlers.get(message[1]);
+            if (handler) {
+              handler(message);
+            }
+          } else if (message[0] === 'EOSE' && message[1]) {
+            // message[1] is the subscription ID
+            const handler = conn.messageHandlers.get(message[1]);
+            if (handler) {
+              handler(message);
+            }
+          } else if (message[0] === 'AUTH') {
+            // AUTH challenge - broadcast to all handlers (they'll handle it)
+            for (const handler of conn.messageHandlers.values()) {
+              handler(message);
+            }
+          } else if (message[0] === 'OK' && message[1] === 'auth') {
+            // AUTH response - broadcast to all handlers
+            for (const handler of conn.messageHandlers.values()) {
+              handler(message);
+            }
+          }
+        } catch (error) {
+          // Ignore parse errors
+        }
+      };
+      
+      // Handle connection close/error
+      ws.onclose = () => {
+        // Remove from pool when closed
+        const poolConn = this.connectionPool.get(relay);
+        if (poolConn && poolConn.ws === ws) {
+          this.connectionPool.delete(relay);
+        }
+      };
+      
+      ws.onerror = () => {
+        // Remove from pool on error
+        const poolConn = this.connectionPool.get(relay);
+        if (poolConn && poolConn.ws === ws) {
+          this.connectionPool.delete(relay);
+        }
+      };
+      
+      this.connectionPool.set(relay, conn);
+      
+      // Reset attempt count on successful connection
+      ws.onopen = () => {
+        this.connectionAttempts.set(relay, { count: 0, lastAttempt: Date.now() });
+      };
+      
+      return ws;
+    } catch (error) {
+      logger.debug({ error, relay }, 'Failed to create WebSocket connection');
+      return null;
+    }
+  }
+
+  /**
+   * Release a connection (decrement pending requests counter)
+   */
+  private releaseConnection(relay: string): void {
+    const conn = this.connectionPool.get(relay);
+    if (conn) {
+      conn.pendingRequests = Math.max(0, conn.pendingRequests - 1);
+      conn.lastUsed = Date.now();
+    }
   }
 
   /**
@@ -281,43 +490,53 @@ export class NostrClient {
       }
     }
     
-    // Merge with existing events - never delete valid events
+    // Merge with existing events - handle replaceable and parameterized replaceable events
+    // Map: deduplication key -> latest event
     const eventMap = new Map<string, NostrEvent>();
+    const eventsToDelete = new Set<string>(); // Event IDs to delete from cache
     
-    // Add existing events first
+    // Add existing events first, indexed by deduplication key
     for (const event of existingEvents) {
-      eventMap.set(event.id, event);
+      const key = getDeduplicationKey(event);
+      const existing = eventMap.get(key);
+      // Keep the newest if there are duplicates
+      if (!existing || event.created_at > existing.created_at) {
+        if (existing) {
+          eventsToDelete.add(existing.id); // Mark older event for deletion
+        }
+        eventMap.set(key, event);
+      } else {
+        eventsToDelete.add(event.id); // This one is older
+      }
     }
     
     // Add/update with new events from relays
-    // For replaceable events (kind 0, 3, 10002), use latest per pubkey
-    const replaceableEvents = new Map<string, NostrEvent>(); // pubkey -> latest event
-    
     for (const event of events) {
-      if (REPLACEABLE_KINDS.includes(event.kind)) {
-        // Replaceable event - only keep latest per pubkey
-        const existing = replaceableEvents.get(event.pubkey);
-        if (!existing || event.created_at > existing.created_at) {
-          replaceableEvents.set(event.pubkey, event);
+      const key = getDeduplicationKey(event);
+      const existing = eventMap.get(key);
+      
+      if (!existing || event.created_at > existing.created_at) {
+        // New event is newer (or first occurrence)
+        if (existing) {
+          eventsToDelete.add(existing.id); // Mark older event for deletion
         }
+        eventMap.set(key, event);
       } else {
-        // Regular event - add if newer or doesn't exist
-        const existing = eventMap.get(event.id);
-        if (!existing || event.created_at > existing.created_at) {
-          eventMap.set(event.id, event);
-        }
+        // Existing event is newer, mark this one for deletion
+        eventsToDelete.add(event.id);
       }
     }
     
-    // Add replaceable events to the map (replacing older versions)
-    for (const [pubkey, event] of replaceableEvents.entries()) {
-      // Remove any existing replaceable events for this pubkey
-      for (const [id, existingEvent] of eventMap.entries()) {
-        if (existingEvent.pubkey === pubkey && REPLACEABLE_KINDS.includes(existingEvent.kind)) {
-          eventMap.delete(id);
+    // Remove events that should be deleted
+    for (const eventId of eventsToDelete) {
+      eventMap.delete(eventId); // Remove by ID if it was keyed by ID
+      // Also remove from map if it's keyed by deduplication key
+      for (const [key, event] of eventMap.entries()) {
+        if (event.id === eventId) {
+          eventMap.delete(key);
+          break;
         }
       }
-      eventMap.set(event.id, event);
     }
     
     const finalEvents = Array.from(eventMap.values());
@@ -327,6 +546,15 @@ export class NostrClient {
     
     // Get persistent cache once (if available)
     const persistentCache = await getPersistentCache();
+    
+    // Delete older events from cache if we have newer ones
+    if (persistentCache && eventsToDelete.size > 0) {
+      for (const eventId of eventsToDelete) {
+        persistentCache.deleteEvent(eventId).catch((err: unknown) => {
+          logger.debug({ error: err, eventId }, 'Failed to delete old event from cache');
+        });
+      }
+    }
     
     // Cache in persistent cache (has built-in in-memory layer)
     // For kind 0 (profile) events, also cache individually by pubkey
@@ -444,6 +672,7 @@ export class NostrClient {
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
       let connectionTimeoutId: ReturnType<typeof setTimeout> | null = null;
       let authHandled = false;
+      let isNewConnection = false;
       
       const cleanup = () => {
         if (timeoutId) {
@@ -454,12 +683,17 @@ export class NostrClient {
           clearTimeout(connectionTimeoutId);
           connectionTimeoutId = null;
         }
-        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        // Only close if it's a new connection we created (not from pool)
+        // Pool connections are managed separately
+        if (isNewConnection && ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
           try {
             ws.close();
           } catch {
             // Ignore errors during cleanup
           }
+        } else {
+          // Release connection back to pool
+          self.releaseConnection(relay);
         }
       };
 
@@ -473,93 +707,168 @@ export class NostrClient {
       
       let authPromise: Promise<boolean> | null = null;
       
-      // Create WebSocket connection (with Tor support if needed)
-      createWebSocketWithTor(relay).then(websocket => {
+      // Get connection from pool or create new one
+      this.getConnection(relay).then(websocket => {
+        if (!websocket) {
+          resolveOnce([]);
+          return;
+        }
         ws = websocket;
+        isNewConnection = false; // From pool
         setupWebSocketHandlers();
       }).catch(error => {
-        // Connection failed immediately
-        resolveOnce([]);
+        // Connection failed, try creating new one
+        createWebSocketWithTor(relay).then(websocket => {
+          ws = websocket;
+          isNewConnection = true; // New connection
+          setupWebSocketHandlers();
+        }).catch(err => {
+          // Connection failed immediately
+          resolveOnce([]);
+        });
       });
       
       function setupWebSocketHandlers() {
         if (!ws) return;
         
+        const conn = self.connectionPool.get(relay);
+        if (!conn) {
+          resolveOnce([]);
+          return;
+        }
+        
+        // Get unique subscription ID for this request
+        const subscriptionId = `sub${conn.nextSubscriptionId++}`;
+        
         // Connection timeout - if we can't connect within 3 seconds, give up
         connectionTimeoutId = setTimeout(() => {
           if (!resolved && ws && ws.readyState !== WebSocket.OPEN) {
+            conn.messageHandlers.delete(subscriptionId);
             resolveOnce([]);
           }
         }, 3000);
         
-        ws.onopen = () => {
-        if (connectionTimeoutId) {
-          clearTimeout(connectionTimeoutId);
-          connectionTimeoutId = null;
-        }
-        // Connection opened, wait for AUTH challenge or proceed
-        // If no AUTH challenge comes within 1 second, send REQ
-        setTimeout(() => {
-          if (!authHandled && ws && ws.readyState === WebSocket.OPEN) {
-            try {
-              ws.send(JSON.stringify(['REQ', 'sub', ...filters]));
-            } catch {
-              // Connection might have closed
-              resolveOnce(events);
+        // Set up message handler for this subscription
+        const messageHandler = async (message: any) => {
+          try {
+            // Handle AUTH challenge
+            if (message[0] === 'AUTH' && message[1] && !authHandled) {
+              authHandled = true;
+              authPromise = self.handleAuthChallenge(ws!, relay, message[1]);
+              const authenticated = await authPromise;
+              // After authentication, send the REQ
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                try {
+                  ws.send(JSON.stringify(['REQ', subscriptionId, ...filters]));
+                } catch {
+                  conn.messageHandlers.delete(subscriptionId);
+                  resolveOnce(events);
+                }
+              }
+              return;
             }
-          }
-        }, 1000);
-      };
-      
-      ws.onmessage = async (event: MessageEvent) => {
-        try {
-          const message = JSON.parse(event.data);
-          
-          // Handle AUTH challenge
-          if (message[0] === 'AUTH' && message[1] && !authHandled) {
-            authHandled = true;
-            authPromise = self.handleAuthChallenge(ws!, relay, message[1]);
-            const authenticated = await authPromise;
-            // After authentication, send the REQ
-            if (ws && ws.readyState === WebSocket.OPEN) {
-              try {
-                ws.send(JSON.stringify(['REQ', 'sub', ...filters]));
-              } catch {
+            
+            // Handle AUTH OK response
+            if (message[0] === 'OK' && message[1] === 'auth' && ws) {
+              // AUTH completed, send REQ if not already sent
+              if (ws.readyState === WebSocket.OPEN && !authHandled) {
+                setTimeout(() => {
+                  if (ws && ws.readyState === WebSocket.OPEN) {
+                    try {
+                      ws.send(JSON.stringify(['REQ', subscriptionId, ...filters]));
+                    } catch {
+                      conn.messageHandlers.delete(subscriptionId);
+                      resolveOnce(events);
+                    }
+                  }
+                }, 100);
+              }
+              return;
+            }
+            
+            // Wait for auth to complete before processing other messages
+            if (authPromise) {
+              await authPromise;
+            }
+            
+            // Only process messages for this subscription
+            if (message[1] === subscriptionId) {
+              if (message[0] === 'EVENT') {
+                events.push(message[2]);
+              } else if (message[0] === 'EOSE') {
+                conn.messageHandlers.delete(subscriptionId);
                 resolveOnce(events);
               }
             }
-            return;
+          } catch (error) {
+            // Ignore parse errors, continue receiving events
           }
-          
-          // Wait for auth to complete before processing other messages
-          if (authPromise) {
-            await authPromise;
-          }
-          
-          if (message[0] === 'EVENT') {
-            events.push(message[2]);
-          } else if (message[0] === 'EOSE') {
-            resolveOnce(events);
-          }
-        } catch (error) {
-          // Ignore parse errors, continue receiving events
+        };
+        
+        conn.messageHandlers.set(subscriptionId, messageHandler);
+        
+        // If connection is already open, send REQ immediately
+        if (ws.readyState === WebSocket.OPEN) {
+          // Wait a bit for AUTH challenge if needed
+          setTimeout(() => {
+            if (!authHandled && ws && ws.readyState === WebSocket.OPEN) {
+              try {
+                ws.send(JSON.stringify(['REQ', subscriptionId, ...filters]));
+              } catch {
+                conn.messageHandlers.delete(subscriptionId);
+                resolveOnce(events);
+              }
+            }
+          }, 1000);
+        } else {
+          // Wait for connection to open
+          ws.onopen = () => {
+            if (connectionTimeoutId) {
+              clearTimeout(connectionTimeoutId);
+              connectionTimeoutId = null;
+            }
+            // Connection opened, wait for AUTH challenge or proceed
+            // If no AUTH challenge comes within 1 second, send REQ
+            setTimeout(() => {
+              if (!authHandled && ws && ws.readyState === WebSocket.OPEN) {
+                try {
+                  ws.send(JSON.stringify(['REQ', subscriptionId, ...filters]));
+                } catch {
+                  conn.messageHandlers.delete(subscriptionId);
+                  resolveOnce(events);
+                }
+              }
+            }, 1000);
+          };
         }
-      };
-      
-      ws.onerror = () => {
-        // Silently handle connection errors - some relays may be down
-        // Don't log or reject, just resolve with empty results
-        if (!resolved) {
-          resolveOnce([]);
-        }
-      };
+        
+        // Error and close handlers are set on the connection itself
+        // But we need to clean up our handler
+        if (ws) {
+          const wsRef = ws; // Capture for closure
+          const originalOnError = ws.onerror;
+          ws.onerror = () => {
+            conn.messageHandlers.delete(subscriptionId);
+            if (originalOnError) {
+              originalOnError.call(wsRef, new Event('error'));
+            }
+            if (!resolved) {
+              resolveOnce([]);
+            }
+          };
 
-      ws.onclose = () => {
-        // If we haven't resolved yet, resolve with what we have
-        if (!resolved) {
-          resolveOnce(events);
+          const originalOnClose = ws.onclose;
+          ws.onclose = () => {
+            conn.messageHandlers.delete(subscriptionId);
+            if (originalOnClose) {
+              originalOnClose.call(wsRef, new CloseEvent('close'));
+            }
+            // If we haven't resolved yet, resolve with what we have
+            if (!resolved) {
+              resolveOnce(events);
+            }
+          };
         }
-      };
       
         // Overall timeout - resolve with what we have after 8 seconds
         timeoutId = setTimeout(() => {
