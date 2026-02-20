@@ -321,7 +321,7 @@
       
       const data = await response.json();
       
-      // API returns { registered, unregistered, total }
+      // API returns { registered, total }
       registeredRepos = data.registered || [];
       allRegisteredRepos = [...registeredRepos];
       

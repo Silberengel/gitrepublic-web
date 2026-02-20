@@ -98,18 +98,15 @@ export const GET: RequestHandler = async (event) => {
       });
     }
     
-    // Separate into registered and unregistered
+    // Only return registered repos (repos with this domain in clone URLs)
     const registered = repos.filter(r => r.isRegistered);
-    const unregistered = repos.filter(r => !r.isRegistered);
     
     // Sort by created_at descending
     registered.sort((a, b) => b.event.created_at - a.event.created_at);
-    unregistered.sort((a, b) => b.event.created_at - a.event.created_at);
     
     return json({
       registered,
-      unregistered,
-      total: repos.length
+      total: registered.length
     });
   } catch (err) {
     return handleApiError(err, { operation: 'listRepos' }, 'Failed to list repositories');

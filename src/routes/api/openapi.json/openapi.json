@@ -227,7 +227,7 @@
     "/api/repos/list": {
       "get": {
         "summary": "List repositories",
-        "description": "Returns all repositories the current user can view, separated into registered and unregistered",
+        "description": "Returns all registered repositories (repos with this domain in clone URLs) that the current user can view",
         "tags": ["Repositories"],
         "parameters": [
           {
@@ -248,12 +248,6 @@
                   "type": "object",
                   "properties": {
                     "registered": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Repository"
-                      }
-                    },
-                    "unregistered": {
                       "type": "array",
                       "items": {
                         "$ref": "#/components/schemas/Repository"
