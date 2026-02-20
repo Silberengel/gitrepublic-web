@@ -43,7 +43,7 @@ export class SettingsStore {
     }
 
     if (typeof window === 'undefined' || !window.indexedDB) {
-      logger.warn('IndexedDB not available, using in-memory cache only');
+      logger.debug('IndexedDB not available, using in-memory cache only');
       return;
     }
 
@@ -122,7 +122,7 @@ export class SettingsStore {
     await this.init();
 
     if (!this.db) {
-      logger.warn('IndexedDB not available, cannot save settings');
+      logger.debug('IndexedDB not available, cannot save settings');
       return;
     }
 

@@ -3,8 +3,7 @@
  * Checks if repo has valid announcement in nostr/repo-events.jsonl and on relays
  */
 
-import { json, error } from '@sveltejs/kit';
-import type { RequestHandler } from './$types';
+import { json, error, type RequestHandler } from '@sveltejs/kit';
 import { createRepoGetHandler } from '$lib/utils/api-handlers.js';
 import type { RepoRequestContext } from '$lib/utils/api-context.js';
 import { fileManager, nostrClient } from '$lib/services/service-registry.js';

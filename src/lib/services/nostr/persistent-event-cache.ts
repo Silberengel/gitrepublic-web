@@ -199,7 +199,7 @@ export class PersistentEventCache {
     }
 
     if (typeof window === 'undefined' || !window.indexedDB) {
-      logger.warn('IndexedDB not available, using in-memory cache only');
+      logger.debug('IndexedDB not available, using in-memory cache only');
       return;
     }
 
