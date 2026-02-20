@@ -56,7 +56,6 @@ export const KIND = {
   NIP98_AUTH: 27235, // NIP-98: HTTP authentication event
   HIGHLIGHT: 9802, // NIP-84: Highlight event
   PUBLIC_MESSAGE: 24, // NIP-24: Public message (direct chat)
-  SSH_KEY_ATTESTATION: 30001, // Custom: SSH key attestation (server-side only, not published to relays)
 } as const;
 
 export interface Issue extends NostrEvent {

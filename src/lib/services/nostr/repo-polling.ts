@@ -9,6 +9,7 @@ import { RepoManager } from '../git/repo-manager.js';
 import { OwnershipTransferService } from './ownership-transfer-service.js';
 import { getCachedUserLevel } from '../security/user-level-cache.js';
 import logger from '../logger.js';
+import { extractCloneUrls } from '../../utils/nostr-utils.js';
 
 export class RepoPollingService {
   private nostrClient: NostrClient;
@@ -192,21 +193,9 @@ export class RepoPollingService {
 
   /**
    * Extract clone URLs from a NIP-34 repo announcement
+   * Uses shared utility (without normalization)
    */
   private extractCloneUrls(event: NostrEvent): string[] {
-    const urls: string[] = [];
-    
-    for (const tag of event.tags) {
-      if (tag[0] === 'clone') {
-        for (let i = 1; i < tag.length; i++) {
-          const url = tag[i];
-          if (url && typeof url === 'string') {
-            urls.push(url);
-          }
-        }
-      }
-    }
-    
-    return urls;
+    return extractCloneUrls(event, false);
   }
 }

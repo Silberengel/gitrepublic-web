@@ -338,25 +338,6 @@ export class AuditLogger {
     });
   }
 
-  /**
-   * Log SSH key attestation operation
-   */
-  logSSHKeyAttestation(
-    user: string,
-    action: 'submit' | 'revoke' | 'verify',
-    fingerprint: string,
-    result: 'success' | 'failure',
-    error?: string
-  ): void {
-    this.log({
-      user,
-      action: `ssh.attestation.${action}`,
-      resource: fingerprint,
-      result,
-      error,
-      metadata: { fingerprint: fingerprint.slice(0, 20) + '...' }
-    });
-  }
 }
 
 // Singleton instance

@@ -5,8 +5,31 @@
 import { nip19 } from 'nostr-tools';
 import { MaintainerService } from '../services/nostr/maintainer-service.js';
 import { DEFAULT_NOSTR_RELAYS } from '../config.js';
+import type { NostrEvent } from '../types/nostr.js';
 
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
+
+/**
+ * Check if a repository is private based on announcement event
+ * A repo is private if it has a tag ["private"], ["private", "true"], or ["t", "private"]
+ * 
+ * This is a shared utility to avoid code duplication across services.
+ */
+export function isPrivateRepo(announcement: NostrEvent): boolean {
+  // Check for ["private", "true"] tag
+  const privateTag = announcement.tags.find(t => t[0] === 'private' && t[1] === 'true');
+  if (privateTag) return true;
+
+  // Check for ["private"] tag (just the tag name, no value)
+  const privateTagOnly = announcement.tags.find(t => t[0] === 'private' && (!t[1] || t[1] === ''));
+  if (privateTagOnly) return true;
+
+  // Check for ["t", "private"] tag (topic tag)
+  const topicTag = announcement.tags.find(t => t[0] === 't' && t[1] === 'private');
+  if (topicTag) return true;
+
+  return false;
+}
 
 /**
  * Check if a user can view a repository

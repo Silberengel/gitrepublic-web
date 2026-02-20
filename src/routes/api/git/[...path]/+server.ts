@@ -21,6 +21,7 @@ import { BranchProtectionService } from '$lib/services/nostr/branch-protection-s
 import logger from '$lib/services/logger.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 import { isValidBranchName, sanitizeError } from '$lib/utils/security.js';
+import { extractCloneUrls } from '$lib/utils/nostr-utils.js';
 
 // Resolve GIT_REPO_ROOT to absolute path (handles both relative and absolute paths)
 const repoRootEnv = process.env.GIT_REPO_ROOT || '/repos';
@@ -127,25 +128,7 @@ async function getRepoAnnouncement(npub: string, repoName: string): Promise<Nost
   }
 }
 
-/**
- * Extract clone URLs from repository announcement
- * Note: This duplicates logic from RepoManager.extractCloneUrls, but is kept here
- * for performance (avoiding instantiation of RepoManager just for this)
- */
-function extractCloneUrls(event: NostrEvent): string[] {
-  const urls: string[] = [];
-  for (const tag of event.tags) {
-    if (tag[0] === 'clone') {
-      for (let i = 1; i < tag.length; i++) {
-        const url = tag[i];
-        if (url && typeof url === 'string') {
-          urls.push(url);
-        }
-      }
-    }
-  }
-  return urls;
-}
+// Note: Using shared extractCloneUrls utility (without normalization for performance)
 
 /**
  * Normalize Authorization header from git credential helper format

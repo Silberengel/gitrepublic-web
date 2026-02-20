@@ -1796,66 +1796,6 @@
         }
       }
     },
-    "/api/user/ssh-keys": {
-      "get": {
-        "summary": "Get SSH key attestations",
-        "description": "Get all SSH key attestations for authenticated user",
-        "tags": ["User"],
-        "security": [{"NIP98": []}],
-        "responses": {
-          "200": {
-            "description": "SSH key attestations",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "attestations": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "eventId": {"type": "string"},
-                          "fingerprint": {"type": "string"},
-                          "keyType": {"type": "string"},
-                          "createdAt": {"type": "integer"},
-                          "revoked": {"type": "boolean"}
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "summary": "Submit SSH key attestation",
-        "description": "Submit an SSH key attestation event. Requires unlimited access.",
-        "tags": ["User"],
-        "security": [{"NIP98": []}],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["event"],
-                "properties": {
-                  "event": {"$ref": "#/components/schemas/NostrEvent"}
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Attestation stored"
-          }
-        }
-      }
-    },
     "/api/users/{npub}/repos": {
       "get": {
         "summary": "List user repositories",
@@ -2010,50 +1950,6 @@
         "responses": {
           "200": {
             "description": "Preferences deleted"
-          }
-        }
-      }
-    },
-    "/api/user/ssh-keys/verify": {
-      "post": {
-        "summary": "Verify SSH key fingerprint",
-        "description": "Verify an SSH key fingerprint against stored attestations",
-        "tags": ["User"],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["fingerprint"],
-                "properties": {
-                  "fingerprint": {"type": "string"}
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Verification result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "valid": {"type": "boolean"},
-                    "attestation": {
-                      "type": "object",
-                      "properties": {
-                        "userPubkey": {"type": "string"},
-                        "fingerprint": {"type": "string"},
-                        "keyType": {"type": "string"}
-                      }
-                    }
-                  }
-                }
-              }
-            }
           }
         }
       }

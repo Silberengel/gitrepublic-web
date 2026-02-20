@@ -947,19 +947,9 @@ export class FileManager {
       
       const announcement = events[0];
       
-      // Check for ["private", "true"] tag
-      const privateTag = announcement.tags.find(t => t[0] === 'private' && t[1] === 'true');
-      if (privateTag) return true;
-      
-      // Check for ["private"] tag (just the tag name, no value)
-      const privateTagOnly = announcement.tags.find(t => t[0] === 'private' && (!t[1] || t[1] === ''));
-      if (privateTagOnly) return true;
-      
-      // Check for ["t", "private"] tag (topic tag)
-      const topicTag = announcement.tags.find(t => t[0] === 't' && t[1] === 'private');
-      if (topicTag) return true;
-      
-      return false;
+      // Use shared utility to check if repo is private
+      const { isPrivateRepo: checkIsPrivateRepo } = await import('../../utils/repo-privacy.js');
+      return checkIsPrivateRepo(announcement);
     } catch (err) {
       // If we can't determine, default to public (safer - allows publishing)
       logger.debug({ error: err, npub, repoName }, 'Failed to check repo privacy, defaulting to public');

@@ -9,6 +9,7 @@ import type { NostrEvent } from '../../types/nostr.js';
 import { nip19 } from 'nostr-tools';
 import { OwnershipTransferService } from './ownership-transfer-service.js';
 import logger from '../logger.js';
+import { isPrivateRepo as checkIsPrivateRepo } from '../../utils/repo-privacy.js';
 
 export interface RepoPrivacyInfo {
   isPrivate: boolean;
@@ -29,22 +30,10 @@ export class MaintainerService {
 
   /**
    * Check if a repository is private
-   * A repo is private if it has a tag ["private"], ["private", "true"], or ["t", "private"]
+   * Uses shared utility to avoid code duplication
    */
   private isPrivateRepo(announcement: NostrEvent): boolean {
-    // Check for ["private", "true"] tag
-    const privateTag = announcement.tags.find(t => t[0] === 'private' && t[1] === 'true');
-    if (privateTag) return true;
-
-    // Check for ["private"] tag (just the tag name, no value)
-    const privateTagOnly = announcement.tags.find(t => t[0] === 'private' && (!t[1] || t[1] === ''));
-    if (privateTagOnly) return true;
-
-    // Check for ["t", "private"] tag (topic tag)
-    const topicTag = announcement.tags.find(t => t[0] === 't' && t[1] === 'private');
-    if (topicTag) return true;
-
-    return false;
+    return checkIsPrivateRepo(announcement);
   }
 
   /**
