@@ -280,6 +280,15 @@
     }
   }
 
+  async function copyLightningAddress(authority: string) {
+    try {
+      await navigator.clipboard.writeText(authority);
+      alert('Lightning address copied to clipboard!');
+    } catch (err) {
+      console.error('Failed to copy lightning address:', err);
+    }
+  }
+
   const isOwnProfile = $derived(viewerPubkeyHex === profileOwnerPubkeyHex);
 </script>
 
@@ -338,13 +347,24 @@
                 <span class="payment-type">{target.type}</span>
               </div>
               <code class="payment-address">{target.payto}</code>
-              <button 
-                class="copy-button" 
-                onclick={() => copyPaytoAddress(target.payto)}
-                title="Copy address"
-              >
-                <img src="/icons/copy.svg" alt="Copy" class="icon-themed" />
-              </button>
+              <div class="payment-actions">
+                {#if target.type === 'lightning'}
+                  <button 
+                    class="lightning-button" 
+                    onclick={() => copyLightningAddress(target.authority)}
+                    title="Copy lightning address"
+                  >
+                    <img src="/icons/lightning.svg" alt="Lightning" class="icon-themed" />
+                  </button>
+                {/if}
+                <button 
+                  class="copy-button" 
+                  onclick={() => copyPaytoAddress(target.payto)}
+                  title="Copy payto address"
+                >
+                  <img src="/icons/copy.svg" alt="Copy" class="icon-themed" />
+                </button>
+              </div>
             </div>
           {/each}
         </div>
@@ -436,17 +456,18 @@
                 {@const isToViewer = viewerPubkeyHex !== null && getMessageRecipients(message).includes(viewerPubkeyHex)}
                 <div class="message-card" class:from-viewer={isFromViewer} class:to-viewer={isToViewer && !isFromViewer}>
                   <div class="message-header">
-                    <UserBadge pubkey={message.pubkey} />
+                    <div class="message-participants">
+                      <span class="participants-label">From:</span>
+                      <UserBadge pubkey={message.pubkey} />
+                      {#if getMessageRecipients(message).length > 0}
+                        <span class="participants-label">To:</span>
+                        {#each getMessageRecipients(message) as recipientPubkey}
+                          <UserBadge pubkey={recipientPubkey} />
+                        {/each}
+                      {/if}
+                    </div>
                     <span class="message-time">{formatMessageTime(message.created_at)}</span>
                   </div>
-                  {#if getMessageRecipients(message).length > 0}
-                    <div class="message-recipients">
-                      <span class="recipients-label">To:</span>
-                      {#each getMessageRecipients(message) as recipientPubkey}
-                        <UserBadge pubkey={recipientPubkey} />
-                      {/each}
-                    </div>
-                  {/if}
                   <div class="message-body">{message.content}</div>
                 </div>
               {/each}
@@ -695,10 +716,17 @@
     flex: 1;
   }
 
-  .copy-button {
+  .payment-actions {
     position: absolute;
     top: 0.75rem;
     right: 0.75rem;
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .copy-button,
+  .lightning-button {
     background: transparent;
     border: 1px solid var(--border-color);
     border-radius: 0.25rem;
@@ -710,12 +738,14 @@
     transition: all 0.2s ease;
   }
 
-  .copy-button:hover {
+  .copy-button:hover,
+  .lightning-button:hover {
     background: var(--bg-tertiary);
     border-color: var(--accent);
   }
 
-  .copy-button img {
+  .copy-button img,
+  .lightning-button img {
     width: 14px;
     height: 14px;
   }
@@ -751,12 +781,14 @@
     opacity: 1 !important;
   }
 
-  .copy-button:hover .icon-themed {
+  .copy-button:hover .icon-themed,
+  .lightning-button:hover .icon-themed {
     filter: brightness(0) saturate(100%) invert(1) !important;
     opacity: 1 !important;
   }
 
-  :global([data-theme="light"]) .copy-button:hover .icon-themed {
+  :global([data-theme="light"]) .copy-button:hover .icon-themed,
+  :global([data-theme="light"]) .lightning-button:hover .icon-themed {
     filter: brightness(0) saturate(100%) !important;
     opacity: 1 !important;
   }
@@ -936,25 +968,28 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .message-participants {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    flex: 1;
+  }
+
+  .participants-label {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    font-weight: 500;
   }
 
   .message-time {
     font-size: 0.875rem;
     color: var(--text-muted);
-  }
-
-  .message-recipients {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.75rem;
-    flex-wrap: wrap;
-  }
-
-  .recipients-label {
-    font-size: 0.875rem;
-    color: var(--text-muted);
-    font-weight: 500;
+    white-space: nowrap;
   }
 
   .message-body {
