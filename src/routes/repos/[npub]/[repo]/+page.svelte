@@ -7,7 +7,7 @@
   import UserBadge from '$lib/components/UserBadge.svelte';
   import EventCopyButton from '$lib/components/EventCopyButton.svelte';
   import RepoHeaderEnhanced from '$lib/components/RepoHeaderEnhanced.svelte';
-  import RepoTabs from '$lib/components/RepoTabs.svelte';
+  import TabsMenu from '$lib/components/TabsMenu.svelte';
   import NostrLinkRenderer from '$lib/components/NostrLinkRenderer.svelte';
   import '$lib/styles/repo.css';
   import { getPublicKeyWithNIP07, isNIP07Available, signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
@@ -66,6 +66,8 @@
   let showCommitDialog = $state(false);
   let activeTab = $state<'files' | 'history' | 'tags' | 'issues' | 'prs' | 'docs' | 'discussions'>('discussions');
   let showRepoMenu = $state(false);
+  
+  // Tabs will be defined as derived after issues and prs are declared
   
   // Auto-save
   let autoSaveInterval: ReturnType<typeof setInterval> | null = null;
@@ -305,6 +307,17 @@
   let newPRBranchName = $state('');
   let newPRLabels = $state<string[]>(['']);
   let selectedPR = $state<string | null>(null);
+  
+  // Tabs menu - defined after issues and prs
+  const tabs = $derived([
+    { id: 'discussions', label: 'Discussions', icon: '/icons/message-circle.svg' },
+    { id: 'files', label: 'Files', icon: '/icons/file-text.svg' },
+    { id: 'history', label: 'History', icon: '/icons/git-commit.svg' },
+    { id: 'tags', label: 'Tags', icon: '/icons/tag.svg' },
+    { id: 'issues', label: 'Issues', icon: '/icons/alert-circle.svg', count: issues.length },
+    { id: 'prs', label: 'Pull Requests', icon: '/icons/git-pull-request.svg', count: prs.length },
+    { id: 'docs', label: 'Docs', icon: '/icons/book.svg' }
+  ]);
 
   // Patches
   let showCreatePatchDialog = $state(false);
@@ -3754,25 +3767,17 @@
     {/if}
 
     <!-- Tabs -->
-    <RepoTabs
-      activeTab={activeTab}
-      tabs={[
-        { id: 'discussions', label: 'Discussions', icon: '/icons/message-circle.svg' },
-        { id: 'files', label: 'Files', icon: '/icons/file-text.svg' },
-        { id: 'history', label: 'History', icon: '/icons/git-commit.svg' },
-        { id: 'tags', label: 'Tags', icon: '/icons/tag.svg' },
-        { id: 'issues', label: 'Issues', icon: '/icons/alert-circle.svg', count: issues.length },
-        { id: 'prs', label: 'Pull Requests', icon: '/icons/git-pull-request.svg', count: prs.length },
-        { id: 'docs', label: 'Docs', icon: '/icons/book.svg' }
-      ]}
-      onTabChange={(tab) => activeTab = tab as typeof activeTab}
-    />
 
     <div class="repo-layout">
       <!-- File Tree Sidebar -->
       {#if activeTab === 'files'}
       <aside class="file-tree" class:hide-on-mobile={!showFileListOnMobile && activeTab === 'files'}>
         <div class="file-tree-header">
+          <TabsMenu 
+            activeTab={activeTab} 
+            {tabs} 
+            onTabChange={(tab) => activeTab = tab as typeof activeTab}
+          />
           <h2>Files</h2>
           <div class="file-tree-actions">
             {#if pathStack.length > 0 || currentPath}
@@ -3843,6 +3848,11 @@
       {#if activeTab === 'history'}
       <aside class="history-sidebar">
         <div class="history-header">
+          <TabsMenu 
+            activeTab={activeTab} 
+            {tabs} 
+            onTabChange={(tab) => activeTab = tab as typeof activeTab}
+          />
           <h2>Commit History</h2>
           <button onclick={loadCommitHistory} class="refresh-button">
             <img src="/icons/refresh-cw.svg" alt="" class="icon-inline" />
@@ -3879,6 +3889,11 @@
       {#if activeTab === 'tags'}
       <aside class="tags-sidebar">
         <div class="tags-header">
+          <TabsMenu 
+            activeTab={activeTab} 
+            {tabs} 
+            onTabChange={(tab) => activeTab = tab as typeof activeTab}
+          />
           <h2>Tags</h2>
           {#if userPubkey && isMaintainer}
             <button 
@@ -3917,6 +3932,11 @@
       {#if activeTab === 'issues'}
       <aside class="issues-sidebar">
         <div class="issues-header">
+          <TabsMenu 
+            activeTab={activeTab} 
+            {tabs} 
+            onTabChange={(tab) => activeTab = tab as typeof activeTab}
+          />
           <h2>Issues</h2>
           {#if userPubkey}
             <button onclick={() => {
@@ -3971,6 +3991,11 @@
       {#if activeTab === 'prs'}
       <aside class="prs-sidebar">
         <div class="prs-header">
+          <TabsMenu 
+            activeTab={activeTab} 
+            {tabs} 
+            onTabChange={(tab) => activeTab = tab as typeof activeTab}
+          />
           <h2>Pull Requests</h2>
           {#if userPubkey}
             <button onclick={() => {
@@ -4222,6 +4247,14 @@
 
         {#if activeTab === 'docs'}
           <div class="docs-content">
+            <div class="docs-header">
+              <TabsMenu 
+                activeTab={activeTab} 
+                {tabs} 
+                onTabChange={(tab) => activeTab = tab as typeof activeTab}
+              />
+              <h2>Docs</h2>
+            </div>
             {#if loadingDocs}
               <div class="loading">Loading documentation...</div>
             {:else if documentationHtml}
@@ -4243,6 +4276,11 @@
         {#if activeTab === 'discussions'}
           <div class="discussions-content">
             <div class="discussions-header">
+              <TabsMenu 
+                activeTab={activeTab} 
+                {tabs} 
+                onTabChange={(tab) => activeTab = tab as typeof activeTab}
+              />
               <h2>Discussions</h2>
               <div class="discussions-actions">
                 <button 

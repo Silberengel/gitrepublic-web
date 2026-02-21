@@ -568,6 +568,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.75rem;
 }
 
 .file-tree-header h2 {
@@ -980,6 +981,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.75rem;
 }
 
 .history-header h2, .tags-header h2 {
@@ -1246,6 +1248,7 @@
   justify-content: space-between;
   align-items: center;
   flex-shrink: 0;
+  gap: 0.75rem;
 }
 
 @media (max-width: 767px) {
@@ -1284,6 +1287,12 @@
   margin: 0;
   font-size: 1.25rem;
   color: var(--text-primary);
+}
+
+@media (max-width: 767px) {
+  .discussions-header h2 {
+    display: none;
+  }
 }
 
 .discussion-item {
@@ -1556,6 +1565,22 @@
 }
 
 /* Documentation */
+.docs-header {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 0.75rem;
+}
+
+.docs-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  color: var(--text-primary);
+}
+
 .docs-content {
   flex: 1;
   display: flex;
@@ -1638,6 +1663,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.75rem;
 }
 
 .issues-header h2, .prs-header h2 {
