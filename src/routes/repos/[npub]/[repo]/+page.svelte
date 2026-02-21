@@ -6,6 +6,9 @@
   import PRDetail from '$lib/components/PRDetail.svelte';
   import UserBadge from '$lib/components/UserBadge.svelte';
   import EventCopyButton from '$lib/components/EventCopyButton.svelte';
+  import RepoHeaderEnhanced from '$lib/components/RepoHeaderEnhanced.svelte';
+  import RepoTabs from '$lib/components/RepoTabs.svelte';
+  import NostrLinkRenderer from '$lib/components/NostrLinkRenderer.svelte';
   import { getPublicKeyWithNIP07, isNIP07Available, signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
   import { NostrClient } from '$lib/services/nostr/nostr-client.js';
   import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS, combineRelays } from '$lib/config.js';
@@ -681,6 +684,9 @@
   // Repository images
   let repoImage = $state<string | null>(null);
   let repoBanner = $state<string | null>(null);
+
+  // Repository owner pubkey (decoded from npub)
+  let repoOwnerPubkey = $state<string | null>(null);
 
   // Mobile view toggle for file list/file viewer
   let showFileListOnMobile = $state(true);
@@ -1754,17 +1760,17 @@
     try {
       const decoded = nip19.decode(npub);
       if (decoded.type === 'npub') {
-        const repoOwnerPubkey = decoded.data as string;
+        repoOwnerPubkey = decoded.data as string;
         repoAddress = `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkey}:${repo}`;
       }
     } catch (err) {
       console.warn('Failed to decode npub for bookmark address:', err);
     }
 
-    // Close menu when clicking outside
+    // Close menu when clicking outside (handled by RepoHeaderEnhanced component)
     function handleClickOutside(event: MouseEvent) {
       const target = event.target as HTMLElement;
-      if (showRepoMenu && !target.closest('.repo-menu-container')) {
+      if (showRepoMenu && !target.closest('.repo-header')) {
         showRepoMenu = false;
       }
     }
@@ -2833,6 +2839,15 @@
     }
   }
 
+  function handleBranchChangeDirect(branch: string) {
+    currentBranch = branch;
+    // Create a synthetic event for the existing handler
+    const syntheticEvent = {
+      target: { value: branch }
+    } as unknown as Event;
+    handleBranchChange(syntheticEvent);
+  }
+
   async function handleBranchChange(event: Event) {
     const target = event.target as HTMLSelectElement;
     currentBranch = target.value;
@@ -3590,205 +3605,110 @@
 </svelte:head>
 
 <div class="container">
-  <header>
-    {#if repoBanner}
-      <div class="repo-banner">
-        <img src={repoBanner} alt="" onerror={(e) => { 
-          console.error('[Repo Images] Failed to load banner:', repoBanner); 
-          const target = e.target as HTMLImageElement;
-          if (target) target.style.display = 'none';
-        }} />
-      </div>
-    {/if}
-    <div class="header-content">
-      <div class="header-main">
-        <div class="repo-title-section">
-          {#if repoImage}
-            <img src={repoImage} alt="" class="repo-image" onerror={(e) => { 
-              console.error('[Repo Images] Failed to load image:', repoImage); 
-              const target = e.target as HTMLImageElement;
-              if (target) target.style.display = 'none';
-            }} />
-          {/if}
-          <div class="repo-title-text">
-            <div class="repo-title-with-menu">
-              <h1>{pageData.repoName || repo}</h1>
-              {#if userPubkey && repoAddress}
-                <button
-                  class="bookmark-icon-button"
-                  class:bookmarked={isBookmarked}
-                  onclick={() => { toggleBookmark(); }}
-                  disabled={loadingBookmark}
-                  title={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
-                  aria-label={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
-                >
-                  <img src="/icons/star.svg" alt="" class="icon-inline" />
-                </button>
-              {/if}
-              {#if userPubkey}
-                <div class="repo-menu-container">
-                  <button 
-                    class="repo-menu-button"
-                    onclick={() => showRepoMenu = !showRepoMenu}
-                    title="Repository actions"
-                    aria-label="Repository actions"
-                  >
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <circle cx="8" cy="3" r="1.5" fill="currentColor"/>
-                      <circle cx="8" cy="8" r="1.5" fill="currentColor"/>
-                      <circle cx="8" cy="13" r="1.5" fill="currentColor"/>
-                    </svg>
-                  </button>
-                  {#if showRepoMenu}
-                    <div 
-                      class="repo-menu-dropdown" 
-                      role="menu"
-                      tabindex="-1"
-                      onclick={(e) => e.stopPropagation()}
-                      onkeydown={(e) => {
-                        if (e.key === 'Escape') {
-                          showRepoMenu = false;
-                        }
-                      }}
-                    >
-                      {#if userPubkey}
-                        <button onclick={() => { forkRepository(); showRepoMenu = false; }} disabled={forking} class="repo-menu-item">
-                          {forking ? 'Forking...' : 'Fork'}
-                        </button>
-                        <button onclick={() => { showCreateIssueDialog = true; showRepoMenu = false; }} class="repo-menu-item">
-                          Create Issue
-                        </button>
-                        <button onclick={() => { showCreatePRDialog = true; showRepoMenu = false; }} class="repo-menu-item">
-                          Create Pull Request
-                        </button>
-                        <button onclick={() => { showCreatePatchDialog = true; showRepoMenu = false; }} class="repo-menu-item">
-                          Create Patch
-                        </button>
-                        {#if hasUnlimitedAccess($userStore.userLevel) && (isRepoCloned === false || (isRepoCloned === null && !checkingCloneStatus))}
-                          <button 
-                            onclick={() => { cloneRepository(); showRepoMenu = false; }} 
-                            disabled={cloning || checkingCloneStatus} 
-                            class="repo-menu-item"
-                            title="Clone this repository to the server (privileged users only)"
-                          >
-                            {cloning ? 'Cloning...' : (checkingCloneStatus ? 'Checking...' : 'Clone to Server')}
-                          </button>
-                        {/if}
-                        {#if isMaintainer}
-                          <a href={`/signup?npub=${npub}&repo=${repo}`} class="repo-menu-item">Settings</a>
-                        {/if}
-                        {#if pageData.repoOwnerPubkey && userPubkeyHex === pageData.repoOwnerPubkey}
-                          {#if verificationStatus?.verified !== true}
-                            <button 
-                              onclick={() => { generateAnnouncementFileForRepo(); showRepoMenu = false; }} 
-                              class="repo-menu-item"
-                              title="Generate verification file"
-                            >
-                              Generate Verification File
-                            </button>
-                          {/if}
-                          <button 
-                            onclick={() => { deleteAnnouncement(); showRepoMenu = false; }} 
-                            disabled={deletingAnnouncement}
-                            class="repo-menu-item repo-menu-item-danger"
-                            title="Send deletion request for repository announcement (NIP-09)"
-                          >
-                            {deletingAnnouncement ? 'Deleting...' : 'Delete Announcement'}
-                          </button>
-                        {/if}
-                        {#if isMaintainer}
-                          <button 
-                            onclick={async () => {
-                              if (!userPubkey || !isMaintainer || needsClone) return;
-                              // Load default branch from settings
-                              try {
-                                const settings = await settingsStore.getSettings();
-                                defaultBranchName = settings.defaultBranch || 'master';
-                              } catch {
-                                defaultBranchName = 'master';
-                              }
-                              showCreateBranchDialog = true;
-                              showRepoMenu = false;
-                            }} 
-                            class="repo-menu-item"
-                            disabled={needsClone}
-                            title={needsClone ? cloneTooltip : 'Create a new branch'}
-                          >Create New Branch</button>
-                        {/if}
-                      {/if}
-                    </div>
-                  {/if}
-                </div>
-              {/if}
-            </div>
-            {#if pageData.repoDescription}
-              <p class="repo-description-header">{pageData.repoDescription}</p>
-            {:else}
-              <p class="repo-description-header repo-description-placeholder">No description</p>
-            {/if}
-          </div>
-        </div>
-      <div class="repo-meta-info">
-        {#if pageData.repoLanguage}
-          <span class="repo-language">
-            <img src="/icons/file-text.svg" alt="" class="icon-inline" />
-            {pageData.repoLanguage}
-          </span>
-        {/if}
-        {#if pageData.repoIsPrivate}
-          <span class="repo-privacy-badge private">Private</span>
-        {:else}
-          <span class="repo-privacy-badge public">Public</span>
-        {/if}
-        {#if pageData.repoTopics && pageData.repoTopics.length > 0}
-          <div class="repo-topics">
-            {#each pageData.repoTopics as topic}
-              <span class="topic-tag">{topic}</span>
+  <!-- Banner hidden on mobile, shown on desktop -->
+  {#if repoBanner}
+    <div class="repo-banner desktop-only">
+      <img src={repoBanner} alt="" onerror={(e) => { 
+        console.error('[Repo Images] Failed to load banner:', repoBanner); 
+        const target = e.target as HTMLImageElement;
+        if (target) target.style.display = 'none';
+      }} />
+    </div>
+  {/if}
+  
+  {#if repoOwnerPubkey}
+    <RepoHeaderEnhanced
+      repoName={pageData.repoName || repo}
+      repoDescription={pageData.repoDescription}
+      ownerNpub={npub}
+      ownerPubkey={repoOwnerPubkey}
+      isMaintainer={isMaintainer}
+      isPrivate={pageData.repoIsPrivate || false}
+      cloneUrls={pageData.repoCloneUrls || []}
+      branches={branches}
+      currentBranch={currentBranch}
+      defaultBranch={defaultBranch}
+      isRepoCloned={isRepoCloned}
+      copyingCloneUrl={copyingCloneUrl}
+      onBranchChange={handleBranchChangeDirect}
+      onCopyCloneUrl={copyCloneUrl}
+      onDeleteBranch={deleteBranch}
+      onMenuToggle={() => showRepoMenu = !showRepoMenu}
+      showMenu={showRepoMenu}
+      userPubkey={userPubkey}
+      isBookmarked={isBookmarked}
+      loadingBookmark={loadingBookmark}
+      onToggleBookmark={toggleBookmark}
+      onFork={forkRepository}
+      forking={forking}
+      onCloneToServer={cloneRepository}
+      cloning={cloning}
+      checkingCloneStatus={checkingCloneStatus}
+      onCreateIssue={() => showCreateIssueDialog = true}
+      onCreatePR={() => showCreatePRDialog = true}
+      onCreatePatch={() => showCreatePatchDialog = true}
+      onCreateBranch={async () => {
+        if (!userPubkey || !isMaintainer || needsClone) return;
+        try {
+          const settings = await settingsStore.getSettings();
+          defaultBranchName = settings.defaultBranch || 'master';
+        } catch {
+          defaultBranchName = 'master';
+        }
+        showCreateBranchDialog = true;
+      }}
+      onSettings={() => goto(`/signup?npub=${npub}&repo=${repo}`)}
+      onGenerateVerification={pageData.repoOwnerPubkey && userPubkeyHex === pageData.repoOwnerPubkey && verificationStatus?.verified !== true ? generateAnnouncementFileForRepo : undefined}
+      onDeleteAnnouncement={pageData.repoOwnerPubkey && userPubkeyHex === pageData.repoOwnerPubkey ? deleteAnnouncement : undefined}
+      deletingAnnouncement={deletingAnnouncement}
+      hasUnlimitedAccess={hasUnlimitedAccess($userStore.userLevel)}
+      needsClone={needsClone}
+    />
+  {/if}
+
+  <!-- Additional repo metadata (maintainers, website, clone URLs with verification) -->
+  {#if allMaintainers.length > 0 || pageData.repoOwnerPubkey}
+    <div class="repo-metadata-section">
+      <div class="repo-contributors">
+        <span class="contributors-label">Owners & Maintainers:</span>
+        <div class="contributors-list">
+          {#if allMaintainers.length > 0}
+            {#each allMaintainers as maintainer}
+              {@const maintainerNpub = nip19.npubEncode(maintainer.pubkey)}
+              <a 
+                href={`/users/${maintainerNpub}`} 
+                class="contributor-item"
+                class:contributor-owner={maintainer.isOwner}
+              >
+                <UserBadge pubkey={maintainer.pubkey} disableLink={true} />
+                {#if maintainer.isOwner}
+                  <span class="contributor-badge owner">Owner</span>
+                {:else}
+                  <span class="contributor-badge maintainer">Maintainer</span>
+                {/if}
+              </a>
             {/each}
-          </div>
-        {/if}
-        {#if forkInfo?.isFork && forkInfo.originalRepo}
-          <span class="fork-badge">Forked from <a href={`/repos/${forkInfo.originalRepo.npub}/${forkInfo.originalRepo.repo}`}>{forkInfo.originalRepo.repo}</a></span>
-        {/if}
-      </div>
-      {#if allMaintainers.length > 0 || pageData.repoOwnerPubkey}
-        <div class="repo-contributors">
-          <span class="contributors-label">Owners & Maintainers:</span>
-          <div class="contributors-list">
-            {#if allMaintainers.length > 0}
-              {#each allMaintainers as maintainer}
-                {@const maintainerNpub = nip19.npubEncode(maintainer.pubkey)}
-                <a 
-                  href={`/users/${maintainerNpub}`} 
-                  class="contributor-item"
-                  class:contributor-owner={maintainer.isOwner}
-                >
-                  <UserBadge pubkey={maintainer.pubkey} disableLink={true} />
-                  {#if maintainer.isOwner}
-                    <span class="contributor-badge owner">Owner</span>
-                  {:else}
-                    <span class="contributor-badge maintainer">Maintainer</span>
-                  {/if}
+          {:else if pageData.repoOwnerPubkey}
+            <a href={`/users/${npub}`} class="contributor-item contributor-owner">
+              <UserBadge pubkey={pageData.repoOwnerPubkey} disableLink={true} />
+              <span class="contributor-badge owner">Owner</span>
+            </a>
+            {#if pageData.repoMaintainers}
+              {#each pageData.repoMaintainers.filter(m => m !== pageData.repoOwnerPubkey) as maintainerPubkey}
+                <a href={`/users/${nip19.npubEncode(maintainerPubkey)}`} class="contributor-item">
+                  <UserBadge pubkey={maintainerPubkey} disableLink={true} />
+                  <span class="contributor-badge maintainer">Maintainer</span>
                 </a>
               {/each}
-            {:else if pageData.repoOwnerPubkey}
-              <!-- Fallback to pageData if maintainers not loaded yet -->
-              <a href={`/users/${npub}`} class="contributor-item contributor-owner">
-                <UserBadge pubkey={pageData.repoOwnerPubkey} disableLink={true} />
-                <span class="contributor-badge owner">Owner</span>
-              </a>
-              {#if pageData.repoMaintainers}
-                {#each pageData.repoMaintainers.filter(m => m !== pageData.repoOwnerPubkey) as maintainerPubkey}
-                  <a href={`/users/${nip19.npubEncode(maintainerPubkey)}`} class="contributor-item">
-                    <UserBadge pubkey={maintainerPubkey} disableLink={true} />
-                    <span class="contributor-badge maintainer">Maintainer</span>
-                  </a>
-                {/each}
-              {/if}
             {/if}
-          </div>
+          {/if}
         </div>
-      {/if}
+      </div>
+    </div>
+  {/if}
+
+  {#if pageData.repoWebsite || (pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0) || pageData.repoLanguage || (pageData.repoTopics && pageData.repoTopics.length > 0) || forkInfo?.isFork}
+    <div class="repo-metadata-section">
       {#if pageData.repoWebsite}
         <div class="repo-website">
           <a href={pageData.repoWebsite} target="_blank" rel="noopener noreferrer">
@@ -3797,22 +3717,33 @@
           </a>
         </div>
       {/if}
+      {#if pageData.repoLanguage}
+        <span class="repo-language">
+          <img src="/icons/file-text.svg" alt="" class="icon-inline" />
+          {pageData.repoLanguage}
+        </span>
+      {/if}
+      {#if pageData.repoTopics && pageData.repoTopics.length > 0}
+        <div class="repo-topics">
+          {#each pageData.repoTopics as topic}
+            <span class="topic-tag">{topic}</span>
+          {/each}
+        </div>
+      {/if}
+      {#if forkInfo?.isFork && forkInfo.originalRepo}
+        <span class="fork-badge">Forked from <a href={`/repos/${forkInfo.originalRepo.npub}/${forkInfo.originalRepo.repo}`}>{forkInfo.originalRepo.repo}</a></span>
+      {/if}
       {#if pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0}
         <div class="repo-clone-urls">
-          <span class="clone-label">Clone:</span>
+          <span class="clone-label">Clone URLs:</span>
           {#each pageData.repoCloneUrls.slice(0, 3) as cloneUrl}
             {@const cloneVerification = verificationStatus?.cloneVerifications?.find(cv => {
-              // Match URLs more flexibly (handle trailing slashes, http/https differences)
               const normalizeUrl = (url: string) => url.replace(/\/$/, '').toLowerCase().replace(/^https?:\/\//, '');
               const normalizedCv = normalizeUrl(cv.url);
               const normalizedClone = normalizeUrl(cloneUrl);
-              const matches = normalizedCv === normalizedClone || 
-                             normalizedCv.includes(normalizedClone) || 
-                             normalizedClone.includes(normalizedCv);
-              if (matches) {
-                console.log('[Verification] Matched clone URL:', cloneUrl, 'with verification:', cv);
-              }
-              return matches;
+              return normalizedCv === normalizedClone || 
+                     normalizedCv.includes(normalizedClone) || 
+                     normalizedClone.includes(normalizedCv);
             })}
             <div class="clone-url-wrapper">
               <code class="clone-url">{cloneUrl}</code>
@@ -3834,15 +3765,9 @@
                   {/if}
                 </span>
               {:else if verificationStatus}
-                {#if verificationStatus.cloneVerifications && verificationStatus.cloneVerifications.length > 0}
-                  <span class="verification-badge unverified" title="Verification status unknown for this clone">
-                    <img src="/icons/alert-triangle.svg" alt="Unknown" class="icon-inline" />
-                  </span>
-                {:else}
-                  <span class="verification-badge unverified" title="Verification not available for this clone">
-                    <img src="/icons/alert-triangle.svg" alt="Not verified" class="icon-inline" />
-                  </span>
-                {/if}
+                <span class="verification-badge unverified" title="Verification status unknown">
+                  <img src="/icons/alert-triangle.svg" alt="Unknown" class="icon-inline" />
+                </span>
               {:else}
                 <span class="verification-badge unverified" title="Verification not checked">
                   <img src="/icons/alert-triangle.svg" alt="Not checked" class="icon-inline" />
@@ -3855,58 +3780,8 @@
           {/if}
         </div>
       {/if}
-      </div>
-      <div class="header-actions">
-        <div style="display: flex; align-items: center; gap: 0.5rem;">
-          {#if isRepoCloned === true}
-            <button 
-              onclick={copyCloneUrl} 
-              disabled={copyingCloneUrl}
-              class="clone-url-button"
-              title="Copy clone URL to clipboard"
-              style="padding: 0.5rem 1rem; font-size: 0.875rem; background: var(--button-primary, #3b82f6); color: var(--accent-text, #ffffff); border: none; border-radius: 0.25rem; cursor: pointer; display: flex; align-items: center; gap: 0.5rem;"
-            >
-              {#if copyingCloneUrl}
-                <span>Copying...</span>
-              {:else}
-                <img src="/icons/copy.svg" alt="" class="icon-inline" style="width: 1rem; height: 1rem;" />
-                <span>Clone</span>
-              {/if}
-            </button>
-          {/if}
-          {#if branches.length === 0 && !loading}
-            <div class="branch-select branch-select-empty" title="No branches available">
-              No branches detected
-            </div>
-          {:else}
-            <select bind:value={currentBranch} onchange={handleBranchChange} class="branch-select" disabled={branches.length === 0 && loading}>
-              {#if branches.length === 0}
-                <!-- Show current branch even if branches haven't loaded yet -->
-                <option value={currentBranch}>{currentBranch}{loading ? ' (loading...)' : ''}</option>
-              {:else}
-                {#each branches as branch}
-                  {@const branchName = typeof branch === 'string' ? branch : (branch as { name: string }).name}
-                  <option value={branchName}>{branchName}</option>
-                {/each}
-              {/if}
-            </select>
-          {/if}
-          {#if isMaintainer && branches.length > 0 && currentBranch && branches.length > 1}
-            {@const canDelete = defaultBranch !== null && currentBranch !== defaultBranch}
-            {#if canDelete && currentBranch}
-              <button 
-                onclick={() => currentBranch && deleteBranch(currentBranch)} 
-                class="delete-branch-button"
-                disabled={saving}
-                title="Delete current branch"
-                style="padding: 0.25rem 0.5rem; font-size: 0.875rem; background: var(--error-text, #dc2626); color: #ffffff; border: none; border-radius: 0.25rem; cursor: pointer;"
-              >×</button>
-            {/if}
-          {/if}
-        </div>
-      </div>
     </div>
-  </header>
+  {/if}
 
   <main class="repo-view">
     {#if error}
@@ -3916,57 +3791,19 @@
     {/if}
 
     <!-- Tabs -->
-    <div class="tabs">
-      <button 
-        class="tab-button" 
-        class:active={activeTab === 'discussions'}
-        onclick={() => activeTab = 'discussions'}
-      >
-        Discussions
-      </button>
-      <button 
-        class="tab-button" 
-        class:active={activeTab === 'files'}
-        onclick={() => activeTab = 'files'}
-      >
-        Files
-      </button>
-      <button 
-        class="tab-button" 
-        class:active={activeTab === 'history'}
-        onclick={() => activeTab = 'history'}
-      >
-        History
-      </button>
-      <button 
-        class="tab-button" 
-        class:active={activeTab === 'tags'}
-        onclick={() => activeTab = 'tags'}
-      >
-        Tags
-      </button>
-      <button 
-        class="tab-button" 
-        class:active={activeTab === 'issues'}
-        onclick={() => activeTab = 'issues'}
-      >
-        Issues
-      </button>
-      <button 
-        class="tab-button" 
-        class:active={activeTab === 'prs'}
-        onclick={() => activeTab = 'prs'}
-      >
-        Pull Requests
-      </button>
-      <button 
-        class="tab-button" 
-        class:active={activeTab === 'docs'}
-        onclick={() => activeTab = 'docs'}
-      >
-        Docs
-      </button>
-    </div>
+    <RepoTabs
+      activeTab={activeTab}
+      tabs={[
+        { id: 'discussions', label: 'Discussions', icon: '/icons/message-circle.svg' },
+        { id: 'files', label: 'Files', icon: '/icons/file-text.svg' },
+        { id: 'history', label: 'History', icon: '/icons/git-commit.svg' },
+        { id: 'tags', label: 'Tags', icon: '/icons/tag.svg' },
+        { id: 'issues', label: 'Issues', icon: '/icons/alert-circle.svg', count: issues.length },
+        { id: 'prs', label: 'Pull Requests', icon: '/icons/git-pull-request.svg', count: prs.length },
+        { id: 'docs', label: 'Docs', icon: '/icons/book.svg' }
+      ]}
+      onTabChange={(tab) => activeTab = tab as typeof activeTab}
+    />
 
     <div class="repo-layout">
       <!-- File Tree Sidebar -->
@@ -5216,32 +5053,22 @@
     overflow: hidden;
   }
 
-  header {
+  .repo-metadata-section {
+    padding: 0.75rem 1rem;
+    background: var(--card-bg, #ffffff);
+    border-bottom: 1px solid var(--border-color, #e0e0e0);
     display: flex;
-    flex-direction: column;
-    border-bottom: 1px solid var(--border-color);
-    background: var(--card-bg);
-  }
-  
-  .header-content {
-    display: flex;
-    flex-direction: row;
-    justify-content: space-between;
-    align-items: flex-start;
-    padding: 2rem 2rem 1.5rem 2rem;
-    gap: 2rem;
-    margin-top: 1rem;
-  }
-  
-  .header-main {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
+    flex-wrap: wrap;
     gap: 1rem;
-    min-width: 0;
-    position: relative;
+    align-items: center;
+    font-size: 0.875rem;
   }
-  
+
+  @media (min-width: 768px) {
+    .repo-metadata-section {
+      padding: 1rem 1.5rem;
+    }
+  }
 
 
   .repo-banner {
@@ -5251,6 +5078,21 @@
     background: var(--bg-secondary);
     margin-bottom: 0;
     position: relative;
+    display: none; /* Hidden on mobile by default */
+  }
+
+  .desktop-only {
+    display: none; /* Hidden on mobile */
+  }
+
+  @media (min-width: 768px) {
+    .desktop-only {
+      display: block; /* Show on desktop */
+    }
+    
+    .repo-banner {
+      display: block; /* Show on desktop */
+    }
   }
   
   .repo-banner::before {
@@ -5294,219 +5136,11 @@
     display: block;
   }
 
-  .repo-title-section {
-    display: flex;
-    align-items: flex-start;
-    gap: 1rem;
-    margin-bottom: 0.5rem;
-    width: 100%;
-  }
+  
 
-  .repo-title-text {
-    flex: 1;
-    min-width: 0; /* Allow text to shrink */
-  }
-
-  .repo-title-with-menu {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .bookmark-icon-button {
-    padding: 0.375rem;
-    background: var(--card-bg);
-    border: 2px solid var(--border-color);
-    border-radius: 0.375rem;
-    cursor: pointer;
-    color: var(--text-primary);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s ease;
-    width: 2rem;
-    height: 2rem;
-    flex-shrink: 0;
-  }
-
-  .bookmark-icon-button:hover:not(:disabled) {
-    background: var(--bg-secondary);
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
-  .bookmark-icon-button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    border-color: var(--border-light);
-  }
-
-  .bookmark-icon-button.bookmarked {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--accent-text, #ffffff);
-  }
-
-  .bookmark-icon-button.bookmarked:hover:not(:disabled) {
-    background: var(--accent-hover);
-    border-color: var(--accent-hover);
-    opacity: 1;
-  }
-
-  .bookmark-icon-button .icon-inline {
-    width: 1rem;
-    height: 1rem;
-    filter: brightness(0) saturate(100%) invert(1) !important; /* Default white for dark themes */
-    opacity: 1 !important;
-  }
-
-  /* Light theme: black icon */
-  :global([data-theme="light"]) .bookmark-icon-button .icon-inline {
-    filter: brightness(0) saturate(100%) !important; /* Black in light theme */
-    opacity: 1 !important;
-  }
-
-  /* Dark themes: white icon */
-  :global([data-theme="dark"]) .bookmark-icon-button .icon-inline,
-  :global([data-theme="black"]) .bookmark-icon-button .icon-inline {
-    filter: brightness(0) saturate(100%) invert(1) !important; /* White in dark themes */
-    opacity: 1 !important;
-  }
-
-  /* Hover: white for visibility */
-  .bookmark-icon-button:hover:not(:disabled) .icon-inline {
-    filter: brightness(0) saturate(100%) invert(1) !important;
-    opacity: 1 !important;
-  }
-
-  /* Light theme hover: keep black */
-  :global([data-theme="light"]) .bookmark-icon-button:hover:not(:disabled) .icon-inline {
-    filter: brightness(0) saturate(100%) !important;
-    opacity: 1 !important;
-  }
-
-  /* Bookmarked state: icon should be white (on accent background) */
-  .bookmark-icon-button.bookmarked .icon-inline {
-    filter: brightness(0) saturate(100%) invert(1) !important; /* White on accent background */
-    opacity: 1 !important;
-  }
-
-  .repo-title-text h1 {
-    margin: 0;
-    word-wrap: break-word;
-    color: var(--text-primary);
-    font-weight: 600;
-  }
-
-  .repo-menu-container {
-    position: relative;
-  }
-
-  .repo-menu-button {
-    padding: 0.375rem;
-    background: var(--card-bg);
-    border: 2px solid var(--border-color);
-    border-radius: 0.375rem;
-    cursor: pointer;
-    color: var(--text-primary);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s ease;
-    width: 2rem;
-    height: 2rem;
-  }
-
-  .repo-menu-button:hover {
-    background: var(--bg-secondary);
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
-  .repo-menu-button svg {
-    width: 16px;
-    height: 16px;
-  }
-
-  .repo-menu-dropdown {
-    position: absolute;
-    top: calc(100% + 0.5rem);
-    right: 0;
-    background: var(--card-bg);
-    border: 1px solid var(--border-color);
-    border-radius: 0.5rem;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    min-width: 240px;
-    white-space: nowrap;
-    z-index: 1000;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .repo-menu-item {
-    padding: 0.75rem 1rem;
-    background: transparent;
-    border: none;
-    border-bottom: 1px solid var(--border-color);
-    text-align: left;
-    cursor: pointer;
-    color: var(--text-primary);
-    font-size: 0.875rem;
-    font-family: 'IBM Plex Serif', serif;
-    transition: background 0.2s ease;
-    text-decoration: none;
-    display: block;
-    width: 100%;
-    white-space: nowrap;
-  }
-
-  .repo-menu-item:last-child {
-    border-bottom: none;
-  }
-
-  .repo-menu-item:hover:not(:disabled) {
-    background: var(--bg-secondary);
-  }
-
-  .repo-menu-item:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .repo-menu-item-danger {
-    color: var(--error-text, #dc2626);
-  }
-
-  .repo-menu-item-danger:hover:not(:disabled) {
-    background: var(--error-bg, rgba(220, 38, 38, 0.1));
-  }
-
-  .repo-image {
-    width: 80px;
-    height: 80px;
-    border-radius: 50%;
-    object-fit: cover;
-    flex-shrink: 0;
-    display: block;
-    background: var(--bg-secondary);
-    border: 3px solid var(--card-bg);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  }
   
   /* Position repo image over banner if banner exists */
-  header:has(.repo-banner) .header-content {
-    margin-top: -30px; /* Overlap banner slightly */
-    position: relative;
-    z-index: 2;
-    padding-left: 2.5rem; /* Extra padding on left to create space from banner edge */
-  }
-  
-  header:has(.repo-banner) .repo-image {
-    border-color: var(--card-bg);
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
-  }
-  
+
   /* Responsive design for smaller screens */
   .mobile-toggle-button {
     display: none; /* Hidden by default on desktop */
@@ -5534,29 +5168,8 @@
   }
 
   @media (max-width: 768px) {
-    .header-content {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 1rem;
-    }
-    
-    .header-actions {
-      width: 100%;
-      justify-content: flex-start;
-      flex-wrap: wrap;
-    }
-    
     .repo-banner {
       height: 150px;
-    }
-    
-    header:has(.repo-banner) .header-content {
-      margin-top: -30px;
-    }
-
-    .repo-image {
-      width: 60px;
-      height: 60px;
     }
 
     /* Mobile toggle button visible on narrow screens */
@@ -5595,14 +5208,6 @@
       min-height: 0;
     }
     
-    .repo-image {
-      width: 64px;
-      height: 64px;
-    }
-    
-    .repo-title-text h1 {
-      font-size: 1.5rem;
-    }
 
     /* Editor header wraps on mobile */
     .editor-header {
@@ -5666,32 +5271,6 @@
       padding: 0.75rem;
     }
 
-    /* Tab buttons responsive */
-    .tabs {
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
-      -ms-overflow-style: none;
-    }
-
-    .tabs::-webkit-scrollbar {
-      display: none;
-    }
-
-    .tab-button {
-      font-size: 0.85rem;
-      padding: 0.5rem 0.75rem;
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-
-    /* Repo menu dropdown responsive */
-    .repo-menu-dropdown {
-      right: 0;
-      left: auto;
-      min-width: 200px;
-      max-width: calc(100vw - 2rem);
-    }
 
     /* Issue and PR lists responsive */
     .issue-item, .pr-item {
@@ -5772,48 +5351,6 @@
       line-height: 1.3;
     }
 
-    /* Make tabs more readable and responsive on mobile */
-    .tabs {
-      padding: 0.5rem 0.75rem;
-      gap: 0.5rem;
-      -webkit-overflow-scrolling: touch;
-      scroll-behavior: smooth;
-      scroll-padding: 0.5rem;
-    }
-
-    .tab-button {
-      padding: 0.5rem 0.875rem;
-      font-size: 0.875rem;
-      font-weight: 500;
-      min-height: 2.5rem;
-      border-bottom-width: 3px;
-      touch-action: manipulation; /* Better touch response */
-    }
-
-    .tab-button.active {
-      font-weight: 600;
-      border-bottom-width: 3px;
-    }
-
-    /* Better visual feedback for touch */
-    .tab-button:active {
-      transform: scale(0.98);
-      transition: transform 0.1s ease;
-    }
-  }
-
-  /* Extra small screens - make tabs even more readable */
-  @media (max-width: 480px) {
-    .tabs {
-      padding: 0.5rem;
-      gap: 0.375rem;
-    }
-
-    .tab-button {
-      padding: 0.625rem 0.75rem;
-      font-size: 0.875rem;
-      min-height: 2.75rem;
-    }
   }
 
   /* Desktop: always show both file tree and editor */
@@ -5831,29 +5368,9 @@
     }
   }
 
-  .repo-image[src=""],
-  .repo-image:not([src]) {
-    display: none;
-  }
-
   .repo-banner img[src=""],
   .repo-banner img:not([src]) {
     display: none;
-  }
-
-  .repo-description-header {
-    margin: 0.25rem 0 0 0;
-    color: var(--text-secondary);
-    font-size: 0.9rem;
-    line-height: 1.4;
-    max-width: 100%;
-    word-wrap: break-word;
-  }
-
-  .repo-description-placeholder {
-    color: var(--text-secondary);
-    font-style: italic;
-    opacity: 0.8;
   }
 
   .fork-badge {
@@ -5878,13 +5395,6 @@
     opacity: 1;
   }
 
-  .repo-meta-info {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.75rem;
-    margin-top: 0.5rem;
-  }
 
   .repo-language {
     display: inline-flex;
@@ -5897,27 +5407,6 @@
 
   .repo-language .icon-inline {
     opacity: 0.9;
-  }
-
-  .repo-privacy-badge {
-    padding: 0.125rem 0.5rem;
-    border-radius: 0.25rem;
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    border: 1px solid transparent;
-  }
-
-  .repo-privacy-badge.private {
-    background: var(--error-bg);
-    color: var(--error-text);
-    border-color: var(--error-text);
-  }
-
-  .repo-privacy-badge.public {
-    background: var(--success-bg);
-    color: var(--success-text);
-    border-color: var(--success-text);
   }
 
   .repo-topics {
@@ -6073,40 +5562,6 @@
   }
 
 
-  header h1 {
-    margin: 0;
-    font-size: 1.5rem;
-    color: var(--text-primary);
-  }
-  .header-actions {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 0.75rem;
-    flex-shrink: 0;
-    flex-wrap: wrap;
-  }
-
-  .branch-select {
-    padding: 0.5rem;
-    border: 1px solid var(--input-border);
-    border-radius: 0.25rem;
-    background: var(--input-bg);
-    color: var(--text-primary);
-    font-family: 'IBM Plex Serif', serif;
-  }
-
-  .branch-select-empty {
-    padding: 0.5rem;
-    border: 1px solid var(--input-border);
-    border-radius: 0.25rem;
-    background: var(--input-bg);
-    color: var(--text-muted);
-    font-family: 'IBM Plex Serif', serif;
-    opacity: 0.7;
-    cursor: not-allowed;
-    user-select: none;
-  }
 
 
   .repo-view {
@@ -6502,65 +5957,6 @@
     background: var(--button-primary-hover);
   }
 
-  /* Tabs */
-  .tabs {
-    display: flex;
-    gap: 0.25rem;
-    padding: 0.5rem 1rem;
-    border-bottom: 1px solid var(--border-color);
-    background: var(--card-bg);
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: thin;
-    -webkit-overflow-scrolling: touch;
-    scroll-behavior: smooth;
-    position: relative;
-  }
-
-  .tabs::-webkit-scrollbar {
-    height: 6px;
-  }
-
-  .tabs::-webkit-scrollbar-track {
-    background: var(--bg-secondary);
-  }
-
-  .tabs::-webkit-scrollbar-thumb {
-    background: var(--border-color);
-    border-radius: 3px;
-  }
-
-  .tabs::-webkit-scrollbar-thumb:hover {
-    background: var(--accent);
-  }
-
-  .tab-button {
-    padding: 0.5rem 0.875rem;
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    cursor: pointer;
-    font-size: 0.875rem;
-    color: var(--text-secondary);
-    font-family: 'IBM Plex Serif', serif;
-    transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
-    white-space: nowrap;
-    flex-shrink: 0;
-    font-weight: 500;
-    border-radius: 0.25rem 0.25rem 0 0;
-  }
-
-  .tab-button:hover {
-    color: var(--text-primary);
-    background: var(--bg-secondary);
-  }
-
-  .tab-button.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
-    font-weight: 600;
-    background: var(--bg-secondary);
-  }
 
   /* File tree actions */
   .file-tree-actions {
