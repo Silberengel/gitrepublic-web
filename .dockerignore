@@ -19,3 +19,5 @@ build
 repos
 *.md
 !README.md
+!docs/
+!docs/**/*.md

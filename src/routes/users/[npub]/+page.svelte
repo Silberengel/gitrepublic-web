@@ -14,6 +14,7 @@
   import { fetchUserProfile, extractProfileData } from '$lib/utils/user-profile.js';
   import { combineRelays } from '$lib/config.js';
   import { KIND, isEphemeralKind, isReplaceableKind } from '$lib/types/nostr.js';
+  import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
 
   const npub = ($page.params as { npub?: string }).npub || '';
 
@@ -1658,6 +1659,24 @@ i   *
             <img src="/icons/copy.svg" alt="Copy" class="icon-themed" />
           </button>
         </div>
+        {#if isOwnProfile && typeof window !== 'undefined'}
+          {@const userLevel = $userStore.userLevel}
+          <div class="access-level-indicator">
+            {#if hasUnlimitedAccess(userLevel)}
+              <span class="access-badge access-unlimited" title="You have unlimited access - you can clone repositories and create new ones">
+                ✓ Unlimited Access
+              </span>
+            {:else if userLevel === 'rate_limited'}
+              <span class="access-badge access-limited" title="You have rate-limited access - you can view repositories but cannot clone or create new ones">
+                Rate-Limited Access
+              </span>
+            {:else}
+              <span class="access-badge access-none" title="You are not logged in">
+                Not Logged In
+              </span>
+            {/if}
+          </div>
+        {/if}
       </div>
 
       {#if isOwnProfile}
@@ -2474,6 +2493,53 @@ i   *
   .copy-npub-button {
     flex-shrink: 0;
     flex-grow: 0;
+  }
+
+  .access-level-indicator {
+    margin-top: 0.75rem;
+  }
+
+  .access-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.375rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    gap: 0.375rem;
+  }
+
+  .access-badge.access-unlimited {
+    background: rgba(34, 197, 94, 0.1);
+    color: #22c55e;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+  }
+
+  .access-badge.access-limited {
+    background: rgba(251, 191, 36, 0.1);
+    color: #fbbf24;
+    border: 1px solid rgba(251, 191, 36, 0.3);
+  }
+
+  .access-badge.access-none {
+    background: rgba(107, 114, 128, 0.1);
+    color: #6b7280;
+    border: 1px solid rgba(107, 114, 128, 0.3);
+  }
+
+  :global([data-theme="dark"]) .access-badge.access-unlimited {
+    background: rgba(34, 197, 94, 0.15);
+    border-color: rgba(34, 197, 94, 0.4);
+  }
+
+  :global([data-theme="dark"]) .access-badge.access-limited {
+    background: rgba(251, 191, 36, 0.15);
+    border-color: rgba(251, 191, 36, 0.4);
+  }
+
+  :global([data-theme="dark"]) .access-badge.access-none {
+    background: rgba(107, 114, 128, 0.15);
+    border-color: rgba(107, 114, 128, 0.4);
   }
 
   .profile-actions {

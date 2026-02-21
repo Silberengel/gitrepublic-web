@@ -32,25 +32,50 @@ export const load: PageLoad = async ({ params, url, parent }) => {
 
     const repoOwnerPubkey = decoded.data as string;
 
-    // Fetch repository announcement
-    const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
-    const events = await nostrClient.fetchEvents([
-      {
-        kinds: [KIND.REPO_ANNOUNCEMENT],
-        authors: [repoOwnerPubkey],
-        '#d': [repo],
-        limit: 1
+    // Check if announcement was passed from search results via sessionStorage
+    let announcement: any = null;
+    if (typeof window !== 'undefined') {
+      const repoKey = `${npub}/${repo}`;
+      const storedAnnouncement = sessionStorage.getItem(`repo_announcement_${repoKey}`);
+      if (storedAnnouncement) {
+        try {
+          announcement = JSON.parse(storedAnnouncement);
+          // Clean up after using it
+          sessionStorage.removeItem(`repo_announcement_${repoKey}`);
+        } catch {
+          // Invalid JSON, continue to fetch
+        }
       }
-    ]);
-
-    if (events.length === 0) {
-      return {
-        title: `${repo} - Repository Not Found`,
-        description: 'Repository announcement not found'
-      };
     }
 
-    const announcement = events[0];
+    // If not found in sessionStorage, fetch from Nostr (case-insensitive)
+    if (!announcement) {
+      const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+      // Fetch all announcements by this author and filter case-insensitively
+      const allEvents = await nostrClient.fetchEvents([
+        {
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          authors: [repoOwnerPubkey],
+          limit: 100
+        }
+      ]);
+
+      // Filter case-insensitively to find the matching repo
+      const repoLower = repo.toLowerCase();
+      const matchingEvents = allEvents.filter(event => {
+        const dTag = event.tags.find(t => t[0] === 'd')?.[1];
+        return dTag && dTag.toLowerCase() === repoLower;
+      });
+
+      if (matchingEvents.length === 0) {
+        return {
+          title: `${repo} - Repository Not Found`,
+          description: 'Repository announcement not found'
+        };
+      }
+
+      announcement = matchingEvents[0];
+    }
     
     // Check privacy - for private repos, we'll let the API endpoints handle access control
     // The page load function runs server-side but doesn't have access to client auth headers

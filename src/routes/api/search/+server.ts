@@ -72,7 +72,9 @@ export const GET: RequestHandler = async (event) => {
         description: string; 
         owner: string; 
         npub: string;
+        repoId?: string; // The actual repo ID (d-tag) from the announcement
         maintainers?: Array<{ pubkey: string; isOwner: boolean }>;
+        announcement?: any; // Full announcement event
       }>;
     } = {
       repos: []
@@ -559,7 +561,9 @@ export const GET: RequestHandler = async (event) => {
             description: description || '',
             owner: event.pubkey,
             npub,
-            maintainers: allMaintainers
+            repoId, // Include the actual repo ID (d-tag) for proper matching
+            maintainers: allMaintainers,
+            announcement: event // Include the full announcement event
           });
         } catch {
           // Skip if npub encoding fails

@@ -168,7 +168,7 @@ export async function verifyRelayWriteProofFromAuth(
   authHeader: string | null,
   userPubkey: string,
   relays: string[] = DEFAULT_NOSTR_RELAYS
-): Promise<{ valid: boolean; error?: string; relay?: string }> {
+): Promise<{ valid: boolean; error?: string; relay?: string; relayDown?: boolean }> {
   if (!authHeader || !authHeader.startsWith('Nostr ')) {
     return {
       valid: false,

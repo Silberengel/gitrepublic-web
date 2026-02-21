@@ -35,13 +35,15 @@
     }
   });
   let results = $state<{
-    repos: Array<{ 
+      repos: Array<{ 
       id: string; 
       name: string; 
       description: string; 
       owner: string; 
       npub: string;
+      repoId?: string; // The actual repo ID (d-tag) from the announcement
       maintainers?: Array<{ pubkey: string; isOwner: boolean }>;
+      announcement?: any; // Full announcement event
     }>;
     total: number;
   } | null>(null);
@@ -218,11 +220,27 @@
                   class="repo-item" 
                   role="button"
                   tabindex="0"
-                  onclick={() => goto(`/repos/${repo.npub}/${repo.name.toLowerCase().replace(/\s+/g, '-')}`)}
+                  onclick={() => {
+                    // Store announcement event in sessionStorage for the repo page to use
+                    // Use the actual repoId (d-tag) if available, otherwise use the name
+                    const repoPath = repo.repoId || repo.name.toLowerCase().replace(/\s+/g, '-');
+                    if (repo.announcement) {
+                      const repoKey = `${repo.npub}/${repoPath}`;
+                      sessionStorage.setItem(`repo_announcement_${repoKey}`, JSON.stringify(repo.announcement));
+                    }
+                    goto(`/repos/${repo.npub}/${repoPath}`);
+                  }}
                   onkeydown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      goto(`/repos/${repo.npub}/${repo.name.toLowerCase().replace(/\s+/g, '-')}`);
+                      // Store announcement event in sessionStorage for the repo page to use
+                      // Use the actual repoId (d-tag) if available, otherwise use the name
+                      const repoPath = repo.repoId || repo.name.toLowerCase().replace(/\s+/g, '-');
+                      if (repo.announcement) {
+                        const repoKey = `${repo.npub}/${repoPath}`;
+                        sessionStorage.setItem(`repo_announcement_${repoKey}`, JSON.stringify(repo.announcement));
+                      }
+                      goto(`/repos/${repo.npub}/${repoPath}`);
                     }
                   }}
                   style="cursor: pointer;">

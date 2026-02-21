@@ -13,10 +13,13 @@ import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { KIND } from '$lib/types/nostr.js';
 import { extractRequestContext } from '$lib/utils/api-context.js';
-import { getCachedUserLevel } from '$lib/services/security/user-level-cache.js';
+import { getCachedUserLevel, cacheUserLevel } from '$lib/services/security/user-level-cache.js';
 import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
 import logger from '$lib/services/logger.js';
 import { handleApiError, handleValidationError } from '$lib/utils/error-handler.js';
+import { verifyRelayWriteProofFromAuth, verifyRelayWriteProof } from '$lib/services/nostr/relay-write-proof.js';
+import { verifyEvent } from 'nostr-tools';
+import type { NostrEvent } from '$lib/types/nostr.js';
 
 const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
 const repoManager = new RepoManager(repoRoot);
@@ -37,10 +40,109 @@ export const POST: RequestHandler = async (event) => {
     throw error(401, 'Authentication required. Please log in to clone repositories.');
   }
 
-  // Check if user has unlimited access
-  const userLevel = getCachedUserLevel(userPubkeyHex);
-  if (!hasUnlimitedAccess(userLevel?.level)) {
-    throw error(403, 'Only users with unlimited access can clone repositories to the server.');
+  // Check if user has unlimited access (check cache first)
+  let userLevel = getCachedUserLevel(userPubkeyHex);
+  
+  logger.debug({ 
+    userPubkeyHex: userPubkeyHex.slice(0, 16) + '...',
+    cachedLevel: userLevel?.level || 'none',
+    hasUnlimitedAccess: userLevel ? hasUnlimitedAccess(userLevel.level) : false
+  }, 'Checking user access level for clone operation');
+  
+  // If cache is empty, try to verify from proof event in body, NIP-98 auth header, or return helpful error
+  if (!userLevel || !hasUnlimitedAccess(userLevel.level)) {
+    let verification: { valid: boolean; error?: string; relay?: string; relayDown?: boolean } | null = null;
+    
+    // Try to get proof event from request body first (if content-type is JSON)
+    const contentType = event.request.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      try {
+        // Clone the request to read body without consuming it (if possible)
+        // Note: Request body can only be read once, so we need to be careful
+        const bodyText = await event.request.text().catch(() => '');
+        if (bodyText) {
+          try {
+            const body = JSON.parse(bodyText);
+            if (body.proofEvent && typeof body.proofEvent === 'object') {
+              const proofEvent = body.proofEvent as NostrEvent;
+              
+              // Validate proof event signature and pubkey
+              if (verifyEvent(proofEvent) && proofEvent.pubkey === userPubkeyHex) {
+                logger.debug({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'Cache empty or expired, attempting to verify from proof event in request body');
+                verification = await verifyRelayWriteProof(proofEvent, userPubkeyHex, DEFAULT_NOSTR_RELAYS);
+              } else {
+                logger.warn({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'Invalid proof event in request body');
+              }
+            }
+          } catch (parseErr) {
+            // Not valid JSON or missing proofEvent - continue to check auth header
+            logger.debug({ error: parseErr }, 'Request body is not valid JSON or missing proofEvent');
+          }
+        }
+      } catch (err) {
+        // Body reading failed - continue to check auth header
+        logger.debug({ error: err }, 'Failed to read request body, checking auth header');
+      }
+    }
+    
+    // If no proof event in body, try NIP-98 auth header
+    if (!verification) {
+      const authHeader = event.request.headers.get('authorization') || event.request.headers.get('Authorization');
+      
+      if (authHeader) {
+        logger.debug({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'Cache empty or expired, attempting to verify from NIP-98 auth header');
+        verification = await verifyRelayWriteProofFromAuth(authHeader, userPubkeyHex, DEFAULT_NOSTR_RELAYS);
+      }
+    }
+    
+    // Process verification result
+    if (verification) {
+      try {
+        if (verification.valid) {
+          // User has write access - cache unlimited level
+          cacheUserLevel(userPubkeyHex, 'unlimited');
+          logger.info({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'Verified unlimited access from proof event');
+          userLevel = getCachedUserLevel(userPubkeyHex); // Get the cached value
+        } else {
+          // Check if relays are down
+          if (verification.relayDown) {
+            // Relays are down - check cache again (might have been cached from previous request)
+            userLevel = getCachedUserLevel(userPubkeyHex);
+            if (!userLevel || !hasUnlimitedAccess(userLevel.level)) {
+              logger.warn({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...', error: verification.error }, 'Relays down and no cached unlimited access');
+              throw error(503, 'Relays are temporarily unavailable and no cached access level found. Please verify your access level first by visiting your profile page.');
+            }
+          } else {
+            // Verification failed - user doesn't have write access
+            logger.warn({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...', error: verification.error }, 'User does not have unlimited access');
+            throw error(403, `Only users with unlimited access can clone repositories to the server. ${verification.error || 'Please verify you can write to at least one default Nostr relay.'}`);
+          }
+        }
+      } catch (err) {
+        // If it's already an error response, re-throw it
+        if (err && typeof err === 'object' && 'status' in err) {
+          throw err;
+        }
+        logger.error({ error: err, userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'Error verifying user level');
+        // Fall through to check cache one more time
+        userLevel = getCachedUserLevel(userPubkeyHex);
+      }
+    } else {
+      // No proof event or auth header - check if we have any cached level
+      if (!userLevel) {
+        logger.warn({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'No cached user level and no proof event or NIP-98 auth header');
+        throw error(403, 'Only users with unlimited access can clone repositories to the server. Please verify your access level first by visiting your profile page or ensuring you can write to at least one default Nostr relay.');
+      }
+    }
+  }
+  
+  // Final check - user must have unlimited access
+  if (!userLevel || !hasUnlimitedAccess(userLevel.level)) {
+    logger.warn({ 
+      userPubkeyHex: userPubkeyHex.slice(0, 16) + '...', 
+      cachedLevel: userLevel?.level || 'none' 
+    }, 'User does not have unlimited access');
+    throw error(403, 'Only users with unlimited access can clone repositories to the server. Please verify you can write to at least one default Nostr relay.');
   }
 
   try {
@@ -57,19 +159,68 @@ export const POST: RequestHandler = async (event) => {
       });
     }
 
-    // Fetch repository announcement
-    const events = await nostrClient.fetchEvents([
-      {
-        kinds: [KIND.REPO_ANNOUNCEMENT],
-        authors: [repoOwnerPubkey],
-        '#d': [repo],
-        limit: 1
-      }
-    ]);
+    // Fetch repository announcement (case-insensitive)
+    // Note: Nostr d-tag filters are case-sensitive, so we fetch all announcements by the author
+    // and filter case-insensitively in JavaScript
+    logger.debug({ npub, repo, repoOwnerPubkey: repoOwnerPubkey.slice(0, 16) + '...' }, 'Fetching repository announcement from Nostr (case-insensitive)');
+    
+    let authorAnnouncements: NostrEvent[];
+    try {
+      authorAnnouncements = await nostrClient.fetchEvents([
+        {
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          authors: [repoOwnerPubkey],
+          limit: 100 // Fetch more to ensure we find the repo even if author has many repos
+        }
+      ]);
+      
+      logger.debug({ 
+        npub, 
+        repo, 
+        authorAnnouncementCount: authorAnnouncements.length,
+        eventIds: authorAnnouncements.map(e => e.id)
+      }, 'Fetched repository announcements by author');
+    } catch (err) {
+      logger.error({ 
+        error: err, 
+        npub, 
+        repo, 
+        repoOwnerPubkey: repoOwnerPubkey.slice(0, 16) + '...' 
+      }, 'Error fetching repository announcement from Nostr');
+      throw handleApiError(
+        err instanceof Error ? err : new Error(String(err)),
+        { operation: 'cloneRepo', npub, repo },
+        'Failed to fetch repository announcement from Nostr relays. Please check that the repository exists and the relays are accessible.'
+      );
+    }
+
+    // Filter case-insensitively to find the matching repo
+    const repoLower = repo.toLowerCase();
+    const events = authorAnnouncements.filter(event => {
+      const dTag = event.tags.find(t => t[0] === 'd')?.[1];
+      return dTag && dTag.toLowerCase() === repoLower;
+    });
 
     if (events.length === 0) {
+      const dTags = authorAnnouncements
+        .map(e => e.tags.find(t => t[0] === 'd')?.[1])
+        .filter(Boolean);
+      
+      logger.warn({ 
+        npub, 
+        repo, 
+        repoOwnerPubkey: repoOwnerPubkey.slice(0, 16) + '...',
+        authorAnnouncementCount: authorAnnouncements.length,
+        authorRepos: dTags,
+        searchedRepo: repo
+      }, 'Repository announcement not found in Nostr (case-insensitive search)');
+      
+      const errorMessage = authorAnnouncements.length > 0
+        ? `Repository announcement not found in Nostr for ${npub}/${repo}. Found ${authorAnnouncements.length} other repository announcement(s) by this author. Please verify the repository name is correct.`
+        : `Repository announcement not found in Nostr for ${npub}/${repo}. Please verify that the repository exists and has been announced on Nostr relays.`;
+      
       throw handleValidationError(
-        'Repository announcement not found in Nostr',
+        errorMessage,
         { operation: 'cloneRepo', npub, repo }
       );
     }

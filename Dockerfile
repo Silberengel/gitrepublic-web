@@ -45,6 +45,8 @@ RUN npm ci --only=production
 # Copy built application from builder
 COPY --from=builder /app/build ./build
 COPY --from=builder /app/package.json ./
+# Copy docs directory for documentation pages
+COPY --from=builder /app/docs ./docs
 
 # Create directory for git repositories
 RUN mkdir -p /repos && chmod 755 /repos
@@ -56,7 +58,8 @@ RUN mkdir -p /app/logs && chmod 755 /app/logs
 # Using a dedicated user (not generic 'nodejs') is better security practice
 RUN addgroup -g 1001 -S gitrepublic && \
     adduser -S gitrepublic -u 1001 -G gitrepublic && \
-    chown -R gitrepublic:gitrepublic /app /repos /app/logs
+    chown -R gitrepublic:gitrepublic /app /repos /app/logs && \
+    chown -R gitrepublic:gitrepublic /app/docs
 
 # Switch to non-root user
 USER gitrepublic
