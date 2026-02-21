@@ -4,6 +4,10 @@
   import { nip19 } from 'nostr-tools';
   import type { ExternalIssue, ExternalPullRequest } from '$lib/services/git-platforms/git-platform-fetcher.js';
   import { userStore } from '$lib/stores/user-store.js';
+  import { fetchUserProfile } from '$lib/utils/user-profile.js';
+  import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
+  import type { NostrEvent } from '$lib/types/nostr.js';
+  import { goto } from '$app/navigation';
 
   let loading = $state(true);
   let error = $state<string | null>(null);
@@ -21,6 +25,9 @@
   let issues = $state<ExternalIssue[]>([]);
   let pullRequests = $state<ExternalPullRequest[]>([]);
   let activeTab = $state<'issues' | 'prs' | 'all'>('all');
+  let profileEvent = $state<NostrEvent | null>(null);
+  let profileData = $state<any>(null);
+  let profileTags = $state<Array<{ name: string; value: string }>>([]);
 
   const PLATFORM_NAMES: Record<string, string> = {
     github: 'GitHub',
@@ -35,7 +42,10 @@
   onMount(async () => {
     await loadUserPubkey();
     if (userPubkeyHex) {
-      await loadDashboard();
+      await Promise.all([
+        loadDashboard(),
+        loadProfile()
+      ]);
     } else {
       loading = false;
       error = 'Please connect your NIP-07 extension to view the dashboard';
@@ -98,6 +108,34 @@
       console.error('Error loading dashboard:', err);
     } finally {
       loading = false;
+    }
+  }
+
+  async function loadProfile() {
+    if (!userPubkeyHex) return;
+
+    try {
+      // Fetch user profile (kind 0) - check cache first
+      profileEvent = await fetchUserProfile(userPubkeyHex, DEFAULT_NOSTR_RELAYS);
+      
+      if (profileEvent) {
+        // Try to parse JSON content
+        try {
+          profileData = JSON.parse(profileEvent.content);
+        } catch {
+          profileData = null;
+        }
+        
+        // Store all tags
+        profileTags = profileEvent.tags
+          .filter(t => t.length > 0 && t[0])
+          .map(t => ({
+            name: t[0],
+            value: t.slice(1).join(', ')
+          }));
+      }
+    } catch (err) {
+      console.warn('Failed to load profile:', err);
     }
   }
 
@@ -188,7 +226,16 @@
       <h2>No items found</h2>
       <p>Configure git platform forwarding in your messaging preferences to see issues and pull requests here.</p>
       {#if userPubkeyHex}
-        <p>Go to your <a href="/users/{nip19.npubEncode(userPubkeyHex)}">profile</a> to configure platforms.</p>
+        <p>
+          <button 
+            type="button"
+            onclick={() => goto('/settings/connections')}
+            class="settings-link-button"
+          >
+            Open Settings → Connections
+          </button>
+          to configure platforms.
+        </p>
       {/if}
     </div>
   {:else}
@@ -293,10 +340,55 @@
                 {/each}
                 {#if item.labels.length > 5}
                   <span class="more-labels">+{item.labels.length - 5} more</span>
-                {/if}
+      {/if}
+    </div>
+  {/if}
+
+  <!-- Full Profile Event Display -->
+  {#if profileEvent && !loading}
+    <section class="profile-event-section">
+      <h2>Your Profile Event (Kind 0)</h2>
+      
+      <!-- Profile Data from JSON (if available) -->
+      {#if profileData}
+        <div class="profile-data-section">
+          <h3>Profile Data (JSON)</h3>
+          <pre class="profile-json"><code>{JSON.stringify(profileData, null, 2)}</code></pre>
+        </div>
+      {/if}
+      
+      <!-- Profile Tags -->
+      {#if profileTags.length > 0}
+        <div class="profile-tags-section">
+          <h3>Profile Tags</h3>
+          <div class="tags-list">
+            {#each profileTags as tag}
+              <div class="tag-item">
+                <span class="tag-name">{tag.name}</span>
+                <span class="tag-value">{tag.value}</span>
               </div>
-            {/if}
+            {/each}
           </div>
+        </div>
+      {/if}
+      
+      <!-- Full Event JSON -->
+      <div class="profile-event-json">
+        <h3>Full Event JSON</h3>
+        <pre class="event-json"><code>{JSON.stringify({
+          id: profileEvent.id,
+          pubkey: profileEvent.pubkey,
+          created_at: profileEvent.created_at,
+          kind: profileEvent.kind,
+          tags: profileEvent.tags,
+          content: profileEvent.content,
+          sig: profileEvent.sig
+        }, null, 2)}</code></pre>
+      </div>
+    </section>
+  {/if}
+
+</div>
 
           <div class="item-actions">
             <a 
@@ -624,12 +716,103 @@
     color: var(--text-primary);
   }
 
-  .empty-state a {
-    color: var(--accent);
+  .settings-link-button {
+    background: var(--accent);
+    color: var(--accent-text, #ffffff);
+    border: none;
+    border-radius: 6px;
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background 0.2s;
     text-decoration: none;
+    display: inline-block;
   }
 
-  .empty-state a:hover {
-    text-decoration: underline;
+  .settings-link-button:hover {
+    background: var(--accent-dark);
+  }
+
+  .profile-event-section {
+    margin-top: 3rem;
+    padding: 1.5rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+  }
+
+  .profile-event-section h2 {
+    margin: 0 0 1.5rem 0;
+    font-size: 1.5rem;
+    color: var(--text-primary);
+  }
+
+  .profile-event-section h3 {
+    margin: 0 0 0.75rem 0;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+  }
+
+  .profile-data-section,
+  .profile-tags-section,
+  .profile-event-json {
+    margin-bottom: 2rem;
+  }
+
+  .profile-data-section:last-child,
+  .profile-tags-section:last-child,
+  .profile-event-json:last-child {
+    margin-bottom: 0;
+  }
+
+  .profile-json,
+  .event-json {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 1rem;
+    overflow-x: auto;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+
+  .profile-json code,
+  .event-json code {
+    color: var(--text-primary);
+    white-space: pre;
+  }
+
+  .tags-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .tag-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 0.75rem;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+  }
+
+  .tag-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    min-width: 120px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.9rem;
+  }
+
+  .tag-value {
+    flex: 1;
+    color: var(--text-secondary);
+    word-break: break-all;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.9rem;
   }
 </style>

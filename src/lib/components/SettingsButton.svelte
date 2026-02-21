@@ -1,19 +1,25 @@
 <script lang="ts">
-  import SettingsModal from './SettingsModal.svelte';
+  import { goto } from '$app/navigation';
   
-  let showSettings = $state(false);
+  interface Props {
+    initialTab?: 'general' | 'git-setup' | 'connections';
+  }
+  
+  let { initialTab = 'general' }: Props = $props();
+  
+  function openSettings() {
+    goto(`/settings/${initialTab}`);
+  }
 </script>
 
 <button 
   class="settings-button" 
-  onclick={() => showSettings = true}
+  onclick={openSettings}
   title="Settings"
   aria-label="Settings"
 >
   <img src="/icons/settings.svg" alt="Settings" class="settings-icon" />
 </button>
-
-<SettingsModal isOpen={showSettings} onClose={() => showSettings = false} />
 
 <style>
   .settings-button {

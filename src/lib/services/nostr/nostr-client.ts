@@ -35,6 +35,10 @@ function getDeduplicationKey(event: NostrEvent): string {
     const dTag = event.tags.find(t => t[0] === 'd')?.[1] || '';
     return `${event.kind}:${event.pubkey}:${dTag}`;
   }
+  // Special handling for gitrepublic-write-proof kind 24 events - treat as replaceable
+  if (event.kind === KIND.PUBLIC_MESSAGE && event.content && event.content.includes('gitrepublic-write-proof')) {
+    return `24:${event.pubkey}:write-proof`;
+  }
   return event.id;
 }
 
@@ -850,7 +854,11 @@ export class NostrClient {
           ws.onerror = () => {
             conn.messageHandlers.delete(subscriptionId);
             if (originalOnError) {
-              originalOnError.call(wsRef, new Event('error'));
+              // Create an Event-like object for Node.js compatibility
+              const errorEvent = typeof Event !== 'undefined' 
+                ? new Event('error')
+                : ({ type: 'error', target: wsRef } as unknown as Event);
+              originalOnError.call(wsRef, errorEvent);
             }
             if (!resolved) {
               resolveOnce([]);
@@ -861,7 +869,11 @@ export class NostrClient {
           ws.onclose = () => {
             conn.messageHandlers.delete(subscriptionId);
             if (originalOnClose) {
-              originalOnClose.call(wsRef, new CloseEvent('close'));
+              // Create a CloseEvent-like object for Node.js compatibility
+              const closeEvent = typeof CloseEvent !== 'undefined' 
+                ? new CloseEvent('close')
+                : ({ type: 'close', code: 1000, reason: '', wasClean: true } as unknown as CloseEvent);
+              originalOnClose.call(wsRef, closeEvent);
             }
             // If we haven't resolved yet, resolve with what we have
             if (!resolved) {

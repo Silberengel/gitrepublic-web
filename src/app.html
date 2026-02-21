@@ -7,6 +7,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script>
       // Apply theme immediately to prevent flash
+      // Use localStorage as quick fallback, layout will load proper theme from IndexedDB
       (function() {
         const savedTheme = localStorage.getItem('theme');
         if (savedTheme === 'gitrepublic-light') {

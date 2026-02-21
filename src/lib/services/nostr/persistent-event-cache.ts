@@ -194,13 +194,56 @@ export class PersistentEventCache {
 
       // Store events (only latest for replaceable kinds)
       const latestByKey = new Map<string, NostrEvent>();
+      const writeProofPubkeys = new Set<string>(); // Track pubkeys with write-proof events
+      
       for (const event of events) {
-        const key = REPLACEABLE_KINDS.includes(event.kind)
-          ? `${event.kind}:${event.pubkey}`
-          : event.id;
+        // Special handling for gitrepublic-write-proof kind 24 events - treat as replaceable
+        let key: string;
+        if (REPLACEABLE_KINDS.includes(event.kind)) {
+          key = `${event.kind}:${event.pubkey}`;
+        } else if (event.kind === KIND.PUBLIC_MESSAGE && event.content && event.content.includes('gitrepublic-write-proof')) {
+          key = `24:${event.pubkey}:write-proof`;
+          writeProofPubkeys.add(event.pubkey);
+        } else {
+          key = event.id;
+        }
         const existing = latestByKey.get(key);
         if (!existing || event.created_at > existing.created_at) {
           latestByKey.set(key, event);
+        }
+      }
+
+      // Clean up old write-proof events for pubkeys that have new ones
+      if (writeProofPubkeys.size > 0) {
+        for (const pubkey of writeProofPubkeys) {
+          const key = `24:${pubkey}:write-proof`;
+          const newestEvent = latestByKey.get(key);
+          if (newestEvent) {
+            // Find and delete all older write-proof events for this pubkey
+            const pubkeyIndex = eventStore.index('pubkey');
+            const cursor = pubkeyIndex.openCursor(IDBKeyRange.only(pubkey));
+            await new Promise<void>((resolve) => {
+              cursor.onsuccess = (e) => {
+                const c = (e.target as IDBRequest<IDBCursorWithValue>).result;
+                if (c) {
+                  const cached = c.value as CachedEvent;
+                  const evt = cached.event;
+                  // Delete if it's an old write-proof event (not the newest one)
+                  if (evt.kind === KIND.PUBLIC_MESSAGE && 
+                      evt.content && 
+                      evt.content.includes('gitrepublic-write-proof') &&
+                      evt.id !== newestEvent.id &&
+                      evt.created_at < newestEvent.created_at) {
+                    c.delete();
+                  }
+                  c.continue();
+                } else {
+                  resolve();
+                }
+              };
+              cursor.onerror = () => resolve();
+            });
+          }
         }
       }
 

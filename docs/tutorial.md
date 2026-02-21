@@ -728,6 +728,83 @@ git commit -m "Add user authentication with NIP-07 support
 
 ---
 
+## User Profiles and Payment Targets
+
+GitRepublic displays full user profiles with support for payment targets using NIP-A3 (kind 10133).
+
+### Viewing User Profiles
+
+1. Navigate to a user's profile page: `/users/{npub}`
+2. View their repositories, profile information, and payment targets
+3. Profiles support both old JSON format (in content) and new tags format
+
+### Payment Targets (NIP-A3)
+
+Payment targets allow users to specify how they want to receive payments using the `payto://` URI scheme (RFC-8905).
+
+#### Supported Payment Types
+
+- **Lightning**: Lightning Network addresses (e.g., `user@wallet.example.com`)
+- **Bitcoin**: Bitcoin addresses
+- **Ethereum**: Ethereum addresses
+- **Nano**: Nano addresses
+- **Monero**: Monero addresses
+- And more (see [NIP-A3 documentation](./NIP-A3.md))
+
+#### How Payment Targets Work
+
+GitRepublic merges payment information from multiple sources:
+
+1. **NIP-01 (kind 0)**: Lightning addresses from `lud16` tags or JSON `lud16` field
+2. **NIP-A3 (kind 10133)**: All payment targets from `payto` tags
+
+The system:
+- Normalizes addresses (lowercase) for deduplication
+- Merges lightning addresses from both sources
+- Displays all payment targets with `payto://` URIs
+- Provides copy buttons for easy sharing
+
+#### Creating Payment Target Events
+
+To add payment targets to your profile, publish a kind 10133 event:
+
+```json
+{
+  "kind": 10133,
+  "content": "",
+  "tags": [
+    ["payto", "lightning", "user@wallet.example.com"],
+    ["payto", "bitcoin", "bc1qxq66e0t8d7ugdecwnmv58e90tpry23nc84pg9k"]
+  ],
+  "created_at": 1234567890
+}
+```
+
+#### API Access
+
+Fetch user profiles with payment targets via the API:
+
+```bash
+GET /api/users/{npub}/profile
+```
+
+Response includes:
+- Full profile event (kind 0)
+- Payment targets array with `payto://` URIs
+- Payment event (kind 10133) if available
+
+#### CLI Access
+
+The GitRepublic CLI automatically fetches payment targets when fetching profiles:
+
+```bash
+gitrep profile fetch npub1...
+```
+
+See [NIP-A3 documentation](./NIP-A3.md) for complete details.
+
+---
+
 ## Advanced Topics
 
 ### NIP-34 Specification

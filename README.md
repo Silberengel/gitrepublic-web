@@ -89,7 +89,10 @@ All three interfaces use the same underlying Nostr-based authentication and repo
 - **Tag Management**: Create and view git tags
 - **README Rendering**: Automatic markdown rendering for README files
 - **Search**: Search repositories by name, description, or author
-- **User Profiles**: View user repositories and activity
+- **User Profiles**: View user repositories and activity with full profile event support
+  - Supports both old JSON format (in content) and new tags format
+  - Displays payment targets (NIP-A3 kind 10133) with payto:// URIs
+  - Merges and deduplicates lightning addresses from NIP-01 (lud16) and kind 10133
 - **Raw File View**: Direct access to raw file content
 - **Download Repository**: Download repositories as ZIP archives
 - **OpenGraph Metadata**: Rich social media previews with repository images and banners
@@ -265,6 +268,11 @@ This project uses the following Nostr event kinds. For complete JSON examples an
 - **10002**: Relay list metadata (NIP-65, for relay discovery)
 - **24**: Public message (NIP-24, for relay write proof)
 - **5**: Event deletion request (NIP-09)
+- **10133**: Payment targets (NIP-A3, payto:// URI scheme)
+  - Replaceable event kind for payment and tip invocations
+  - Tags: `payto` (type, authority, optional extras)
+  - Supports lightning, bitcoin, nano, monero, ethereum, and other payment types
+  - See [docs/NIP-A3.md](./docs/NIP-A3.md) for complete documentation
 
 ### Custom Event Kinds
 
@@ -519,6 +527,7 @@ src/
 
 - [Architecture FAQ](./docs/ARCHITECTURE_FAQ.md) - Answers to common architecture questions
 - [NIP Compliance](./docs/NIP_COMPLIANCE.md) - Complete event kind reference with JSON examples
+- [NIP-A3: Payment Targets](./docs/NIP-A3.md) - Payment targets (payto://) support and documentation
 - [Security Documentation](./docs/SECURITY.md) - Security features and considerations
 - [CLI Documentation](./gitrepublic-cli/README.md) - Complete CLI usage guide
 - [Enterprise Mode](./k8s/ENTERPRISE_MODE.md) - Kubernetes deployment guide

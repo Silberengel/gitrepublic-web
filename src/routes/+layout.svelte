@@ -17,7 +17,7 @@
   let { children }: { children: Snippet } = $props();
 
   // Theme management - default to gitrepublic-dark (purple)
-  let theme: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black' = 'gitrepublic-dark';
+  let theme = $state<'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black'>('gitrepublic-dark');
   
   // User level checking state
   let checkingUserLevel = $state(false);
@@ -37,27 +37,38 @@
   let pendingTransfers = $state<PendingTransfer[]>([]);
   let dismissedTransfers = $state<Set<string>>(new Set());
 
-  onMount(async () => {
+  // Load theme on mount and watch for changes
+  onMount(() => {
     // Only run client-side code
     if (typeof window === 'undefined') return;
     
-    // Load theme from settings store
-    try {
-      const settings = await settingsStore.getSettings();
-      theme = settings.theme;
-    } catch (err) {
-      console.warn('Failed to load theme from settings, using default:', err);
-      // Fallback to localStorage for migration
-      const savedTheme = localStorage.getItem('theme') as 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black' | null;
-      if (savedTheme === 'gitrepublic-light' || savedTheme === 'gitrepublic-dark' || savedTheme === 'gitrepublic-black') {
-        theme = savedTheme;
-        // Migrate to settings store
-        settingsStore.setSetting('theme', theme).catch(console.error);
-      } else {
-        theme = 'gitrepublic-dark';
+    // Load theme from settings store (async)
+    (async () => {
+      try {
+        const settings = await settingsStore.getSettings();
+        theme = settings.theme;
+        themeLoaded = true;
+        applyTheme(theme);
+        // Also sync to localStorage for app.html flash prevention
+        localStorage.setItem('theme', theme);
+      } catch (err) {
+        console.warn('Failed to load theme from settings, using default:', err);
+        // Fallback to localStorage for migration
+        const savedTheme = localStorage.getItem('theme') as 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black' | null;
+        if (savedTheme === 'gitrepublic-light' || savedTheme === 'gitrepublic-dark' || savedTheme === 'gitrepublic-black') {
+          theme = savedTheme;
+          themeLoaded = true;
+          applyTheme(theme);
+          // Migrate to settings store
+          settingsStore.setSetting('theme', theme).catch(console.error);
+        } else {
+          theme = 'gitrepublic-dark';
+          themeLoaded = true;
+          applyTheme(theme);
+          localStorage.setItem('theme', theme);
+        }
       }
-    }
-    applyTheme();
+    })();
     
     // Update activity on mount (if user is logged in)
     // Session expiry is handled by user store initialization and NavBar
@@ -89,14 +100,28 @@
     
     window.addEventListener('pendingTransfers', handlePendingTransfersEvent);
     
+    // Listen for theme changes from SettingsModal
+    const handleThemeChanged = (event: Event) => {
+      const customEvent = event as CustomEvent<{ theme: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black' }>;
+      if (customEvent.detail?.theme) {
+        theme = customEvent.detail.theme;
+        // Sync to localStorage for app.html flash prevention
+        localStorage.setItem('theme', theme);
+        // Theme will be applied via $effect
+      }
+    };
+    window.addEventListener('themeChanged', handleThemeChanged);
+    
     // Session expiry checking is handled by:
     // 1. User store initialization (checks on load)
     // 2. NavBar component (checks on mount and periodically)
     // 3. Splash page (+page.svelte) (checks on mount)
     // No need for redundant checks here
     
+    // Return cleanup function
     return () => {
       window.removeEventListener('pendingTransfers', handlePendingTransfersEvent);
+      window.removeEventListener('themeChanged', handleThemeChanged);
     };
   });
   
@@ -180,23 +205,38 @@
     pendingTransfers = pendingTransfers.filter(t => t.eventId !== eventId);
   }
 
-  function applyTheme() {
+  function applyTheme(newTheme?: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black') {
+    const themeToApply = newTheme || theme;
+    // Only run client-side
+    if (typeof window === 'undefined') return;
+    
     // Remove all theme attributes first
     document.documentElement.removeAttribute('data-theme');
     document.documentElement.removeAttribute('data-theme-light');
     document.documentElement.removeAttribute('data-theme-black');
     
     // Apply the selected theme
-    if (theme === 'gitrepublic-light') {
+    if (themeToApply === 'gitrepublic-light') {
       document.documentElement.setAttribute('data-theme', 'light');
-    } else if (theme === 'gitrepublic-dark') {
+    } else if (themeToApply === 'gitrepublic-dark') {
       document.documentElement.setAttribute('data-theme', 'dark');
-    } else if (theme === 'gitrepublic-black') {
+    } else if (themeToApply === 'gitrepublic-black') {
       document.documentElement.setAttribute('data-theme', 'black');
     }
+    
     // Save to settings store (async, don't await)
-    settingsStore.setSetting('theme', theme).catch(console.error);
+    if (newTheme) {
+      settingsStore.setSetting('theme', themeToApply).catch(console.error);
+    }
   }
+  
+  // Watch for theme changes and apply them (but only after initial load)
+  let themeLoaded = $state(false);
+  $effect(() => {
+    if (typeof window !== 'undefined' && themeLoaded) {
+      applyTheme(theme);
+    }
+  });
 
   function toggleTheme() {
     // Cycle through themes: gitrepublic-dark -> gitrepublic-light -> gitrepublic-black -> gitrepublic-dark
@@ -207,7 +247,7 @@
     } else {
       theme = 'gitrepublic-dark';
     }
-    applyTheme();
+    // Theme change will be applied via $effect
   }
 
   // Provide theme context to child components
