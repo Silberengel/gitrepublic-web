@@ -23,8 +23,6 @@
   let loadingLocal = $state(false);
   let error = $state<string | null>(null);
   let forkCounts = $state<Map<string, number>>(new Map());
-  let searchQuery = $state('');
-  let showOnlyMyContacts = $state(false);
   let userPubkey = $state<string | null>(null);
   let userPubkeyHex = $state<string | null>(null);
   let contactPubkeys = $state<Set<string>>(new Set());
@@ -629,94 +627,6 @@
     return urls;
   }
 
-  function performSearch() {
-    if (!searchQuery.trim()) {
-      registeredRepos = [...allRegisteredRepos];
-      localRepos = [...allLocalRepos];
-      return;
-    }
-
-    const query = searchQuery.trim().toLowerCase();
-
-    // Search registered repos
-    let registeredToSearch = allRegisteredRepos;
-    if (showOnlyMyContacts && contactPubkeys.size > 0) {
-      registeredToSearch = allRegisteredRepos.filter(item => {
-        const event = item.event;
-        // Check if owner is in contacts
-        if (contactPubkeys.has(event.pubkey)) return true;
-        
-        // Check if any maintainer is in contacts
-        const maintainerTags = event.tags.filter((t: string[]) => t[0] === 'maintainers');
-        for (const tag of maintainerTags) {
-          for (let i = 1; i < tag.length; i++) {
-            let maintainerPubkey = tag[i];
-            try {
-              const decoded = nip19.decode(maintainerPubkey);
-              if (decoded.type === 'npub') {
-                maintainerPubkey = decoded.data as string;
-              }
-            } catch {
-              // Assume it's already a hex pubkey
-            }
-            if (contactPubkeys.has(maintainerPubkey)) return true;
-          }
-        }
-        return false;
-      });
-    }
-
-    const registeredResults: Array<{ item: typeof allRegisteredRepos[0]; score: number }> = [];
-    for (const item of registeredToSearch) {
-      const repo = item.event;
-      let score = 0;
-      
-      const name = getRepoName(repo).toLowerCase();
-      const dTag = repo.tags.find((t: string[]) => t[0] === 'd')?.[1]?.toLowerCase() || '';
-      const description = getRepoDescription(repo).toLowerCase();
-      
-      if (name.includes(query)) score += 100;
-      if (dTag.includes(query)) score += 100;
-      if (description.includes(query)) score += 30;
-      
-      if (score > 0) {
-        registeredResults.push({ item, score });
-      }
-    }
-    
-    registeredResults.sort((a, b) => b.score - a.score || b.item.event.created_at - a.item.event.created_at);
-    registeredRepos = registeredResults.map(r => r.item);
-    
-    // Search local repos
-    const localResults: Array<{ item: typeof allLocalRepos[0]; score: number }> = [];
-    for (const item of allLocalRepos) {
-      let score = 0;
-      const repoName = item.repoName.toLowerCase();
-      const announcement = item.announcement;
-      
-      if (repoName.includes(query)) score += 100;
-      if (announcement) {
-        const name = getRepoName(announcement).toLowerCase();
-        const description = getRepoDescription(announcement).toLowerCase();
-        if (name.includes(query)) score += 100;
-        if (description.includes(query)) score += 30;
-      }
-      
-      if (score > 0) {
-        localResults.push({ item, score });
-      }
-    }
-    
-    localResults.sort((a, b) => b.score - a.score || b.item.lastModified - a.item.lastModified);
-    localRepos = localResults.map(r => r.item);
-  }
-
-  // Reactive search when query or filter changes
-  $effect(() => {
-    if (!loading) {
-      performSearch();
-    }
-  });
 </script>
 
 <svelte:head>
@@ -814,28 +724,6 @@
       </button>
     </div>
 
-    <div class="search-section">
-      <div class="search-bar-container">
-        <input
-          type="text"
-          bind:value={searchQuery}
-          placeholder="Search by name, d-tag, description..."
-          class="search-input"
-          disabled={loading}
-          oninput={performSearch}
-        />
-      </div>
-      {#if isNIP07Available() && userPubkey}
-        <label class="filter-checkbox">
-          <input
-            type="checkbox"
-            bind:checked={showOnlyMyContacts}
-            onchange={performSearch}
-          />
-          <span>Show only my repos and those of my contacts</span>
-        </label>
-      {/if}
-    </div>
 
     {#if error}
       <div class="error">
