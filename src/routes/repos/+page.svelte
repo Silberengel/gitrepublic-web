@@ -35,6 +35,13 @@
   let myRepos = $state<Array<{ event: NostrEvent; npub: string; repoName: string; transferred?: boolean; currentOwner?: string }>>([]);
   let loadingMyRepos = $state(false);
 
+  // Most Favorited Repositories
+  let mostFavoritedRepos = $state<Array<{ event: NostrEvent; npub: string; repoName: string; favoriteCount: number }>>([]);
+  let loadingMostFavorited = $state(false);
+  let mostFavoritedPage = $state(0);
+  let mostFavoritedCache: { data: typeof mostFavoritedRepos; timestamp: number } | null = null;
+  const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
   import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
   const forkCountService = new ForkCountService(DEFAULT_NOSTR_RELAYS);
 
@@ -44,6 +51,7 @@
     await loadRepos();
     await loadUserAndContacts();
     await loadMyRepos();
+    await loadMostFavoritedRepos();
   });
 
   // Reload repos when page becomes visible (e.g., after returning from another page)
@@ -411,6 +419,133 @@
     goto(`/signup?npub=${encodeURIComponent(npub)}&repo=${encodeURIComponent(repo)}`);
   }
 
+  async function loadMostFavoritedRepos() {
+    // Check cache first
+    if (mostFavoritedCache && Date.now() - mostFavoritedCache.timestamp < CACHE_TTL) {
+      updateMostFavoritedPage();
+      return;
+    }
+
+    loadingMostFavorited = true;
+    try {
+      // Fetch up to 1000 bookmark events (kind 10003)
+      const bookmarkEvents = await nostrClient.fetchEvents([
+        {
+          kinds: [KIND.BOOKMARKS],
+          limit: 1000
+        }
+      ]);
+
+      // Count how many times each repo a-tag appears
+      const repoCounts = new Map<string, { count: number; aTag: string }>();
+      
+      for (const bookmark of bookmarkEvents) {
+        for (const tag of bookmark.tags) {
+          if (tag[0] === 'a' && tag[1]?.startsWith(`${KIND.REPO_ANNOUNCEMENT}:`)) {
+            const aTag = tag[1];
+            const current = repoCounts.get(aTag) || { count: 0, aTag };
+            current.count++;
+            repoCounts.set(aTag, current);
+          }
+        }
+      }
+
+      // Convert to array and sort by count
+      const repoCountsArray = Array.from(repoCounts.entries())
+        .map(([aTag, data]) => ({ aTag, count: data.count }))
+        .sort((a, b) => b.count - a.count);
+
+      // Fetch repo announcements for the top repos
+      const topRepos: Array<{ event: NostrEvent; npub: string; repoName: string; favoriteCount: number }> = [];
+      
+      for (const { aTag, count } of repoCountsArray.slice(0, 100)) {
+        // Parse a-tag: 30617:pubkey:d-tag
+        const parts = aTag.split(':');
+        if (parts.length >= 3) {
+          const pubkey = parts[1];
+          const dTag = parts[2];
+          
+          // Fetch the repo announcement
+          const announcements = await nostrClient.fetchEvents([
+            {
+              kinds: [KIND.REPO_ANNOUNCEMENT],
+              authors: [pubkey],
+              '#d': [dTag],
+              limit: 1
+            }
+          ]);
+
+          if (announcements.length > 0) {
+            try {
+              const npub = nip19.npubEncode(pubkey);
+              topRepos.push({
+                event: announcements[0],
+                npub,
+                repoName: dTag,
+                favoriteCount: count
+              });
+            } catch (err) {
+              console.warn('Failed to encode npub for favorited repo:', err);
+            }
+          }
+        }
+      }
+
+      // Cache the results
+      mostFavoritedCache = {
+        data: topRepos,
+        timestamp: Date.now()
+      };
+
+      updateMostFavoritedPage();
+    } catch (err) {
+      console.error('Failed to load most favorited repos:', err);
+    } finally {
+      loadingMostFavorited = false;
+    }
+  }
+
+  function updateMostFavoritedPage() {
+    if (!mostFavoritedCache) return;
+    
+    const start = mostFavoritedPage * 10;
+    const end = start + 10;
+    mostFavoritedRepos = mostFavoritedCache.data.slice(start, end);
+  }
+
+  function nextMostFavoritedPage() {
+    if (!mostFavoritedCache) return;
+    const maxPage = Math.ceil(mostFavoritedCache.data.length / 10) - 1;
+    if (mostFavoritedPage < maxPage) {
+      mostFavoritedPage++;
+      updateMostFavoritedPage();
+    }
+  }
+
+  function prevMostFavoritedPage() {
+    if (mostFavoritedPage > 0) {
+      mostFavoritedPage--;
+      updateMostFavoritedPage();
+    }
+  }
+
+  // Background refresh of cache
+  async function refreshMostFavoritedCache() {
+    if (!mostFavoritedCache || Date.now() - mostFavoritedCache.timestamp >= CACHE_TTL) {
+      await loadMostFavoritedRepos();
+    }
+  }
+
+  // Start background refresh
+  $effect(() => {
+    if (typeof window !== 'undefined') {
+      const interval = setInterval(() => {
+        refreshMostFavoritedCache().catch(err => console.warn('Background refresh failed:', err));
+      }, CACHE_TTL);
+      return () => clearInterval(interval);
+    }
+  });
+
   async function loadForkCounts(repoEvents: NostrEvent[]) {
     const counts = new Map<string, number>();
     
@@ -620,6 +755,58 @@
       </div>
     {/if}
 
+    <!-- Most Favorited Repositories -->
+    <div class="most-favorited-section">
+      <div class="section-header">
+        <h3>Most Favorited Repositories</h3>
+        {#if loadingMostFavorited}
+          <span class="loading-indicator">Loading...</span>
+        {/if}
+      </div>
+      {#if loadingMostFavorited && mostFavoritedRepos.length === 0}
+        <div class="loading">Loading most favorited repositories...</div>
+      {:else if mostFavoritedRepos.length === 0}
+        <div class="empty">No favorited repositories found.</div>
+      {:else}
+        <div class="most-favorited-list">
+          {#each mostFavoritedRepos as item}
+            {@const repo = item.event}
+            {@const repoImage = getRepoImage(repo)}
+            <a href="/repos/{item.npub}/{item.repoName}" class="most-favorited-item">
+              {#if repoImage}
+                <img src={repoImage} alt={getRepoName(repo)} class="most-favorited-image" />
+              {:else}
+                <img src="/icons/package.svg" alt="Repository" class="most-favorited-icon" />
+              {/if}
+              <div class="most-favorited-info">
+                <h4>{getRepoName(repo)}</h4>
+                {#if getRepoDescription(repo)}
+                  <p class="most-favorited-description">{getRepoDescription(repo)}</p>
+                {/if}
+                <span class="most-favorited-count">{item.favoriteCount} {item.favoriteCount === 1 ? 'favorite' : 'favorites'}</span>
+              </div>
+            </a>
+          {/each}
+        </div>
+        {#if mostFavoritedCache && mostFavoritedCache.data.length > 10}
+          <div class="pagination">
+            <button onclick={prevMostFavoritedPage} disabled={mostFavoritedPage === 0}>
+              Previous
+            </button>
+            <span class="page-info">
+              Page {mostFavoritedPage + 1} of {Math.ceil(mostFavoritedCache.data.length / 10)}
+            </span>
+            <button 
+              onclick={nextMostFavoritedPage} 
+              disabled={mostFavoritedPage >= Math.ceil(mostFavoritedCache.data.length / 10) - 1}
+            >
+              Next
+            </button>
+          </div>
+        {/if}
+      {/if}
+    </div>
+
     <div class="repos-header">
       <h2>Repositories on {$page.data.gitDomain || 'localhost:6543'}</h2>
       <button onclick={loadRepos} disabled={loading}>
@@ -800,3 +987,139 @@
     {/if}
   </main>
 </div>
+
+<style>
+  .most-favorited-section {
+    margin: 2rem 0;
+    padding: 1.5rem;
+    background: var(--card-bg, #ffffff);
+    border: 1px solid var(--border-color, #e0e0e0);
+    border-radius: 0.5rem;
+  }
+
+  .most-favorited-section .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+
+  .most-favorited-section .section-header h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  .loading-indicator {
+    color: var(--text-secondary, #666);
+    font-size: 0.875rem;
+  }
+
+  .most-favorited-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .most-favorited-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    background: var(--bg-secondary, #f5f5f5);
+    border: 1px solid var(--border-color, #e0e0e0);
+    border-radius: 0.5rem;
+    text-decoration: none;
+    color: inherit;
+    transition: all 0.2s ease;
+  }
+
+  .most-favorited-item:hover {
+    background: var(--bg-tertiary, #eeeeee);
+    border-color: var(--accent, #007bff);
+    transform: translateY(-2px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  .most-favorited-image,
+  .most-favorited-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 0.25rem;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+
+  .most-favorited-icon {
+    padding: 8px;
+    background: var(--bg-tertiary, #eeeeee);
+  }
+
+  .most-favorited-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .most-favorited-info h4 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1.1rem;
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  .most-favorited-description {
+    margin: 0 0 0.5rem 0;
+    color: var(--text-secondary, #666);
+    font-size: 0.9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .most-favorited-count {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    background: var(--accent, #007bff);
+    color: var(--accent-text, #ffffff);
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+
+  .pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border-color, #e0e0e0);
+  }
+
+  .pagination button {
+    padding: 0.5rem 1rem;
+    background: var(--accent, #007bff);
+    color: var(--accent-text, #ffffff);
+    border: none;
+    border-radius: 0.25rem;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s ease;
+  }
+
+  .pagination button:hover:not(:disabled) {
+    background: var(--accent-hover, #0056b3);
+    transform: translateY(-1px);
+  }
+
+  .pagination button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .page-info {
+    color: var(--text-secondary, #666);
+    font-size: 0.9rem;
+  }
+</style>

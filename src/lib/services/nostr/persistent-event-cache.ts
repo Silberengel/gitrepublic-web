@@ -41,8 +41,8 @@ const STORE_FILTERS = 'filters';
 const STORE_PROFILES = 'profiles';
 
 const REPLACEABLE_KINDS = [0, 3, 10002]; // Profile, Contacts, Relay List
-const DEFAULT_TTL = 5 * 60 * 1000; // 5 minutes
-const PROFILE_TTL = 30 * 60 * 1000; // 30 minutes
+const DEFAULT_TTL = 30 * 60 * 1000; // 30 minutes (increased for better performance)
+const PROFILE_TTL = 60 * 60 * 1000; // 60 minutes (increased for profiles)
 
 interface CachedEvent {
   event: NostrEvent;
