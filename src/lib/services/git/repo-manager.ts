@@ -3,7 +3,7 @@
  * Handles repo provisioning, syncing, and NIP-34 integration
  */
 
-import { existsSync, mkdirSync, writeFileSync, statSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { readdir, readFile } from 'fs/promises';
 import { spawn } from 'child_process';

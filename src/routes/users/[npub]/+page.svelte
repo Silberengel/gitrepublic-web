@@ -89,21 +89,22 @@
   let nostrLinkProfiles = $state<Map<string, string>>(new Map()); // npub -> pubkey hex
 
   // Parse nostr: links from content and extract IDs/pubkeys
-  function parseNostrLinks(content: string): Array<{ type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile'; value: string; start: number; end: number }> {
-    const links: Array<{ type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile'; value: string; start: number; end: number }> = [];
-    const nostrLinkRegex = /nostr:(nevent1|naddr1|note1|npub1|profile1)[a-zA-Z0-9]+/g;
+  function parseNostrLinks(content: string): Array<{ type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile' | 'nprofile'; value: string; start: number; end: number }> {
+    const links: Array<{ type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile' | 'nprofile'; value: string; start: number; end: number }> = [];
+    const nostrLinkRegex = /nostr:(nevent1|naddr1|note1|npub1|profile1|nprofile1)[a-zA-Z0-9]+/g;
     let match;
     
     while ((match = nostrLinkRegex.exec(content)) !== null) {
       const fullMatch = match[0];
       const prefix = match[1];
-      let type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile';
+      let type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile' | 'nprofile';
       
       if (prefix === 'nevent1') type = 'nevent';
       else if (prefix === 'naddr1') type = 'naddr';
       else if (prefix === 'note1') type = 'note1';
       else if (prefix === 'npub1') type = 'npub';
       else if (prefix === 'profile1') type = 'profile';
+      else if (prefix === 'nprofile1') type = 'nprofile';
       else continue;
       
       links.push({
@@ -141,11 +142,18 @@
             const aTag = `${decoded.data.kind}:${decoded.data.pubkey}:${decoded.data.identifier}`;
             aTags.push(aTag);
           }
-        } else if (link.type === 'npub' || link.type === 'profile') {
+        } else if (link.type === 'npub' || link.type === 'profile' || link.type === 'nprofile') {
           const decoded = nip19.decode(link.value.replace('nostr:', ''));
           if (decoded.type === 'npub') {
             npubs.push(link.value);
             nostrLinkProfiles.set(link.value, decoded.data as string);
+          } else if (decoded.type === 'nprofile') {
+            // nprofile contains { pubkey: string, relays?: string[] }
+            const pubkey = (decoded.data as { pubkey: string }).pubkey;
+            if (pubkey) {
+              npubs.push(link.value);
+              nostrLinkProfiles.set(link.value, pubkey);
+            }
           }
         }
       } catch {
@@ -222,9 +230,29 @@
     return undefined;
   }
 
-  // Get pubkey from nostr: npub/profile link
+  // Get pubkey from nostr: npub/profile/nprofile link
   function getPubkeyFromNostrLink(link: string): string | undefined {
-    return nostrLinkProfiles.get(link);
+    // Check cache first
+    const cached = nostrLinkProfiles.get(link);
+    if (cached) return cached;
+    
+    // If not in cache, try to decode nprofile on the fly
+    if (link.startsWith('nostr:nprofile1')) {
+      try {
+        const decoded = nip19.decode(link.replace('nostr:', ''));
+        if (decoded.type === 'nprofile') {
+          const pubkey = (decoded.data as { pubkey: string }).pubkey;
+          if (pubkey) {
+            nostrLinkProfiles.set(link, pubkey);
+            return pubkey;
+          }
+        }
+      } catch {
+        // Invalid link
+      }
+    }
+    
+    return undefined;
   }
 
   // Process content with nostr links into parts for rendering
@@ -843,13 +871,22 @@ i   *
     const userPubkey = profileOwnerPubkeyHex; // Store in local variable for type safety
     loadingActivity = true;
     try {
-      // Step 1: Fetch all repo announcements where user is owner or maintainer
-      const repoAnnouncements = await nostrClient.fetchEvents([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [userPubkey],
-          limit: 100
-        }
+      // Step 1: Fetch repo announcements in parallel (reduced limit)
+      const [repoAnnouncements, allAnnouncements] = await Promise.all([
+        nostrClient.fetchEvents([
+          {
+            kinds: [KIND.REPO_ANNOUNCEMENT],
+            authors: [userPubkey],
+            limit: 50 // Reduced from 100
+          }
+        ]),
+        nostrClient.fetchEvents([
+          {
+            kinds: [KIND.REPO_ANNOUNCEMENT],
+            '#p': [userPubkey],
+            limit: 50 // Reduced from 100
+          }
+        ])
       ]);
 
       // Step 2: Extract a-tags from repo announcements
@@ -862,22 +899,11 @@ i   *
         }
       }
 
-      // Step 3: Also check for repos where user is a maintainer (not just owner)
-      // We'll fetch announcements and check maintainer tags
-      const allAnnouncements = await nostrClient.fetchEvents([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          '#p': [userPubkey], // Events that mention the user
-          limit: 100
-        }
-      ]);
-
+      // Step 3: Check for repos where user is a maintainer
       for (const announcement of allAnnouncements) {
-        // Check if user is in maintainers tag
         const maintainersTag = announcement.tags.find(t => t[0] === 'maintainers');
         if (maintainersTag) {
           const isMaintainer = maintainersTag.slice(1).some(m => {
-            // Handle both hex and npub formats
             try {
               const decoded = nip19.decode(m);
               if (decoded.type === 'npub') {
@@ -899,89 +925,88 @@ i   *
         }
       }
 
-      // Step 4: Fetch events that reference the user or their repos
+      // Step 4: Fetch events that reference the user or their repos (reduced limits)
       const filters: any[] = [];
 
       // Events with user in p-tag
       filters.push({
         '#p': [userPubkey],
-        limit: 200
+        limit: 100 // Reduced from 200
       });
 
       // Events with user in q-tag
       filters.push({
         '#q': [userPubkey],
-        limit: 200
+        limit: 100 // Reduced from 200
       });
 
       // Events with repo a-tags
       if (aTags.size > 0) {
         filters.push({
           '#a': Array.from(aTags),
-          limit: 200
+          limit: 100 // Reduced from 200
         });
       }
 
-      const allActivityEvents = await nostrClient.fetchEvents(filters);
+      const allActivityEvents = await Promise.race([
+        nostrClient.fetchEvents(filters),
+        new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 15000)) // 15s timeout
+      ]);
 
       // Step 5: Deduplicate, filter, and sort by created_at (newest first)
       const eventMap = new Map<string, NostrEvent>();
       for (const event of allActivityEvents) {
-        // Use shared exclusion function to filter out:
-        // - User's own events
-        // - Ephemeral events (20000-29999)
-        // - Replaceable events (0, 3, 10000-19999) - metadata/configuration
-        // - Non-repo regular kinds (1, 2, 5, 6, 7, 8, 24)
         if (shouldExcludeEvent(event, userPubkey, true)) {
           continue;
         }
         
-        // Keep the newest version if duplicate
         const existing = eventMap.get(event.id);
         if (!existing || event.created_at > existing.created_at) {
           eventMap.set(event.id, event);
         }
       }
 
-      // Sort by created_at descending and limit to 200
+      // Sort by created_at descending and limit to 50 (reduced from 200)
       activityEvents = Array.from(eventMap.values())
         .sort((a, b) => b.created_at - a.created_at)
-        .slice(0, 200);
+        .slice(0, 50);
 
-      // Fetch referenced events from a-tags and e-tags
-      await loadReferencedEvents(activityEvents);
-      
-      // Fetch nostr: links from event content
-      for (const event of activityEvents) {
-        if (event.content) {
-          await loadNostrLinks(event.content);
-        }
-      }
+      // Step 6: Load referenced events and nostr links in parallel (limited)
+      await Promise.all([
+        loadReferencedEvents(activityEvents.slice(0, 50)), // Only load for first 50
+        // Batch load nostr links for all events at once
+        Promise.all(activityEvents.slice(0, 50).map(event => 
+          event.content ? loadNostrLinks(event.content) : Promise.resolve()
+        ))
+      ]);
     } catch (err) {
       console.error('Failed to load activity:', err);
       error = 'Failed to load activity';
     } finally {
-      activityLoaded = true; // Mark as loaded to prevent infinite loop (even on error)
+      activityLoaded = true;
       loadingActivity = false;
     }
   }
 
   async function loadReferencedEvents(events: NostrEvent[]) {
+    // Limit to first 50 events to avoid too many queries
+    const eventsToProcess = events.slice(0, 50);
+    
     // Collect all referenced event IDs and a-tags
     const eventIds = new Set<string>();
     const aTags = new Set<string>();
     
-    for (const event of events) {
-      // Collect e-tags (event references)
-      const eTags = event.tags.filter(t => t[0] === 'e' && t[1]);
+    for (const event of eventsToProcess) {
+      // Collect e-tags (event references) - limit to first 5 per event
+      const eTags = event.tags.filter(t => t[0] === 'e' && t[1]).slice(0, 5);
       for (const eTag of eTags) {
         if (eTag[1]) {
           eventIds.add(eTag[1]);
         }
       }
       
-      // Collect a-tags (addressable event references)
-      const aTagValues = event.tags.filter(t => t[0] === 'a' && t[1]);
+      // Collect a-tags (addressable event references) - limit to first 5 per event
+      const aTagValues = event.tags.filter(t => t[0] === 'a' && t[1]).slice(0, 5);
       for (const aTag of aTagValues) {
         if (aTag[1]) {
           aTags.add(aTag[1]);
@@ -991,53 +1016,81 @@ i   *
 
     if (eventIds.size === 0 && aTags.size === 0) return;
 
-    // Fetch events by ID
+    // Limit total references to prevent too many queries
+    const limitedEventIds = Array.from(eventIds).slice(0, 50);
+    const limitedATags = Array.from(aTags).slice(0, 50);
+
+    // Fetch events by ID (single batch query)
     const eventsToFetch: Promise<NostrEvent[]>[] = [];
     
-    if (eventIds.size > 0) {
+    if (limitedEventIds.length > 0) {
       eventsToFetch.push(
-        nostrClient.fetchEvents([
-          {
-            ids: Array.from(eventIds),
-            limit: eventIds.size
-          }
+        Promise.race([
+          nostrClient.fetchEvents([
+            {
+              ids: limitedEventIds,
+              limit: limitedEventIds.length
+            }
+          ]),
+          new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 8000))
         ]).catch(() => [])
       );
     }
 
-    // Fetch events by a-tags
-    if (aTags.size > 0) {
-      for (const aTag of aTags) {
+    // Batch a-tags by kind and author to reduce queries
+    if (limitedATags.length > 0) {
+      const aTagGroups = new Map<string, Set<string>>(); // key: "kind:pubkey", value: Set of d-tags
+      
+      for (const aTag of limitedATags) {
         const parts = aTag.split(':');
         if (parts.length === 3) {
-          const kind = parseInt(parts[0]);
+          const kind = parts[0];
           const pubkey = parts[1];
           const dTag = parts[2];
+          const key = `${kind}:${pubkey}`;
           
-          eventsToFetch.push(
+          if (!aTagGroups.has(key)) {
+            aTagGroups.set(key, new Set());
+          }
+          aTagGroups.get(key)!.add(dTag);
+        }
+      }
+
+      // Fetch events by grouped a-tags (one query per kind:pubkey combination)
+      for (const [key, dTags] of aTagGroups.entries()) {
+        const parts = key.split(':');
+        const kind = parseInt(parts[0]);
+        const pubkey = parts[1];
+        
+        // Limit d-tags per query to 10
+        const dTagsArray = Array.from(dTags).slice(0, 10);
+        
+        eventsToFetch.push(
+          Promise.race([
             nostrClient.fetchEvents([
               {
                 kinds: [kind],
                 authors: [pubkey],
-                '#d': [dTag],
-                limit: 1
+                '#d': dTagsArray,
+                limit: dTagsArray.length
               }
-            ]).catch(() => [])
-          );
-        }
+            ]),
+            new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 8000))
+          ]).catch(() => [])
+        );
       }
     }
 
-    // Fetch all referenced events
+    // Fetch all referenced events with timeout
     try {
-      const fetchPromises = eventsToFetch.map(p => 
-        Promise.race([
-          p,
-          new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 10000))
-        ])
+      const fetchedEventsArrays = await Promise.all(
+        eventsToFetch.map(p => 
+          Promise.race([
+            p,
+            new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 8000))
+          ])
+        )
       );
-      
-      const fetchedEventsArrays = await Promise.all(fetchPromises);
       const fetchedEvents = fetchedEventsArrays.flat();
       
       // Update cache reactively - add new events, avoid duplicates
@@ -1049,6 +1102,97 @@ i   *
     } catch (err) {
       console.warn('Failed to fetch referenced events:', err);
     }
+  }
+
+  // Extract repo info from a-tag
+  function getRepoInfoFromATag(aTag: string): { ownerPubkey: string; repoName: string } | null {
+    const parts = aTag.split(':');
+    if (parts.length >= 3) {
+      const kind = parseInt(parts[0]);
+      if (kind === KIND.REPO_ANNOUNCEMENT) {
+        return {
+          ownerPubkey: parts[1],
+          repoName: parts[2]
+        };
+      }
+    }
+    return null;
+  }
+
+  // Get repo info from event (checks a-tags)
+  function getRepoInfo(event: NostrEvent): { ownerPubkey: string; repoName: string; ownerNpub: string } | null {
+    const aTag = event.tags.find(t => t[0] === 'a' && t[1])?.[1];
+    if (aTag) {
+      const repoInfo = getRepoInfoFromATag(aTag);
+      if (repoInfo) {
+        try {
+          const ownerNpub = nip19.npubEncode(repoInfo.ownerPubkey);
+          return {
+            ...repoInfo,
+            ownerNpub
+          };
+        } catch {
+          // If encoding fails, return null instead of incomplete object
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
+  // Get git event type name
+  function getGitEventTypeName(kind: number): string {
+    switch (kind) {
+      case KIND.ISSUE:
+        return 'Issue';
+      case KIND.PULL_REQUEST:
+        return 'Pull Request';
+      case KIND.PULL_REQUEST_UPDATE:
+        return 'Pull Request Update';
+      case KIND.PATCH:
+        return 'Patch';
+      case KIND.STATUS_OPEN:
+        return 'Status: Open';
+      case KIND.STATUS_APPLIED:
+        return 'Status: Applied';
+      case KIND.STATUS_CLOSED:
+        return 'Status: Closed';
+      case KIND.STATUS_DRAFT:
+        return 'Status: Draft';
+      default:
+        return `Event (kind ${kind})`;
+    }
+  }
+
+  // Get status from event tags
+  function getEventStatus(event: NostrEvent): string | null {
+    const statusTag = event.tags.find(t => t[0] === 'status' && t[1]);
+    if (statusTag?.[1]) {
+      return statusTag[1];
+    }
+    
+    // Check if kind itself indicates status
+    if (event.kind === KIND.STATUS_OPEN) return 'open';
+    if (event.kind === KIND.STATUS_APPLIED) return 'applied';
+    if (event.kind === KIND.STATUS_CLOSED) return 'closed';
+    if (event.kind === KIND.STATUS_DRAFT) return 'draft';
+    
+    return null;
+  }
+
+  // Check if event is git-related
+  function isGitEvent(kind: number): boolean {
+    const gitKinds = [
+      KIND.ISSUE,
+      KIND.PULL_REQUEST,
+      KIND.PULL_REQUEST_UPDATE,
+      KIND.PATCH,
+      KIND.STATUS_OPEN,
+      KIND.STATUS_APPLIED,
+      KIND.STATUS_CLOSED,
+      KIND.STATUS_DRAFT
+    ];
+    return gitKinds.includes(kind as any);
   }
 
   function getEventContext(event: NostrEvent): string {
@@ -1446,6 +1590,15 @@ i   *
     }
   }
 
+  async function copyNpub() {
+    try {
+      await navigator.clipboard.writeText(npub);
+      alert('Npub copied to clipboard!');
+    } catch (err) {
+      console.error('Failed to copy npub:', err);
+    }
+  }
+
   const isOwnProfile = $derived(viewerPubkeyHex === profileOwnerPubkeyHex);
 
   // Sort payment targets with lightning first
@@ -1496,6 +1649,14 @@ i   *
         {/if}
         <div class="profile-meta">
           <code class="profile-npub">{npub}</code>
+          <button 
+            class="copy-button copy-npub-button" 
+            onclick={copyNpub}
+            title="Copy npub"
+            aria-label="Copy npub"
+          >
+            <img src="/icons/copy.svg" alt="Copy" class="icon-themed" />
+          </button>
         </div>
       </div>
 
@@ -1810,7 +1971,7 @@ i   *
                           <div class="nostr-link-event-content">{part.event.content || getEventContext(part.event)}</div>
                         </div>
                       {:else if part.type === 'profile' && part.pubkey}
-                        <UserBadge pubkey={part.pubkey} />
+                        <UserBadge pubkey={part.pubkey} inline={true} />
                       {:else}
                         <span class="nostr-link-placeholder">{part.value}</span>
                       {/if}
@@ -1904,13 +2065,53 @@ i   *
                                 <div class="nostr-link-event-content">{part.event.content || getEventContext(part.event)}</div>
                               </div>
                             {:else if part.type === 'profile' && part.pubkey}
-                              <UserBadge pubkey={part.pubkey} />
+                              <UserBadge pubkey={part.pubkey} inline={true} />
                             {:else}
                               <span class="nostr-link-placeholder">{part.value}</span>
                             {/if}
                           {/each}
                         </div>
                       {/if}
+                    {:else if isGitEvent(event.kind)}
+                      {@const repoInfo = getRepoInfo(event)}
+                      {@const eventType = getGitEventTypeName(event.kind)}
+                      {@const status = getEventStatus(event)}
+                      {@const subjectTag = event.tags.find(t => t[0] === 'subject' && t[1])?.[1]}
+                      {@const dTag = event.tags.find(t => t[0] === 'd' && t[1])?.[1]}
+                      {@const rootETag = event.tags.find(t => t[0] === 'e' && t[3] === 'root')?.[1]}
+                      {@const referencedGitEvent = rootETag ? getReferencedEvent(rootETag) : null}
+                      {@const referencedSubject = referencedGitEvent ? referencedGitEvent.tags.find(t => t[0] === 'subject' && t[1])?.[1] : null}
+                      {@const displaySubject = subjectTag || referencedSubject}
+                      <div class="git-event-display">
+                        {#if repoInfo}
+                          <div class="git-event-header">
+                            <a href={`/repos/${repoInfo.ownerNpub}/${repoInfo.repoName}`} class="git-event-repo-link">
+                              <span class="git-event-repo-name">{repoInfo.repoName}</span>
+                            </a>
+                            <span class="git-event-type">{eventType}</span>
+                            {#if status}
+                              <span class="git-event-status" class:status-open={status === 'open'} class:status-closed={status === 'closed'} class:status-applied={status === 'applied'} class:status-draft={status === 'draft'}>
+                                {status}
+                              </span>
+                            {/if}
+                          </div>
+                        {:else}
+                          <div class="git-event-header">
+                            <span class="git-event-type">{eventType}</span>
+                            {#if status}
+                              <span class="git-event-status" class:status-open={status === 'open'} class:status-closed={status === 'closed'} class:status-applied={status === 'applied'} class:status-draft={status === 'draft'}>
+                                {status}
+                              </span>
+                            {/if}
+                          </div>
+                        {/if}
+                        {#if displaySubject}
+                          <div class="git-event-subject">{displaySubject}</div>
+                        {/if}
+                        {#if event.content && event.content.trim()}
+                          <div class="git-event-content">{event.content.trim().slice(0, 200)}{event.content.trim().length > 200 ? '...' : ''}</div>
+                        {/if}
+                      </div>
                     {:else}
                       {@const eTag = event.tags.find(t => t[0] === 'e' && t[1])?.[1]}
                       {@const aTag = event.tags.find(t => t[0] === 'a' && t[1])?.[1]}
@@ -1939,7 +2140,7 @@ i   *
                                 <div class="nostr-link-event-content">{part.event.content || getEventContext(part.event)}</div>
                               </div>
                             {:else if part.type === 'profile' && part.pubkey}
-                              <UserBadge pubkey={part.pubkey} />
+                              <UserBadge pubkey={part.pubkey} inline={true} />
                             {:else}
                               <span class="nostr-link-placeholder">{part.value}</span>
                             {/if}
@@ -2142,6 +2343,62 @@ i   *
     margin-bottom: 2rem;
   }
 
+  @media (max-width: 768px) {
+    .profile-header {
+      grid-template-columns: 1fr;
+      gap: 1.5rem;
+      padding: 1.5rem;
+    }
+
+    .profile-avatar-section {
+      justify-self: center;
+    }
+
+    .profile-info {
+      text-align: center;
+    }
+
+    .profile-actions {
+      justify-content: center;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .profile-header {
+      padding: 1rem;
+      gap: 1rem;
+    }
+
+    .profile-avatar,
+    .profile-avatar-placeholder {
+      width: 80px;
+      height: 80px;
+    }
+
+    .profile-avatar-placeholder {
+      font-size: 2rem;
+    }
+
+    .profile-name {
+      font-size: 1.5rem;
+    }
+
+    .profile-bio {
+      font-size: 1rem;
+    }
+
+    .profile-npub {
+      font-size: 0.75rem;
+      padding: 0.375rem 0.5rem;
+      word-break: break-all;
+    }
+
+    .action-button {
+      padding: 0.5rem 1rem;
+      font-size: 0.875rem;
+    }
+  }
+
   .profile-avatar-section {
     position: relative;
   }
@@ -2188,6 +2445,17 @@ i   *
 
   .profile-meta {
     margin-top: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: nowrap;
+    justify-content: center;
+  }
+
+  @media (min-width: 769px) {
+    .profile-meta {
+      justify-content: flex-start;
+    }
   }
 
   .profile-npub {
@@ -2198,6 +2466,14 @@ i   *
     padding: 0.5rem 0.75rem;
     border-radius: 0.375rem;
     display: inline-block;
+    word-break: break-all;
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .copy-npub-button {
+    flex-shrink: 0;
+    flex-grow: 0;
   }
 
   .profile-actions {
@@ -2626,6 +2902,18 @@ i   *
     gap: 0.5rem;
     flex-wrap: wrap;
     flex: 1;
+    min-width: 0;
+  }
+
+  .message-participants :global(.user-badge) {
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 768px) {
+    .message-participants :global(.user-badge) {
+      width: auto;
+      display: inline-flex;
+    }
   }
 
   .participants-label {
@@ -2691,21 +2979,25 @@ i   *
     margin-bottom: 1rem;
     padding: 0.75rem;
     background: var(--bg-secondary);
-    border-left: 3px solid var(--border-color);
-    border-radius: 0.5rem;
+    border: 1px solid var(--border-color);
+    border-left: 3px solid var(--accent, #007bff);
+    border-radius: 0.375rem;
     font-size: 0.875rem;
   }
 
   :global([data-theme="light"]) .quoted-event {
-    background: #e8e8e8;
+    background: #f5f5f5;
+    border-color: #e0e0e0;
   }
 
   :global([data-theme="dark"]) .quoted-event {
-    background: rgba(0, 0, 0, 0.2);
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.1);
   }
 
   :global([data-theme="black"]) .quoted-event {
-    background: #0a0a0a;
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(255, 255, 255, 0.1);
   }
 
   .quoted-event-header {
@@ -2713,26 +3005,136 @@ i   *
     align-items: center;
     gap: 0.5rem;
     margin-bottom: 0.5rem;
+    flex-wrap: wrap;
   }
 
   .quoted-event-time {
     font-size: 0.75rem;
     color: var(--text-muted);
+    margin-left: auto;
   }
 
   .quoted-event-content {
     color: var(--text-secondary);
     white-space: pre-wrap;
     word-wrap: break-word;
+    overflow-wrap: break-word;
     line-height: 1.5;
-    max-height: 10rem;
+    max-height: 8rem;
     overflow: hidden;
-    text-overflow: ellipsis;
+    position: relative;
+  }
+
+  .quoted-event-content::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2rem;
+    background: linear-gradient(to bottom, transparent, var(--bg-secondary));
+    pointer-events: none;
+  }
+
+  :global([data-theme="light"]) .quoted-event-content::after {
+    background: linear-gradient(to bottom, transparent, #f5f5f5);
+  }
+
+  :global([data-theme="dark"]) .quoted-event-content::after {
+    background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.05));
+  }
+
+  :global([data-theme="black"]) .quoted-event-content::after {
+    background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.03));
   }
 
   .quoted-event-loading {
     opacity: 0.6;
     font-style: italic;
+    color: var(--text-muted);
+  }
+
+  /* Git Event Display */
+  .git-event-display {
+    padding: 1rem;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-left: 3px solid var(--accent, #007bff);
+    border-radius: 0.5rem;
+  }
+
+  .git-event-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+  }
+
+  .git-event-repo-link {
+    text-decoration: none;
+    color: inherit;
+    font-weight: 600;
+    transition: color 0.2s ease;
+  }
+
+  .git-event-repo-link:hover {
+    color: var(--accent, #007bff);
+  }
+
+  .git-event-repo-name {
+    font-size: 1rem;
+    color: var(--text-primary);
+  }
+
+  .git-event-type {
+    padding: 0.25rem 0.75rem;
+    background: var(--accent-bg, #e7f3ff);
+    color: var(--accent, #007bff);
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+
+  .git-event-status {
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+
+  .git-event-status.status-open {
+    background: #d4edda;
+    color: #155724;
+  }
+
+  .git-event-status.status-closed {
+    background: #f8d7da;
+    color: #721c24;
+  }
+
+  .git-event-status.status-applied {
+    background: #d1ecf1;
+    color: #0c5460;
+  }
+
+  .git-event-status.status-draft {
+    background: #fff3cd;
+    color: #856404;
+  }
+
+  .git-event-subject {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+  }
+
+  .git-event-content {
+    color: var(--text-secondary);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
   }
 
   /* Activity */
@@ -2921,6 +3323,9 @@ i   *
     border: 1px solid var(--border-color);
     border-radius: 0.5rem;
     border-left: 3px solid var(--accent);
+    max-height: 250px;
+    overflow: hidden;
+    position: relative;
   }
 
   .repost-author {
@@ -2939,7 +3344,34 @@ i   *
     color: var(--text-primary);
     white-space: pre-wrap;
     word-wrap: break-word;
+    overflow-wrap: break-word;
     line-height: 1.6;
+    max-height: calc(250px - 3rem);
+    overflow: hidden;
+    position: relative;
+  }
+
+  .repost-text::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2rem;
+    background: linear-gradient(to bottom, transparent, var(--bg-primary));
+    pointer-events: none;
+  }
+
+  :global([data-theme="light"]) .repost-text::after {
+    background: linear-gradient(to bottom, transparent, var(--bg-primary, #ffffff));
+  }
+
+  :global([data-theme="dark"]) .repost-text::after {
+    background: linear-gradient(to bottom, transparent, var(--bg-primary, #1a1a1a));
+  }
+
+  :global([data-theme="black"]) .repost-text::after {
+    background: linear-gradient(to bottom, transparent, var(--bg-primary, #000000));
   }
 
   .referenced-event {
@@ -3197,15 +3629,6 @@ i   *
   @media (max-width: 768px) {
     .profile-page {
       padding: 1rem;
-    }
-
-    .profile-header {
-      grid-template-columns: 1fr;
-      text-align: center;
-    }
-
-    .profile-avatar-section {
-      justify-self: center;
     }
 
     .repo-grid {

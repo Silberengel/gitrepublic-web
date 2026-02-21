@@ -9,9 +9,10 @@
   interface Props {
     pubkey: string;
     disableLink?: boolean;
+    inline?: boolean;
   }
 
-  let { pubkey, disableLink = false }: Props = $props();
+  let { pubkey, disableLink = false, inline = false }: Props = $props();
   
   // Convert pubkey to npub for navigation (reactive)
   const profileUrl = $derived.by(() => {
@@ -183,7 +184,21 @@
   }
 </script>
 
-{#if disableLink}
+{#if inline}
+  {#if disableLink}
+    <span class="user-badge-inline">{truncateHandle(userProfile?.name) || getShortNpub()}</span>
+  {:else}
+    <a 
+      href={profileUrl} 
+      class="user-badge-inline"
+      onclick={(e) => {
+        e.stopPropagation();
+      }}
+    >
+      {truncateHandle(userProfile?.name) || getShortNpub()}
+    </a>
+  {/if}
+{:else if disableLink}
   <div class="user-badge">
     {#if userProfile?.picture}
       <img src={userProfile.picture} alt="Profile" class="user-badge-avatar" />
@@ -249,6 +264,18 @@
     white-space: nowrap;
   }
 
+  .user-badge-inline {
+    display: inline;
+    color: var(--accent);
+    text-decoration: none;
+    font-weight: 500;
+    font-size: inherit;
+  }
+
+  .user-badge-inline:hover {
+    text-decoration: underline;
+  }
+
   /* Hide name on narrow screens, show only picture */
   @media (max-width: 768px) {
     .user-badge-name {
@@ -257,6 +284,9 @@
 
     .user-badge {
       padding: 0.25rem;
+      width: fit-content;
+      display: inline-flex;
+      flex-shrink: 0;
     }
   }
 </style>

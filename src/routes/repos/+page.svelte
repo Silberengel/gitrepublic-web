@@ -37,7 +37,7 @@
   let mostFavoritedRepos = $state<Array<{ event: NostrEvent; npub: string; repoName: string; favoriteCount: number }>>([]);
   let loadingMostFavorited = $state(false);
   let mostFavoritedPage = $state(0);
-  let mostFavoritedCache: { data: typeof mostFavoritedRepos; timestamp: number } | null = null;
+  let mostFavoritedCache = $state<{ data: typeof mostFavoritedRepos; timestamp: number } | null>(null);
   const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
   import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
@@ -962,6 +962,7 @@
     text-overflow: ellipsis;
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
   }
 
