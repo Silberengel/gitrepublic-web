@@ -243,7 +243,7 @@
                               class:contributor-owner={maintainer.isOwner}
                               onclick={(e) => e.stopPropagation()}
                             >
-                              <UserBadge pubkey={maintainer.pubkey} />
+                              <UserBadge pubkey={maintainer.pubkey} disableLink={true} />
                               {#if maintainer.isOwner}
                                 <span class="contributor-badge owner">Owner</span>
                               {:else}
@@ -256,7 +256,7 @@
                     {:else}
                       <!-- Fallback: show owner if maintainers not available -->
                       <a href={`/users/${repo.npub}`} onclick={(e) => e.stopPropagation()}>
-                        <UserBadge pubkey={repo.owner} />
+                        <UserBadge pubkey={repo.owner} disableLink={true} />
                       </a>
                     {/if}
                   </div>

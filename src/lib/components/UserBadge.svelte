@@ -8,9 +8,32 @@
 
   interface Props {
     pubkey: string;
+    disableLink?: boolean;
   }
 
-  let { pubkey }: Props = $props();
+  let { pubkey, disableLink = false }: Props = $props();
+  
+  // Convert pubkey to npub for navigation
+  function getNpub(): string {
+    try {
+      // Check if already npub format
+      try {
+        const decoded = nip19.decode(pubkey);
+        if (decoded.type === 'npub') {
+          return pubkey;
+        }
+      } catch {
+        // Not an npub, continue to encode
+      }
+      // Convert hex pubkey to npub
+      return nip19.npubEncode(pubkey);
+    } catch {
+      // If all fails, return as-is (will be handled by route)
+      return pubkey;
+    }
+  }
+  
+  const profileUrl = `/users/${getNpub()}`;
   
   let userProfile = $state<{ name?: string; picture?: string } | null>(null);
   let loading = $state(true);
@@ -161,14 +184,25 @@
   }
 </script>
 
-<div class="user-badge">
-  {#if userProfile?.picture}
-    <img src={userProfile.picture} alt="Profile" class="user-badge-avatar" />
-  {:else}
-    <img src="/favicon.png" alt="Profile" class="user-badge-avatar user-badge-avatar-fallback" />
-  {/if}
-  <span class="user-badge-name">{truncateHandle(userProfile?.name)}</span>
-</div>
+{#if disableLink}
+  <div class="user-badge">
+    {#if userProfile?.picture}
+      <img src={userProfile.picture} alt="Profile" class="user-badge-avatar" />
+    {:else}
+      <img src="/favicon.png" alt="Profile" class="user-badge-avatar user-badge-avatar-fallback" />
+    {/if}
+    <span class="user-badge-name">{truncateHandle(userProfile?.name)}</span>
+  </div>
+{:else}
+  <a href={profileUrl} class="user-badge">
+    {#if userProfile?.picture}
+      <img src={userProfile.picture} alt="Profile" class="user-badge-avatar" />
+    {:else}
+      <img src="/favicon.png" alt="Profile" class="user-badge-avatar user-badge-avatar-fallback" />
+    {/if}
+    <span class="user-badge-name">{truncateHandle(userProfile?.name)}</span>
+  </a>
+{/if}
 
 <style>
   .user-badge {
@@ -180,6 +214,9 @@
     background: var(--card-bg);
     border: 1px solid var(--border-color);
     transition: all 0.2s ease;
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
   }
 
   .user-badge:hover {

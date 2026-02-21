@@ -3435,7 +3435,7 @@
                   class="contributor-item"
                   class:contributor-owner={maintainer.isOwner}
                 >
-                  <UserBadge pubkey={maintainer.pubkey} />
+                  <UserBadge pubkey={maintainer.pubkey} disableLink={true} />
                   {#if maintainer.isOwner}
                     <span class="contributor-badge owner">Owner</span>
                   {:else}
@@ -3446,13 +3446,13 @@
             {:else if pageData.repoOwnerPubkey}
               <!-- Fallback to pageData if maintainers not loaded yet -->
               <a href={`/users/${npub}`} class="contributor-item contributor-owner">
-                <UserBadge pubkey={pageData.repoOwnerPubkey} />
+                <UserBadge pubkey={pageData.repoOwnerPubkey} disableLink={true} />
                 <span class="contributor-badge owner">Owner</span>
               </a>
               {#if pageData.repoMaintainers}
                 {#each pageData.repoMaintainers.filter(m => m !== pageData.repoOwnerPubkey) as maintainerPubkey}
                   <a href={`/users/${nip19.npubEncode(maintainerPubkey)}`} class="contributor-item">
-                    <UserBadge pubkey={maintainerPubkey} />
+                    <UserBadge pubkey={maintainerPubkey} disableLink={true} />
                     <span class="contributor-badge maintainer">Maintainer</span>
                   </a>
                 {/each}

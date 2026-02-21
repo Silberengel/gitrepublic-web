@@ -229,31 +229,7 @@
     <div class="auth-section">
       <SettingsButton />
       {#if userPubkey}
-        {@const userNpub = (() => {
-          try {
-            // Check if it's already an npub
-            if (userPubkey.startsWith('npub')) {
-              return userPubkey;
-            }
-            // Try to decode first (might already be npub)
-            try {
-              const decoded = nip19.decode(userPubkey);
-              if (decoded.type === 'npub') {
-                return userPubkey;
-              }
-            } catch {
-              // Not an npub, continue to encode
-            }
-            // Convert hex pubkey to npub
-            return nip19.npubEncode(userPubkey);
-          } catch {
-            // If all fails, return as-is (will be handled by route)
-            return userPubkey;
-          }
-        })()}
-        <a href={`/users/${userNpub}`} class="user-badge-link">
-          <UserBadge pubkey={userPubkey} />
-        </a>
+        <UserBadge pubkey={userPubkey} />
         <button onclick={logout} class="logout-button">Logout</button>
       {:else}
         <button onclick={login} class="login-button" disabled={!isNIP07Available()}>
@@ -367,16 +343,6 @@
     flex-shrink: 0;
   }
 
-  .user-badge-link {
-    text-decoration: none;
-    color: inherit;
-    display: flex;
-    align-items: center;
-  }
-
-  .user-badge-link:hover {
-    text-decoration: none;
-  }
 
   .mobile-menu-toggle {
     display: none;

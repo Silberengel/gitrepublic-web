@@ -13,7 +13,7 @@
   import { userStore } from '$lib/stores/user-store.js';
   import { fetchUserProfile, extractProfileData } from '$lib/utils/user-profile.js';
   import { combineRelays } from '$lib/config.js';
-  import { KIND } from '$lib/types/nostr.js';
+  import { KIND, isEphemeralKind, isReplaceableKind } from '$lib/types/nostr.js';
 
   const npub = ($page.params as { npub?: string }).npub || '';
 
@@ -275,22 +275,62 @@
     profileTags = updatedTags;
   }
 
-  // Shared function to filter out user's own events and write-proof messages
-  function shouldExcludeEvent(event: NostrEvent, userPubkey: string): boolean {
-    // Exclude write-proof kind 24 events
-    if (event.kind === KIND.PUBLIC_MESSAGE && event.content && event.content.includes('gitrepublic-write-proof')) {
-      return true;
-    }
-    
-    // Exclude user's own events (messages FROM the user)
-    // Note: We want to SHOW messages TO the user from other people, so we only exclude messages FROM the user
+  /**
+   * Determines if an event should be excluded from the activity feed.
+i   * 
+   * @param event - The event to check
+   * @param userPubkey - The pubkey of the user whose profile we're viewing
+   * @param forActivityTab - If true, applies stricter filtering for activity tab (excludes ephemeral, replaceable, and metadata kinds)
+   * @returns true if the event should be excluded
+   */
+  function shouldExcludeEvent(event: NostrEvent, userPubkey: string, forActivityTab: boolean = false): boolean {
+    // Always exclude user's own events (events FROM the user)
+    // Note: We want to SHOW events TO the user from other people, so we only exclude events FROM the user
     if (event.pubkey === userPubkey) {
       return true;
     }
-    
-    // Note: We don't exclude messages TO the user from other people - those should be shown
-    // The check for "messages to themselves" is already covered by the check above (event.pubkey === userPubkey)
-    
+
+    // When filtering for activity tab, apply stricter exclusions
+    if (forActivityTab) {
+      // Exclude all ephemeral events (20000-29999) - not meant to be stored
+      if (isEphemeralKind(event.kind)) {
+        return true;
+      }
+
+      // Exclude all replaceable events (0, 3, 10000-19999) - these are metadata/configuration
+      if (isReplaceableKind(event.kind)) {
+        return true;
+      }
+
+      // Exclude specific regular kinds that are not repo-related:
+      
+      // Kind 1: Keep this one in, just for the user's convenience
+
+      // Kind 2: Client metadata (not relevant for activity)
+      if (event.kind === 2) {
+        return true;
+      }
+      
+      // Kind 5: Deletion requests
+      if (event.kind === KIND.DELETION_REQUEST) {
+        return true;
+      }
+      
+      // Kind 6: User's like to see reposts
+      
+      // Kind 7: User's like to see reactions
+
+      // Kind 8: Badge awards (not relevant for repo activity)
+      if (event.kind === 8) {
+        return true;
+      }
+      
+      // Kind 24: Public messages (shown in messages tab)
+      if (event.kind === KIND.PUBLIC_MESSAGE) {
+        return true;
+      }
+    }
+
     return false;
   }
 
@@ -613,8 +653,12 @@
       // Step 5: Deduplicate, filter, and sort by created_at (newest first)
       const eventMap = new Map<string, NostrEvent>();
       for (const event of allActivityEvents) {
-        // Use shared exclusion function to filter out user's own events and write-proof messages
-        if (shouldExcludeEvent(event, userPubkey)) {
+        // Use shared exclusion function to filter out:
+        // - User's own events
+        // - Ephemeral events (20000-29999)
+        // - Replaceable events (0, 3, 10000-19999) - metadata/configuration
+        // - Non-repo regular kinds (1, 2, 5, 6, 7, 8, 24)
+        if (shouldExcludeEvent(event, userPubkey, true)) {
           continue;
         }
         
@@ -640,6 +684,16 @@
   }
 
   function getEventContext(event: NostrEvent): string {
+    // Special handling for reaction events (kind 7)
+    if (event.kind === 7) {
+      const reaction = event.content?.trim() || '+';
+      const eTag = event.tags.find(t => t[0] === 'e')?.[1];
+      if (eTag) {
+        return `Reacted ${reaction} to event ${eTag.slice(0, 8)}...`;
+      }
+      return `Reacted ${reaction}`;
+    }
+
     // Extract context from event content or tags
     if (event.content && event.content.trim()) {
       // Limit to first 200 characters
@@ -1077,9 +1131,20 @@
           {:else}
             <div class="activity-list">
               {#each activityEvents as event}
-                <div class="activity-card">
+                <div class="activity-card" class:reaction-event={event.kind === 7}>
                   <div class="activity-context">
-                    <p class="activity-blurb">{getEventContext(event)}</p>
+                    {#if event.kind === 7}
+                      {@const reaction = event.content?.trim() || '+'}
+                      {@const eTag = event.tags.find(t => t[0] === 'e')?.[1]}
+                      <div class="reaction-display">
+                        <span class="reaction-emoji">{reaction}</span>
+                        <span class="reaction-text">
+                          {eTag ? `Reacted to event ${eTag.slice(0, 8)}...` : 'Reacted'}
+                        </span>
+                      </div>
+                    {:else}
+                      <p class="activity-blurb">{getEventContext(event)}</p>
+                    {/if}
                   </div>
                   <div class="activity-footer">
                     <div class="activity-author">
@@ -1124,7 +1189,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div class="modal" role="document" onclick={(e) => e.stopPropagation()}>
       <h3>Send Public Message</h3>
-      <p class="modal-note">This message will be publicly visible.</p>
+      <p class="modal-note">This message can be found and read on relays, but is not usuaally displayed in the main feeds.</p>
       <label>
         <textarea 
           bind:value={newMessageContent} 
@@ -1763,6 +1828,28 @@
     line-height: 1.6;
     margin: 0;
     word-wrap: break-word;
+  }
+
+  .reaction-display {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .reaction-emoji {
+    font-size: 2rem;
+    line-height: 1;
+    display: inline-block;
+  }
+
+  .reaction-text {
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    line-height: 1.6;
+  }
+
+  .reaction-event {
+    border-left: 3px solid var(--accent);
   }
 
   .activity-footer {
