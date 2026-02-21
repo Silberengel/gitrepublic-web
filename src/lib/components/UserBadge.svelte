@@ -13,27 +13,26 @@
 
   let { pubkey, disableLink = false }: Props = $props();
   
-  // Convert pubkey to npub for navigation
-  function getNpub(): string {
+  // Convert pubkey to npub for navigation (reactive)
+  const profileUrl = $derived.by(() => {
     try {
       // Check if already npub format
       try {
         const decoded = nip19.decode(pubkey);
         if (decoded.type === 'npub') {
-          return pubkey;
+          return `/users/${pubkey}`;
         }
       } catch {
         // Not an npub, continue to encode
       }
       // Convert hex pubkey to npub
-      return nip19.npubEncode(pubkey);
+      const npub = nip19.npubEncode(pubkey);
+      return `/users/${npub}`;
     } catch {
       // If all fails, return as-is (will be handled by route)
-      return pubkey;
+      return `/users/${pubkey}`;
     }
-  }
-  
-  const profileUrl = `/users/${getNpub()}`;
+  });
   
   let userProfile = $state<{ name?: string; picture?: string } | null>(null);
   let loading = $state(true);
@@ -194,7 +193,13 @@
     <span class="user-badge-name">{truncateHandle(userProfile?.name)}</span>
   </div>
 {:else}
-  <a href={profileUrl} class="user-badge">
+  <a 
+    href={profileUrl} 
+    class="user-badge"
+    onclick={(e) => {
+      e.stopPropagation();
+    }}
+  >
     {#if userProfile?.picture}
       <img src={userProfile.picture} alt="Profile" class="user-badge-avatar" />
     {:else}

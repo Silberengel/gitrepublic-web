@@ -3,7 +3,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { NostrClient } from '$lib/services/nostr/nostr-client.js';
-  import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
+  import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS } from '$lib/config.js';
   import { nip19 } from 'nostr-tools';
   import type { NostrEvent } from '$lib/types/nostr.js';
   import { getPublicKeyWithNIP07, isNIP07Available, signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
@@ -46,6 +46,230 @@
   let activityEvents = $state<NostrEvent[]>([]);
   let loadingActivity = $state(false);
   let activityLoaded = $state(false); // Track if we've attempted to load activity
+  let showReplyDialog = $state(false);
+  let replyingToEvent = $state<NostrEvent | null>(null);
+  let replyContent = $state('');
+  let sendingReply = $state(false);
+  
+  // Quoted events cache for messages - use array for better reactivity
+  let quotedEvents = $state<NostrEvent[]>([]);
+  
+  // Helper to get quoted event by ID
+  const getQuotedEvent = (eventId: string): NostrEvent | undefined => {
+    return quotedEvents.find(e => e.id === eventId);
+  };
+
+  // Referenced events cache for activity (a-tags and e-tags) - use array for better reactivity
+  let referencedEvents = $state<NostrEvent[]>([]);
+  
+  // Helper to get referenced event by ID or a-tag
+  const getReferencedEvent = (eventId?: string, aTag?: string): NostrEvent | undefined => {
+    if (eventId) {
+      return referencedEvents.find(e => e.id === eventId);
+    }
+    if (aTag) {
+      // Parse a-tag format: kind:pubkey:d-tag
+      const parts = aTag.split(':');
+      if (parts.length === 3) {
+        const kind = parseInt(parts[0]);
+        const pubkey = parts[1];
+        const dTag = parts[2];
+        return referencedEvents.find(e => 
+          e.kind === kind && 
+          e.pubkey === pubkey && 
+          e.tags.find(t => t[0] === 'd' && t[1] === dTag)
+        );
+      }
+    }
+    return undefined;
+  };
+
+  // Nostr link cache for embedded events and profiles
+  let nostrLinkEvents = $state<Map<string, NostrEvent>>(new Map());
+  let nostrLinkProfiles = $state<Map<string, string>>(new Map()); // npub -> pubkey hex
+
+  // Parse nostr: links from content and extract IDs/pubkeys
+  function parseNostrLinks(content: string): Array<{ type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile'; value: string; start: number; end: number }> {
+    const links: Array<{ type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile'; value: string; start: number; end: number }> = [];
+    const nostrLinkRegex = /nostr:(nevent1|naddr1|note1|npub1|profile1)[a-zA-Z0-9]+/g;
+    let match;
+    
+    while ((match = nostrLinkRegex.exec(content)) !== null) {
+      const fullMatch = match[0];
+      const prefix = match[1];
+      let type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile';
+      
+      if (prefix === 'nevent1') type = 'nevent';
+      else if (prefix === 'naddr1') type = 'naddr';
+      else if (prefix === 'note1') type = 'note1';
+      else if (prefix === 'npub1') type = 'npub';
+      else if (prefix === 'profile1') type = 'profile';
+      else continue;
+      
+      links.push({
+        type,
+        value: fullMatch,
+        start: match.index,
+        end: match.index + fullMatch.length
+      });
+    }
+    
+    return links;
+  }
+
+  // Load events/profiles from nostr: links
+  async function loadNostrLinks(content: string) {
+    const links = parseNostrLinks(content);
+    if (links.length === 0) return;
+
+    const eventIds: string[] = [];
+    const aTags: string[] = [];
+    const npubs: string[] = [];
+
+    for (const link of links) {
+      try {
+        if (link.type === 'nevent' || link.type === 'note1') {
+          const decoded = nip19.decode(link.value.replace('nostr:', ''));
+          if (decoded.type === 'nevent') {
+            eventIds.push(decoded.data.id);
+          } else if (decoded.type === 'note') {
+            eventIds.push(decoded.data as string);
+          }
+        } else if (link.type === 'naddr') {
+          const decoded = nip19.decode(link.value.replace('nostr:', ''));
+          if (decoded.type === 'naddr') {
+            const aTag = `${decoded.data.kind}:${decoded.data.pubkey}:${decoded.data.identifier}`;
+            aTags.push(aTag);
+          }
+        } else if (link.type === 'npub' || link.type === 'profile') {
+          const decoded = nip19.decode(link.value.replace('nostr:', ''));
+          if (decoded.type === 'npub') {
+            npubs.push(link.value);
+            nostrLinkProfiles.set(link.value, decoded.data as string);
+          }
+        }
+      } catch {
+        // Invalid nostr link, skip
+      }
+    }
+
+    // Fetch events
+    if (eventIds.length > 0) {
+      try {
+        const events = await Promise.race([
+          nostrClient.fetchEvents([{ ids: eventIds, limit: eventIds.length }]),
+          new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 10000))
+        ]);
+        
+        for (const event of events) {
+          nostrLinkEvents.set(event.id, event);
+        }
+      } catch {
+        // Ignore fetch errors
+      }
+    }
+
+    // Fetch a-tag events
+    if (aTags.length > 0) {
+      for (const aTag of aTags) {
+        const parts = aTag.split(':');
+        if (parts.length === 3) {
+          try {
+            const kind = parseInt(parts[0]);
+            const pubkey = parts[1];
+            const dTag = parts[2];
+            const events = await Promise.race([
+              nostrClient.fetchEvents([{ kinds: [kind], authors: [pubkey], '#d': [dTag], limit: 1 }]),
+              new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 10000))
+            ]);
+            
+            if (events.length > 0) {
+              nostrLinkEvents.set(events[0].id, events[0]);
+            }
+          } catch {
+            // Ignore fetch errors
+          }
+        }
+      }
+    }
+  }
+
+  // Get event from nostr: link
+  function getEventFromNostrLink(link: string): NostrEvent | undefined {
+    try {
+      if (link.startsWith('nostr:nevent1') || link.startsWith('nostr:note1')) {
+        const decoded = nip19.decode(link.replace('nostr:', ''));
+        if (decoded.type === 'nevent') {
+          return nostrLinkEvents.get(decoded.data.id);
+        } else if (decoded.type === 'note') {
+          return nostrLinkEvents.get(decoded.data as string);
+        }
+      } else if (link.startsWith('nostr:naddr1')) {
+        const decoded = nip19.decode(link.replace('nostr:', ''));
+        if (decoded.type === 'naddr') {
+          const eventId = `${decoded.data.kind}:${decoded.data.pubkey}:${decoded.data.identifier}`;
+          return Array.from(nostrLinkEvents.values()).find(e => {
+            const dTag = e.tags.find(t => t[0] === 'd')?.[1];
+            return e.kind === decoded.data.kind && 
+                   e.pubkey === decoded.data.pubkey && 
+                   dTag === decoded.data.identifier;
+          });
+        }
+      }
+    } catch {
+      // Invalid link
+    }
+    return undefined;
+  }
+
+  // Get pubkey from nostr: npub/profile link
+  function getPubkeyFromNostrLink(link: string): string | undefined {
+    return nostrLinkProfiles.get(link);
+  }
+
+  // Process content with nostr links into parts for rendering
+  function processContentWithNostrLinks(content: string): Array<{ type: 'text' | 'event' | 'profile' | 'placeholder'; value: string; event?: NostrEvent; pubkey?: string }> {
+    const links = parseNostrLinks(content);
+    if (links.length === 0) {
+      return [{ type: 'text', value: content }];
+    }
+
+    const parts: Array<{ type: 'text' | 'event' | 'profile' | 'placeholder'; value: string; event?: NostrEvent; pubkey?: string }> = [];
+    let lastIndex = 0;
+
+    for (const link of links) {
+      // Add text before link
+      if (link.start > lastIndex) {
+        const textPart = content.slice(lastIndex, link.start);
+        if (textPart) {
+          parts.push({ type: 'text', value: textPart });
+        }
+      }
+
+      // Add link
+      const event = getEventFromNostrLink(link.value);
+      const pubkey = getPubkeyFromNostrLink(link.value);
+      if (event) {
+        parts.push({ type: 'event', value: link.value, event });
+      } else if (pubkey) {
+        parts.push({ type: 'profile', value: link.value, pubkey });
+      } else {
+        parts.push({ type: 'placeholder', value: link.value });
+      }
+
+      lastIndex = link.end;
+    }
+
+    // Add remaining text
+    if (lastIndex < content.length) {
+      const textPart = content.slice(lastIndex);
+      if (textPart) {
+        parts.push({ type: 'text', value: textPart });
+      }
+    }
+
+    return parts;
+  }
 
   const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
   const gitDomain = $page.data.gitDomain || 'localhost:6543';
@@ -357,11 +581,61 @@ i   *
         };
         return !shouldExcludeEvent(eventLike, profileOwnerPubkeyHex || '');
       });
+      
+      // Fetch quoted events from q-tags
+      await loadQuotedEvents(messages);
+      
+      // Fetch nostr: links from message content
+      for (const message of messages) {
+        await loadNostrLinks(message.content);
+      }
     } catch (err) {
       console.error('Error loading messages:', err);
     } finally {
       messagesLoaded = true; // Mark as loaded to prevent infinite loop (even on error)
       loadingMessages = false;
+    }
+  }
+
+  async function loadQuotedEvents(messages: PublicMessage[]) {
+    // Collect all quoted event IDs from q-tags
+    const quotedEventIds = new Set<string>();
+    for (const message of messages) {
+      const qTags = message.tags.filter(t => t[0] === 'q' && t[1]);
+      for (const qTag of qTags) {
+        if (qTag[1]) {
+          quotedEventIds.add(qTag[1]);
+        }
+      }
+    }
+
+    if (quotedEventIds.size === 0) return;
+
+    // Fetch events from relays (nostrClient will use cache internally)
+    try {
+      // Add timeout to prevent hanging
+      const fetchPromise = nostrClient.fetchEvents([
+        {
+          ids: Array.from(quotedEventIds),
+          limit: quotedEventIds.size
+        }
+      ]);
+      
+      const timeoutPromise = new Promise<NostrEvent[]>((resolve) => {
+        setTimeout(() => resolve([]), 10000); // 10 second timeout
+      });
+      
+      const fetchedEvents = await Promise.race([fetchPromise, timeoutPromise]);
+      
+      // Update cache reactively - add new events, avoid duplicates
+      const existingIds = new Set(quotedEvents.map(e => e.id));
+      const newEvents = fetchedEvents.filter(e => !existingIds.has(e.id));
+      if (newEvents.length > 0) {
+        quotedEvents = [...quotedEvents, ...newEvents];
+      }
+    } catch (err) {
+      console.warn('Failed to fetch quoted events:', err);
+      // Don't leave loading state stuck - clear it on error
     }
   }
 
@@ -674,12 +948,106 @@ i   *
         .sort((a, b) => b.created_at - a.created_at)
         .slice(0, 200);
 
+      // Fetch referenced events from a-tags and e-tags
+      await loadReferencedEvents(activityEvents);
+      
+      // Fetch nostr: links from event content
+      for (const event of activityEvents) {
+        if (event.content) {
+          await loadNostrLinks(event.content);
+        }
+      }
     } catch (err) {
       console.error('Failed to load activity:', err);
       error = 'Failed to load activity';
     } finally {
       activityLoaded = true; // Mark as loaded to prevent infinite loop (even on error)
       loadingActivity = false;
+    }
+  }
+
+  async function loadReferencedEvents(events: NostrEvent[]) {
+    // Collect all referenced event IDs and a-tags
+    const eventIds = new Set<string>();
+    const aTags = new Set<string>();
+    
+    for (const event of events) {
+      // Collect e-tags (event references)
+      const eTags = event.tags.filter(t => t[0] === 'e' && t[1]);
+      for (const eTag of eTags) {
+        if (eTag[1]) {
+          eventIds.add(eTag[1]);
+        }
+      }
+      
+      // Collect a-tags (addressable event references)
+      const aTagValues = event.tags.filter(t => t[0] === 'a' && t[1]);
+      for (const aTag of aTagValues) {
+        if (aTag[1]) {
+          aTags.add(aTag[1]);
+        }
+      }
+    }
+
+    if (eventIds.size === 0 && aTags.size === 0) return;
+
+    // Fetch events by ID
+    const eventsToFetch: Promise<NostrEvent[]>[] = [];
+    
+    if (eventIds.size > 0) {
+      eventsToFetch.push(
+        nostrClient.fetchEvents([
+          {
+            ids: Array.from(eventIds),
+            limit: eventIds.size
+          }
+        ]).catch(() => [])
+      );
+    }
+
+    // Fetch events by a-tags
+    if (aTags.size > 0) {
+      for (const aTag of aTags) {
+        const parts = aTag.split(':');
+        if (parts.length === 3) {
+          const kind = parseInt(parts[0]);
+          const pubkey = parts[1];
+          const dTag = parts[2];
+          
+          eventsToFetch.push(
+            nostrClient.fetchEvents([
+              {
+                kinds: [kind],
+                authors: [pubkey],
+                '#d': [dTag],
+                limit: 1
+              }
+            ]).catch(() => [])
+          );
+        }
+      }
+    }
+
+    // Fetch all referenced events
+    try {
+      const fetchPromises = eventsToFetch.map(p => 
+        Promise.race([
+          p,
+          new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 10000))
+        ])
+      );
+      
+      const fetchedEventsArrays = await Promise.all(fetchPromises);
+      const fetchedEvents = fetchedEventsArrays.flat();
+      
+      // Update cache reactively - add new events, avoid duplicates
+      const existingIds = new Set(referencedEvents.map(e => e.id));
+      const newEvents = fetchedEvents.filter(e => !existingIds.has(e.id));
+      if (newEvents.length > 0) {
+        referencedEvents = [...referencedEvents, ...newEvents];
+      }
+    } catch (err) {
+      console.warn('Failed to fetch referenced events:', err);
     }
   }
 
@@ -754,7 +1122,281 @@ i   *
       }
     }
 
-    return kindName;
+    // Always return something, even if it's just the kind name
+    return kindName || `Event ${event.id.slice(0, 8)}...`;
+  }
+
+  function parseRepost(event: NostrEvent): NostrEvent | null {
+    // Reposts (kind 6) contain the embedded event as JSON in the content field
+    if (event.kind !== KIND.REPOST || !event.content) {
+      return null;
+    }
+
+    try {
+      const embeddedEvent = JSON.parse(event.content);
+      // Validate it's a proper Nostr event structure
+      if (embeddedEvent && typeof embeddedEvent === 'object' && 
+          embeddedEvent.kind !== undefined && 
+          embeddedEvent.pubkey && 
+          embeddedEvent.id) {
+        return embeddedEvent as NostrEvent;
+      }
+    } catch {
+      // Invalid JSON, return null
+    }
+
+    return null;
+  }
+
+  function parseZapReceipt(event: NostrEvent): {
+    amount: string;
+    senderPubkey?: string;
+    recipientPubkey?: string;
+    eventId?: string;
+    comment?: string;
+  } {
+    const pTag = event.tags.find(t => t[0] === 'p')?.[1]; // Recipient
+    const PTag = event.tags.find(t => t[0] === 'P')?.[1]; // Sender
+    const eTag = event.tags.find(t => t[0] === 'e')?.[1]; // Event being zapped
+    const bolt11Tag = event.tags.find(t => t[0] === 'bolt11')?.[1];
+    const descriptionTag = event.tags.find(t => t[0] === 'description')?.[1];
+
+    // Parse amount from zap request in description tag (more reliable than bolt11)
+    let amount = 'Zap';
+    if (descriptionTag) {
+      try {
+        const zapRequest = JSON.parse(descriptionTag);
+        const amountTag = zapRequest.tags?.find((t: string[]) => t[0] === 'amount');
+        if (amountTag && amountTag[1]) {
+          const millisats = parseInt(amountTag[1]);
+          const sats = Math.round(millisats / 1000);
+          if (sats > 0) {
+            amount = `${sats} sats`;
+          }
+        }
+      } catch {
+        // Invalid JSON, try parsing from bolt11 as fallback
+        if (bolt11Tag) {
+          // Extract amount from bolt11 (format: lnbc{amount}{unit})
+          // This is a simplified parser - bolt11 format is complex
+          const match = bolt11Tag.match(/lnbc(\d+)([munp])?/);
+          if (match) {
+            const num = parseInt(match[1]);
+            const unit = match[2] || '';
+            let sats = num;
+            if (unit === 'm') sats = num / 1000;
+            else if (unit === 'u') sats = num / 1000000;
+            else if (unit === 'n') sats = num / 1000000000;
+            else if (unit === 'p') sats = num / 1000000000000;
+            if (sats > 0) {
+              amount = `${Math.round(sats)} sats`;
+            }
+          }
+        }
+      }
+    }
+
+    // Parse comment from zap request in description tag
+    let comment: string | undefined;
+    if (descriptionTag) {
+      try {
+        const zapRequest = JSON.parse(descriptionTag);
+        if (zapRequest.content && zapRequest.content.trim()) {
+          comment = zapRequest.content.trim();
+        }
+      } catch {
+        // Invalid JSON, ignore
+      }
+    }
+
+    return {
+      amount,
+      senderPubkey: PTag,
+      recipientPubkey: pTag,
+      eventId: eTag,
+      comment
+    };
+  }
+
+  function startReply(event: NostrEvent) {
+    if (!viewerPubkeyHex) {
+      alert('Please connect your NIP-07 extension to reply');
+      return;
+    }
+    replyingToEvent = event;
+    replyContent = '';
+    showReplyDialog = true;
+  }
+
+  async function sendReply() {
+    if (!replyingToEvent || !replyContent.trim() || !viewerPubkeyHex || sendingReply) return;
+
+    sendingReply = true;
+    try {
+      let eventTemplate: Omit<NostrEvent, 'sig' | 'id'>;
+      let targetRelays: string[];
+
+      if (replyingToEvent.kind === KIND.PUBLIC_MESSAGE) {
+        // Kind 24 reply (NIP-24) - use q-tag, no e/p/a tags
+        // Get relays from message recipients or use recipient's relays
+        const recipients = replyingToEvent.tags.filter(t => t[0] === 'p' && t[1]).map(t => t[1]);
+        const relayHints = replyingToEvent.tags.filter(t => t[0] === 'p' && t[2]).map(t => t[2]).filter(Boolean);
+        
+        // Use relay hints from p tags if available, otherwise fetch recipient's relays
+        if (relayHints.length > 0) {
+          targetRelays = [...new Set(relayHints)];
+        } else if (recipients.length > 0) {
+          // Fetch relays from the first recipient (or use all recipients' relays)
+          const { getUserRelays } = await import('$lib/services/nostr/user-relays.js');
+          const allSearchRelays = [...new Set([...DEFAULT_NOSTR_SEARCH_RELAYS, ...DEFAULT_NOSTR_RELAYS])];
+          const fullRelayClient = new NostrClient(allSearchRelays);
+          
+          // Get relays from all recipients and combine
+          const allRecipientRelays: string[] = [];
+          for (const recipient of recipients) {
+            const { outbox, inbox } = await getUserRelays(recipient, fullRelayClient);
+            allRecipientRelays.push(...outbox, ...inbox);
+          }
+          
+          targetRelays = combineRelays([...new Set(allRecipientRelays)], DEFAULT_NOSTR_RELAYS);
+        } else {
+          // Fallback to default relays
+          const { getUserRelays } = await import('$lib/services/nostr/user-relays.js');
+          const allSearchRelays = [...new Set([...DEFAULT_NOSTR_SEARCH_RELAYS, ...DEFAULT_NOSTR_RELAYS])];
+          const fullRelayClient = new NostrClient(allSearchRelays);
+          const { outbox, inbox } = await getUserRelays(viewerPubkeyHex, fullRelayClient);
+          targetRelays = combineRelays(outbox.length > 0 ? outbox : inbox, DEFAULT_NOSTR_RELAYS);
+        }
+
+        // Get relay hint from q-tag if available, otherwise use first target relay
+        const qTag = replyingToEvent.tags.find(t => t[0] === 'q');
+        const relayHint = qTag?.[2] || targetRelays[0] || '';
+
+        eventTemplate = {
+          kind: KIND.PUBLIC_MESSAGE,
+          pubkey: viewerPubkeyHex,
+          created_at: Math.floor(Date.now() / 1000),
+          content: replyContent.trim(),
+          tags: [
+            ['q', replyingToEvent.id, relayHint, replyingToEvent.pubkey],
+            // Add p tags for recipients (from the original message)
+            ...recipients.map(p => ['p', p, relayHint])
+          ]
+        };
+      } else if (replyingToEvent.kind === 1) {
+        const { getUserRelays } = await import('$lib/services/nostr/user-relays.js');
+        const allSearchRelays = [...new Set([...DEFAULT_NOSTR_SEARCH_RELAYS, ...DEFAULT_NOSTR_RELAYS])];
+        const fullRelayClient = new NostrClient(allSearchRelays);
+        const { outbox, inbox } = await getUserRelays(viewerPubkeyHex, fullRelayClient);
+        targetRelays = combineRelays(outbox.length > 0 ? outbox : inbox, DEFAULT_NOSTR_RELAYS);
+        // Kind 1 reply (NIP-10)
+        const rootETag = replyingToEvent.tags.find(t => t[0] === 'e' && t[3] === 'root');
+        const replyETag = replyingToEvent.tags.find(t => t[0] === 'e' && t[3] === 'reply');
+        
+        // Determine root ID: use root tag if present, otherwise the event itself is the root
+        const rootId = rootETag?.[1] || replyingToEvent.id;
+        // Check if we're replying directly to the root (event has no reply tag)
+        const isDirectReplyToRoot = !replyETag;
+        
+        // Get all p tags from the event being replied to
+        const pTags = replyingToEvent.tags.filter(t => t[0] === 'p').map(t => t[1]);
+        // Add the author of the event being replied to if not already present
+        if (!pTags.includes(replyingToEvent.pubkey)) {
+          pTags.push(replyingToEvent.pubkey);
+        }
+
+        const tags: string[][] = [
+          ['e', rootId, '', 'root']
+        ];
+        
+        // Only add reply marker if not replying directly to root (NIP-10: for top-level replies, only root marker)
+        if (!isDirectReplyToRoot) {
+          tags.push(['e', replyingToEvent.id, '', 'reply']);
+        }
+        
+        tags.push(...pTags.map(p => ['p', p]));
+
+        eventTemplate = {
+          kind: 1,
+          pubkey: viewerPubkeyHex,
+          created_at: Math.floor(Date.now() / 1000),
+          content: replyContent.trim(),
+          tags
+        };
+      } else {
+        // Kind 1111 reply (NIP-22)
+        const { getUserRelays } = await import('$lib/services/nostr/user-relays.js');
+        const allSearchRelays = [...new Set([...DEFAULT_NOSTR_SEARCH_RELAYS, ...DEFAULT_NOSTR_RELAYS])];
+        const fullRelayClient = new NostrClient(allSearchRelays);
+        const { outbox, inbox } = await getUserRelays(viewerPubkeyHex, fullRelayClient);
+        targetRelays = combineRelays(outbox.length > 0 ? outbox : inbox, DEFAULT_NOSTR_RELAYS);
+        
+        // Find root event info
+        const rootETag = replyingToEvent.tags.find(t => t[0] === 'E');
+        const rootKTag = replyingToEvent.tags.find(t => t[0] === 'K');
+        const rootPTag = replyingToEvent.tags.find(t => t[0] === 'P');
+        const rootATag = replyingToEvent.tags.find(t => t[0] === 'A');
+
+        // Use the event being replied to as root if no root tags found
+        const rootEventId = rootETag?.[1] || replyingToEvent.id;
+        const rootEventKind = rootKTag ? parseInt(rootKTag[1]) : replyingToEvent.kind;
+        const rootPubkey = rootPTag?.[1] || replyingToEvent.pubkey;
+        const rootRelay = rootETag?.[2] || rootPTag?.[2] || '';
+
+        const tags: string[][] = [
+          ['E', rootEventId, rootRelay, rootPubkey],
+          ['K', rootEventKind.toString()],
+          ['P', rootPubkey, rootRelay]
+        ];
+
+        if (rootATag) {
+          tags.push(['A', rootATag[1], rootATag[2] || '']);
+        }
+
+        // Parent is the event being replied to
+        tags.push(
+          ['e', replyingToEvent.id, rootRelay, replyingToEvent.pubkey],
+          ['k', replyingToEvent.kind.toString()],
+          ['p', replyingToEvent.pubkey, rootRelay]
+        );
+
+        eventTemplate = {
+          kind: KIND.COMMENT,
+          pubkey: viewerPubkeyHex,
+          created_at: Math.floor(Date.now() / 1000),
+          content: replyContent.trim(),
+          tags
+        };
+      }
+
+      const signedEvent = await signEventWithNIP07(eventTemplate);
+      
+      // Publish to relays
+      await nostrClient.publishEvent(signedEvent, targetRelays);
+
+      // Store the event kind before clearing
+      const wasMessageReply = replyingToEvent.kind === KIND.PUBLIC_MESSAGE;
+      
+      showReplyDialog = false;
+      replyingToEvent = null;
+      replyContent = '';
+      
+      // Reload to show the new reply
+      if (wasMessageReply) {
+        // Reload messages if replying to a message
+        messagesLoaded = false;
+        await loadMessages();
+      } else {
+        // Reload activity for other event types
+        activityLoaded = false;
+        await loadActivity();
+      }
+    } catch (err) {
+      console.error('Failed to send reply:', err);
+      alert(`Failed to send reply: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      sendingReply = false;
+    }
   }
 
   function getEventLink(event: NostrEvent): string {
@@ -1093,7 +1735,29 @@ i   *
               {#each messages as message}
                 {@const isFromViewer = viewerPubkeyHex !== null && message.pubkey === viewerPubkeyHex}
                 {@const isToViewer = viewerPubkeyHex !== null && getMessageRecipients(message).includes(viewerPubkeyHex)}
+                {@const qTags = message.tags.filter(t => t[0] === 'q')}
                 <div class="message-card" class:from-viewer={isFromViewer} class:to-viewer={isToViewer && !isFromViewer}>
+                  {#if qTags.length > 0}
+                    {#each qTags as qTag}
+                      {@const quotedEventId = qTag[1]}
+                      {@const relayHint = qTag[2] || ''}
+                      {@const quotedEvent = getQuotedEvent(quotedEventId)}
+                      {#if quotedEvent}
+                        <div class="quoted-event">
+                          <div class="quoted-event-header">
+                            <UserBadge pubkey={quotedEvent.pubkey} disableLink={true} />
+                            <span class="quoted-event-time">{formatMessageTime(quotedEvent.created_at)}</span>
+                          </div>
+                          <div class="quoted-event-content">{quotedEvent.content || '(No content)'}</div>
+                        </div>
+                      {:else if quotedEventId}
+                        <!-- Quoted event is being loaded or not found -->
+                        <div class="quoted-event quoted-event-loading">
+                          <div class="quoted-event-content">Quoted event {quotedEventId.slice(0, 8)}...</div>
+                        </div>
+                      {/if}
+                    {/each}
+                  {/if}
                   <div class="message-header">
                     <div class="message-participants">
                       <span class="participants-label">From:</span>
@@ -1105,9 +1769,54 @@ i   *
                         {/each}
                       {/if}
                     </div>
-                    <span class="message-time">{formatMessageTime(message.created_at)}</span>
+                    <div class="message-header-right">
+                      <span class="message-time">{formatMessageTime(message.created_at)}</span>
+                      <div class="message-actions">
+                        {#if viewerPubkeyHex}
+                          <button
+                            onclick={() => startReply(message)}
+                            class="message-action-button"
+                            title="Reply"
+                            aria-label="Reply"
+                          >
+                            <img src="/icons/message-circle.svg" alt="Reply" class="message-icon" />
+                          </button>
+                        {/if}
+                        <a 
+                          href={getEventLink(message)} 
+                          class="message-action-button"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="View Event"
+                          aria-label="View Event"
+                        >
+                          <img src="/icons/external-link.svg" alt="View" class="message-icon" />
+                        </a>
+                      </div>
+                    </div>
                   </div>
-                  <div class="message-body">{message.content}</div>
+                  <div class="message-body">
+                    {#if true}
+                      {@const parts = processContentWithNostrLinks(message.content)}
+                      {#each parts as part}
+                      {#if part.type === 'text'}
+                        <span>{part.value}</span>
+                      {:else if part.type === 'event' && part.event}
+                        <div class="nostr-link-event">
+                          <div class="nostr-link-event-header">
+                            <UserBadge pubkey={part.event.pubkey} disableLink={true} />
+                            <span class="nostr-link-event-time">{formatMessageTime(part.event.created_at)}</span>
+                          </div>
+                          <div class="nostr-link-event-content">{part.event.content || getEventContext(part.event)}</div>
+                        </div>
+                      {:else if part.type === 'profile' && part.pubkey}
+                        <UserBadge pubkey={part.pubkey} />
+                      {:else}
+                        <span class="nostr-link-placeholder">{part.value}</span>
+                      {/if}
+                      {/each}
+                    {/if}
+                  </div>
                 </div>
               {/each}
             </div>
@@ -1131,7 +1840,7 @@ i   *
           {:else}
             <div class="activity-list">
               {#each activityEvents as event}
-                <div class="activity-card" class:reaction-event={event.kind === 7}>
+                <div class="activity-card" class:reaction-event={event.kind === 7} class:zap-receipt={event.kind === KIND.ZAP_RECEIPT}>
                   <div class="activity-context">
                     {#if event.kind === 7}
                       {@const reaction = event.content?.trim() || '+'}
@@ -1142,8 +1851,101 @@ i   *
                           {eTag ? `Reacted to event ${eTag.slice(0, 8)}...` : 'Reacted'}
                         </span>
                       </div>
+                    {:else if event.kind === KIND.ZAP_RECEIPT}
+                      {@const zapData = parseZapReceipt(event)}
+                      <div class="zap-display">
+                        <div class="zap-icon" aria-label="Lightning Zap"></div>
+                        <div class="zap-info">
+                          <div class="zap-amount">{zapData.amount}</div>
+                          <div class="zap-details">
+                            {#if zapData.senderPubkey}
+                              <span>From <UserBadge pubkey={zapData.senderPubkey} disableLink={true} /></span>
+                            {/if}
+                            {#if zapData.recipientPubkey && zapData.recipientPubkey !== profileOwnerPubkeyHex}
+                              <span>To <UserBadge pubkey={zapData.recipientPubkey} disableLink={true} /></span>
+                            {/if}
+                            {#if zapData.eventId}
+                              <span>on event {zapData.eventId.slice(0, 8)}...</span>
+                            {/if}
+                            {#if zapData.comment}
+                              <div class="zap-comment">{zapData.comment}</div>
+                            {/if}
+                          </div>
+                        </div>
+                      </div>
+                    {:else if event.kind === KIND.REPOST}
+                      {@const embeddedEvent = parseRepost(event)}
+                      {#if embeddedEvent}
+                        <div class="repost-display">
+                          <div class="repost-header">
+                            <span class="repost-label">Reposted</span>
+                          </div>
+                          <div class="repost-content">
+                            <div class="repost-author">
+                              <UserBadge pubkey={embeddedEvent.pubkey} disableLink={true} />
+                              <span class="repost-time">{formatMessageTime(embeddedEvent.created_at)}</span>
+                            </div>
+                            <div class="repost-text">{embeddedEvent.content || '(No content)'}</div>
+                          </div>
+                        </div>
+                      {:else}
+                        {@const content = getEventContext(event)}
+                        {@const parts = processContentWithNostrLinks(content)}
+                        <div class="activity-blurb">
+                          {#each parts as part}
+                            {#if part.type === 'text'}
+                              <span>{part.value}</span>
+                            {:else if part.type === 'event' && part.event}
+                              <div class="nostr-link-event">
+                                <div class="nostr-link-event-header">
+                                  <UserBadge pubkey={part.event.pubkey} disableLink={true} />
+                                  <span class="nostr-link-event-time">{formatMessageTime(part.event.created_at)}</span>
+                                </div>
+                                <div class="nostr-link-event-content">{part.event.content || getEventContext(part.event)}</div>
+                              </div>
+                            {:else if part.type === 'profile' && part.pubkey}
+                              <UserBadge pubkey={part.pubkey} />
+                            {:else}
+                              <span class="nostr-link-placeholder">{part.value}</span>
+                            {/if}
+                          {/each}
+                        </div>
+                      {/if}
                     {:else}
-                      <p class="activity-blurb">{getEventContext(event)}</p>
+                      {@const eTag = event.tags.find(t => t[0] === 'e' && t[1])?.[1]}
+                      {@const aTag = event.tags.find(t => t[0] === 'a' && t[1])?.[1]}
+                      {@const referencedEvent = getReferencedEvent(eTag, aTag)}
+                      {#if referencedEvent}
+                        <div class="referenced-event">
+                          <div class="referenced-event-header">
+                            <UserBadge pubkey={referencedEvent.pubkey} disableLink={true} />
+                            <span class="referenced-event-time">{formatMessageTime(referencedEvent.created_at)}</span>
+                          </div>
+                          <div class="referenced-event-content">{referencedEvent.content || getEventContext(referencedEvent)}</div>
+                        </div>
+                      {:else}
+                        {@const content = getEventContext(event)}
+                        {@const parts = processContentWithNostrLinks(content)}
+                        <div class="activity-blurb">
+                          {#each parts as part}
+                            {#if part.type === 'text'}
+                              <span>{part.value}</span>
+                            {:else if part.type === 'event' && part.event}
+                              <div class="nostr-link-event">
+                                <div class="nostr-link-event-header">
+                                  <UserBadge pubkey={part.event.pubkey} disableLink={true} />
+                                  <span class="nostr-link-event-time">{formatMessageTime(part.event.created_at)}</span>
+                                </div>
+                                <div class="nostr-link-event-content">{part.event.content || getEventContext(part.event)}</div>
+                              </div>
+                            {:else if part.type === 'profile' && part.pubkey}
+                              <UserBadge pubkey={part.pubkey} />
+                            {:else}
+                              <span class="nostr-link-placeholder">{part.value}</span>
+                            {/if}
+                          {/each}
+                        </div>
+                      {/if}
                     {/if}
                   </div>
                   <div class="activity-footer">
@@ -1151,14 +1953,28 @@ i   *
                       <UserBadge pubkey={event.pubkey} />
                       <span class="activity-time">{formatMessageTime(event.created_at)}</span>
                     </div>
-                    <a 
-                      href={getEventLink(event)} 
-                      class="activity-link-button"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      View Event
-                    </a>
+                    <div class="activity-actions">
+                      {#if viewerPubkeyHex}
+                        <button
+                          onclick={() => startReply(event)}
+                          class="activity-action-button"
+                          title="Reply"
+                          aria-label="Reply"
+                        >
+                          <img src="/icons/message-circle.svg" alt="Reply" class="activity-icon" />
+                        </button>
+                      {/if}
+                      <a 
+                        href={getEventLink(event)} 
+                        class="activity-action-button"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="View Event"
+                        aria-label="View Event"
+                      >
+                        <img src="/icons/external-link.svg" alt="View" class="activity-icon" />
+                      </a>
+                    </div>
                   </div>
                 </div>
               {/each}
@@ -1213,6 +2029,63 @@ i   *
           class="button-primary"
         >
           {sendingMessage ? 'Sending...' : 'Send'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Reply Dialog -->
+{#if showReplyDialog && replyingToEvent}
+  <div 
+    class="modal-overlay" 
+    role="dialog"
+    aria-modal="true"
+    aria-label="Reply"
+    onclick={() => { showReplyDialog = false; replyingToEvent = null; replyContent = ''; }}
+    onkeydown={(e) => {
+      if (e.key === 'Escape') {
+        showReplyDialog = false;
+        replyingToEvent = null;
+        replyContent = '';
+      }
+    }}
+    tabindex="-1"
+  >
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div class="modal" role="document" onclick={(e) => e.stopPropagation()}>
+      <h3>Reply</h3>
+      <p class="modal-note">
+        {replyingToEvent.kind === 1 
+          ? 'Replying to a text note (kind 1)' 
+          : replyingToEvent.kind === KIND.PUBLIC_MESSAGE
+          ? 'Replying to a public message (kind 24)'
+          : `Replying with a comment (kind ${KIND.COMMENT})`}
+      </p>
+      <label>
+        <textarea 
+          bind:value={replyContent} 
+          rows="6" 
+          placeholder="Type your reply..."
+          disabled={sendingReply}
+          class="message-input"
+        ></textarea>
+      </label>
+      <div class="modal-actions">
+        <button 
+          onclick={() => { showReplyDialog = false; replyingToEvent = null; replyContent = ''; }} 
+          class="button-secondary"
+          disabled={sendingReply}
+        >
+          Cancel
+        </button>
+        <button 
+          onclick={sendReply} 
+          disabled={!replyContent.trim() || sendingReply} 
+          class="button-primary"
+        >
+          {sendingReply ? 'Sending...' : 'Send Reply'}
         </button>
       </div>
     </div>
@@ -1774,6 +2647,94 @@ i   *
     line-height: 1.6;
   }
 
+  .message-header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .message-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .message-action-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    color: var(--text-primary);
+  }
+
+  .message-action-button:hover {
+    background: var(--bg-secondary);
+    border-color: var(--accent);
+    transform: translateY(-1px);
+  }
+
+  .message-icon {
+    width: 1.25rem;
+    height: 1.25rem;
+    filter: var(--icon-filter, none);
+  }
+
+  .quoted-event {
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background: var(--bg-secondary);
+    border-left: 3px solid var(--border-color);
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+  }
+
+  :global([data-theme="light"]) .quoted-event {
+    background: #e8e8e8;
+  }
+
+  :global([data-theme="dark"]) .quoted-event {
+    background: rgba(0, 0, 0, 0.2);
+  }
+
+  :global([data-theme="black"]) .quoted-event {
+    background: #0a0a0a;
+  }
+
+  .quoted-event-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .quoted-event-time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .quoted-event-content {
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    line-height: 1.5;
+    max-height: 10rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .quoted-event-loading {
+    opacity: 0.6;
+    font-style: italic;
+  }
+
   /* Activity */
   .activity-section {
     padding: 0;
@@ -1828,6 +2789,14 @@ i   *
     line-height: 1.6;
     margin: 0;
     word-wrap: break-word;
+    min-height: 1.5rem;
+    display: block;
+  }
+  
+  .activity-blurb:empty::before {
+    content: '(No content)';
+    color: var(--text-muted);
+    font-style: italic;
   }
 
   .reaction-display {
@@ -1852,6 +2821,218 @@ i   *
     border-left: 3px solid var(--accent);
   }
 
+  .zap-display {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .zap-icon {
+    width: 2.5rem;
+    height: 2.5rem;
+    flex-shrink: 0;
+    /* Make lightning icon prominent with accent-colored glow */
+    filter: drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 2px var(--accent));
+  }
+
+  /* Use CSS mask to colorize the icon with accent color */
+  .zap-icon {
+    mask-image: url('/icons/lightning.svg');
+    mask-size: contain;
+    mask-repeat: no-repeat;
+    mask-position: center;
+    background-color: var(--accent);
+    -webkit-mask-image: url('/icons/lightning.svg');
+    -webkit-mask-size: contain;
+    -webkit-mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+  }
+
+  .zap-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .zap-amount {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--accent);
+  }
+
+  .zap-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    line-height: 1.5;
+  }
+
+  .zap-details span {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .zap-comment {
+    margin-top: 0.5rem;
+    padding: 0.75rem;
+    background: var(--bg-secondary);
+    border-radius: 0.5rem;
+    border-left: 2px solid var(--accent);
+    font-style: italic;
+    color: var(--text-secondary);
+  }
+
+  .zap-receipt {
+    border-left: 3px solid var(--accent);
+    background: var(--bg-secondary);
+  }
+
+  .zap-receipt .zap-icon {
+    filter: drop-shadow(0 0 4px var(--accent));
+  }
+
+  .repost-display {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .repost-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .repost-label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .repost-content {
+    padding: 1rem;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    border-left: 3px solid var(--accent);
+  }
+
+  .repost-author {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .repost-time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .repost-text {
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    line-height: 1.6;
+  }
+
+  .referenced-event {
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background: var(--bg-primary);
+    border-left: 3px solid var(--border-color);
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+  }
+
+  :global([data-theme="light"]) .referenced-event {
+    background: #e8e8e8;
+  }
+
+  :global([data-theme="dark"]) .referenced-event {
+    background: rgba(0, 0, 0, 0.2);
+  }
+
+  :global([data-theme="black"]) .referenced-event {
+    background: #0a0a0a;
+  }
+
+  .referenced-event-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .referenced-event-time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .referenced-event-content {
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    line-height: 1.5;
+    max-height: 10rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .nostr-link-event {
+    margin: 0.75rem 0;
+    padding: 0.75rem;
+    background: var(--bg-primary);
+    border-left: 3px solid var(--border-color);
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+  }
+
+  :global([data-theme="light"]) .nostr-link-event {
+    background: #e8e8e8;
+  }
+
+  :global([data-theme="dark"]) .nostr-link-event {
+    background: rgba(0, 0, 0, 0.2);
+  }
+
+  :global([data-theme="black"]) .nostr-link-event {
+    background: #0a0a0a;
+  }
+
+  .nostr-link-event-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .nostr-link-event-time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .nostr-link-event-content {
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    line-height: 1.5;
+    max-height: 10rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .nostr-link-placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
   .activity-footer {
     display: flex;
     justify-content: space-between;
@@ -1873,22 +3054,38 @@ i   *
     white-space: nowrap;
   }
 
-  .activity-link-button {
-    padding: 0.5rem 1rem;
-    background: var(--accent);
-    color: var(--accent-text, #ffffff);
-    border: none;
-    border-radius: 0.5rem;
-    font-weight: 500;
-    text-decoration: none;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    white-space: nowrap;
-    display: inline-block;
+  .activity-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
   }
 
-  .activity-link-button:hover {
-    opacity: 0.9;
+  .activity-action-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    color: var(--text-primary);
+  }
+
+  .activity-action-button:hover {
+    background: var(--bg-secondary);
+    border-color: var(--accent);
+    transform: translateY(-1px);
+  }
+
+  .activity-icon {
+    width: 1.25rem;
+    height: 1.25rem;
+    filter: var(--icon-filter, none);
   }
 
   /* Empty State */

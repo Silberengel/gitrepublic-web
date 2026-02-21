@@ -58,6 +58,8 @@ export const KIND = {
   PUBLIC_MESSAGE: 24, // NIP-24: Public message (direct chat)
   PROFILE_METADATA: 0, // NIP-01: User metadata
   REPOST: 6, // NIP-18: Repost
+  ZAP_REQUEST: 9734, // NIP-57: Lightning zap request
+  ZAP_RECEIPT: 9735, // NIP-57: Lightning zap receipt
 } as const;
 
 /**

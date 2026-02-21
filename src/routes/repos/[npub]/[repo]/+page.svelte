@@ -364,6 +364,302 @@
   }>>([]);
   let loadingDiscussions = $state(false);
 
+  // Discussion events cache for reply/quote blurbs
+  let discussionEvents = $state<Map<string, NostrEvent>>(new Map());
+  
+  // Nostr link cache for embedded events and profiles
+  let nostrLinkEvents = $state<Map<string, NostrEvent>>(new Map());
+  let nostrLinkProfiles = $state<Map<string, string>>(new Map()); // npub -> pubkey hex
+
+  // Parse nostr: links from content and extract IDs/pubkeys
+  function parseNostrLinks(content: string): Array<{ type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile'; value: string; start: number; end: number }> {
+    const links: Array<{ type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile'; value: string; start: number; end: number }> = [];
+    const nostrLinkRegex = /nostr:(nevent1|naddr1|note1|npub1|profile1)[a-zA-Z0-9]+/g;
+    let match;
+    
+    while ((match = nostrLinkRegex.exec(content)) !== null) {
+      const fullMatch = match[0];
+      const prefix = match[1];
+      let type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile';
+      
+      if (prefix === 'nevent1') type = 'nevent';
+      else if (prefix === 'naddr1') type = 'naddr';
+      else if (prefix === 'note1') type = 'note1';
+      else if (prefix === 'npub1') type = 'npub';
+      else if (prefix === 'profile1') type = 'profile';
+      else continue;
+      
+      links.push({
+        type,
+        value: fullMatch,
+        start: match.index,
+        end: match.index + fullMatch.length
+      });
+    }
+    
+    return links;
+  }
+
+  // Load events/profiles from nostr: links
+  async function loadNostrLinks(content: string) {
+    const links = parseNostrLinks(content);
+    if (links.length === 0) return;
+
+    const eventIds: string[] = [];
+    const aTags: string[] = [];
+    const npubs: string[] = [];
+
+    for (const link of links) {
+      try {
+        if (link.type === 'nevent' || link.type === 'note1') {
+          const decoded = nip19.decode(link.value.replace('nostr:', ''));
+          if (decoded.type === 'nevent') {
+            eventIds.push(decoded.data.id);
+          } else if (decoded.type === 'note') {
+            eventIds.push(decoded.data as string);
+          }
+        } else if (link.type === 'naddr') {
+          const decoded = nip19.decode(link.value.replace('nostr:', ''));
+          if (decoded.type === 'naddr') {
+            const aTag = `${decoded.data.kind}:${decoded.data.pubkey}:${decoded.data.identifier}`;
+            aTags.push(aTag);
+          }
+        } else if (link.type === 'npub' || link.type === 'profile') {
+          const decoded = nip19.decode(link.value.replace('nostr:', ''));
+          if (decoded.type === 'npub') {
+            npubs.push(link.value);
+            nostrLinkProfiles.set(link.value, decoded.data as string);
+          }
+        }
+      } catch {
+        // Invalid nostr link, skip
+      }
+    }
+
+    // Fetch events
+    if (eventIds.length > 0) {
+      try {
+        const events = await Promise.race([
+          nostrClient.fetchEvents([{ ids: eventIds, limit: eventIds.length }]),
+          new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 10000))
+        ]);
+        
+        for (const event of events) {
+          nostrLinkEvents.set(event.id, event);
+        }
+      } catch {
+        // Ignore fetch errors
+      }
+    }
+
+    // Fetch a-tag events
+    if (aTags.length > 0) {
+      for (const aTag of aTags) {
+        const parts = aTag.split(':');
+        if (parts.length === 3) {
+          try {
+            const kind = parseInt(parts[0]);
+            const pubkey = parts[1];
+            const dTag = parts[2];
+            const events = await Promise.race([
+              nostrClient.fetchEvents([{ kinds: [kind], authors: [pubkey], '#d': [dTag], limit: 1 }]),
+              new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 10000))
+            ]);
+            
+            if (events.length > 0) {
+              nostrLinkEvents.set(events[0].id, events[0]);
+            }
+          } catch {
+            // Ignore fetch errors
+          }
+        }
+      }
+    }
+  }
+
+  // Get event from nostr: link
+  function getEventFromNostrLink(link: string): NostrEvent | undefined {
+    try {
+      if (link.startsWith('nostr:nevent1') || link.startsWith('nostr:note1')) {
+        const decoded = nip19.decode(link.replace('nostr:', ''));
+        if (decoded.type === 'nevent') {
+          return nostrLinkEvents.get(decoded.data.id);
+        } else if (decoded.type === 'note') {
+          return nostrLinkEvents.get(decoded.data as string);
+        }
+      } else if (link.startsWith('nostr:naddr1')) {
+        const decoded = nip19.decode(link.replace('nostr:', ''));
+        if (decoded.type === 'naddr') {
+          const eventId = `${decoded.data.kind}:${decoded.data.pubkey}:${decoded.data.identifier}`;
+          return Array.from(nostrLinkEvents.values()).find(e => {
+            const dTag = e.tags.find(t => t[0] === 'd')?.[1];
+            return e.kind === decoded.data.kind && 
+                   e.pubkey === decoded.data.pubkey && 
+                   dTag === decoded.data.identifier;
+          });
+        }
+      }
+    } catch {
+      // Invalid link
+    }
+    return undefined;
+  }
+
+  // Get pubkey from nostr: npub/profile link
+  function getPubkeyFromNostrLink(link: string): string | undefined {
+    return nostrLinkProfiles.get(link);
+  }
+
+  // Process content with nostr links into parts for rendering
+  function processContentWithNostrLinks(content: string): Array<{ type: 'text' | 'event' | 'profile' | 'placeholder'; value: string; event?: NostrEvent; pubkey?: string }> {
+    const links = parseNostrLinks(content);
+    if (links.length === 0) {
+      return [{ type: 'text', value: content }];
+    }
+
+    const parts: Array<{ type: 'text' | 'event' | 'profile' | 'placeholder'; value: string; event?: NostrEvent; pubkey?: string }> = [];
+    let lastIndex = 0;
+
+    for (const link of links) {
+      // Add text before link
+      if (link.start > lastIndex) {
+        const textPart = content.slice(lastIndex, link.start);
+        if (textPart) {
+          parts.push({ type: 'text', value: textPart });
+        }
+      }
+
+      // Add link
+      const event = getEventFromNostrLink(link.value);
+      const pubkey = getPubkeyFromNostrLink(link.value);
+      if (event) {
+        parts.push({ type: 'event', value: link.value, event });
+      } else if (pubkey) {
+        parts.push({ type: 'profile', value: link.value, pubkey });
+      } else {
+        parts.push({ type: 'placeholder', value: link.value });
+      }
+
+      lastIndex = link.end;
+    }
+
+    // Add remaining text
+    if (lastIndex < content.length) {
+      const textPart = content.slice(lastIndex);
+      if (textPart) {
+        parts.push({ type: 'text', value: textPart });
+      }
+    }
+
+    return parts;
+  }
+
+  // Load full events for discussions and comments to get tags for blurbs
+  async function loadDiscussionEvents(discussionsList: typeof discussions) {
+    const eventIds = new Set<string>();
+    
+    // Collect all event IDs
+    for (const discussion of discussionsList) {
+      if (discussion.id) {
+        eventIds.add(discussion.id);
+      }
+      if (discussion.comments) {
+        for (const comment of discussion.comments) {
+          if (comment.id) {
+            eventIds.add(comment.id);
+          }
+          if (comment.replies) {
+            for (const reply of comment.replies) {
+              if (reply.id) {
+                eventIds.add(reply.id);
+              }
+              if (reply.replies) {
+                for (const nestedReply of reply.replies) {
+                  if (nestedReply.id) {
+                    eventIds.add(nestedReply.id);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (eventIds.size === 0) return;
+
+    try {
+      const events = await Promise.race([
+        nostrClient.fetchEvents([{ ids: Array.from(eventIds), limit: eventIds.size }]),
+        new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 10000))
+      ]);
+      
+      for (const event of events) {
+        discussionEvents.set(event.id, event);
+      }
+    } catch {
+      // Ignore fetch errors
+    }
+  }
+
+  // Get discussion event by ID
+  function getDiscussionEvent(eventId: string): NostrEvent | undefined {
+    return discussionEvents.get(eventId);
+  }
+
+  // Get referenced event from discussion event (e-tag, a-tag, q-tag)
+  function getReferencedEventFromDiscussion(event: NostrEvent): NostrEvent | undefined {
+    // Check e-tag
+    const eTag = event.tags.find(t => t[0] === 'e' && t[1])?.[1];
+    if (eTag) {
+      const referenced = discussionEvents.get(eTag);
+      if (referenced) return referenced;
+    }
+    
+    // Check a-tag
+    const aTag = event.tags.find(t => t[0] === 'a' && t[1])?.[1];
+    if (aTag) {
+      const parts = aTag.split(':');
+      if (parts.length === 3) {
+        const kind = parseInt(parts[0]);
+        const pubkey = parts[1];
+        const dTag = parts[2];
+        return Array.from(discussionEvents.values()).find(e => 
+          e.kind === kind && 
+          e.pubkey === pubkey && 
+          e.tags.find(t => t[0] === 'd' && t[1] === dTag)
+        );
+      }
+    }
+    
+    // Check q-tag
+    const qTag = event.tags.find(t => t[0] === 'q' && t[1])?.[1];
+    if (qTag) {
+      return discussionEvents.get(qTag);
+    }
+    
+    return undefined;
+  }
+
+  // Format time for discussions
+  function formatDiscussionTime(timestamp: number): string {
+    const date = new Date(timestamp * 1000);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return 'just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString();
+  }
+
+  // Create a nostrClient instance for fetching events
+  let nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+
   // README
   let readmeContent = $state<string | null>(null);
   let readmePath = $state<string | null>(null);
@@ -913,6 +1209,37 @@
         pubkey: entry.pubkey,
         comments: entry.comments
       }));
+
+      // Fetch full events for discussions and comments to get tags for blurbs
+      await loadDiscussionEvents(discussions);
+      
+      // Fetch nostr: links from discussion content
+      for (const discussion of discussions) {
+        if (discussion.content) {
+          await loadNostrLinks(discussion.content);
+        }
+        if (discussion.comments) {
+          for (const comment of discussion.comments) {
+            if (comment.content) {
+              await loadNostrLinks(comment.content);
+            }
+            if (comment.replies) {
+              for (const reply of comment.replies) {
+                if (reply.content) {
+                  await loadNostrLinks(reply.content);
+                }
+                if (reply.replies) {
+                  for (const nestedReply of reply.replies) {
+                    if (nestedReply.content) {
+                      await loadNostrLinks(nestedReply.content);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load discussions';
       console.error('Error loading discussions:', err);
@@ -1046,6 +1373,7 @@
 
       // Get repo announcement to get the repo address and relays
       const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
+      nostrClient = client; // Store for use in other functions
       const events = await client.fetchEvents([
         {
           kinds: [KIND.REPO_ANNOUNCEMENT],
@@ -4216,9 +4544,41 @@
                               </button>
                             {/if}
                           </div>
-                          <div class="comment-content">
-                            <p>{comment.content}</p>
-                          </div>
+                          {#if true}
+                            {@const commentEvent = getDiscussionEvent(comment.id)}
+                            {@const referencedEvent = commentEvent ? getReferencedEventFromDiscussion(commentEvent) : undefined}
+                            {@const parts = processContentWithNostrLinks(comment.content)}
+                            <div class="comment-content">
+                              {#if referencedEvent}
+                                <div class="referenced-event">
+                                  <div class="referenced-event-header">
+                                    <UserBadge pubkey={referencedEvent.pubkey} disableLink={true} />
+                                    <span class="referenced-event-time">{formatDiscussionTime(referencedEvent.created_at)}</span>
+                                  </div>
+                                  <div class="referenced-event-content">{referencedEvent.content || '(No content)'}</div>
+                                </div>
+                              {/if}
+                              <div>
+                                {#each parts as part}
+                                  {#if part.type === 'text'}
+                                    <span>{part.value}</span>
+                                  {:else if part.type === 'event' && part.event}
+                                    <div class="nostr-link-event">
+                                      <div class="nostr-link-event-header">
+                                        <UserBadge pubkey={part.event.pubkey} disableLink={true} />
+                                        <span class="nostr-link-event-time">{formatDiscussionTime(part.event.created_at)}</span>
+                                      </div>
+                                      <div class="nostr-link-event-content">{part.event.content || '(No content)'}</div>
+                                    </div>
+                                  {:else if part.type === 'profile' && part.pubkey}
+                                    <UserBadge pubkey={part.pubkey} />
+                                  {:else}
+                                    <span class="nostr-link-placeholder">{part.value}</span>
+                                  {/if}
+                                {/each}
+                              </div>
+                            </div>
+                          {/if}
                           {#if comment.replies && comment.replies.length > 0}
                             <div class="nested-replies">
                               {#each comment.replies as reply}
@@ -4301,9 +4661,41 @@
                               </button>
                             {/if}
                           </div>
-                          <div class="comment-content">
-                            <p>{comment.content}</p>
-                          </div>
+                          {#if true}
+                            {@const commentEvent = getDiscussionEvent(comment.id)}
+                            {@const referencedEvent = commentEvent ? getReferencedEventFromDiscussion(commentEvent) : undefined}
+                            {@const parts = processContentWithNostrLinks(comment.content)}
+                            <div class="comment-content">
+                              {#if referencedEvent}
+                                <div class="referenced-event">
+                                  <div class="referenced-event-header">
+                                    <UserBadge pubkey={referencedEvent.pubkey} disableLink={true} />
+                                    <span class="referenced-event-time">{formatDiscussionTime(referencedEvent.created_at)}</span>
+                                  </div>
+                                  <div class="referenced-event-content">{referencedEvent.content || '(No content)'}</div>
+                                </div>
+                              {/if}
+                              <div>
+                                {#each parts as part}
+                                  {#if part.type === 'text'}
+                                    <span>{part.value}</span>
+                                  {:else if part.type === 'event' && part.event}
+                                    <div class="nostr-link-event">
+                                      <div class="nostr-link-event-header">
+                                        <UserBadge pubkey={part.event.pubkey} disableLink={true} />
+                                        <span class="nostr-link-event-time">{formatDiscussionTime(part.event.created_at)}</span>
+                                      </div>
+                                      <div class="nostr-link-event-content">{part.event.content || '(No content)'}</div>
+                                    </div>
+                                  {:else if part.type === 'profile' && part.pubkey}
+                                    <UserBadge pubkey={part.pubkey} />
+                                  {:else}
+                                    <span class="nostr-link-placeholder">{part.value}</span>
+                                  {/if}
+                                {/each}
+                              </div>
+                            </div>
+                          {/if}
                           {#if comment.replies && comment.replies.length > 0}
                             <div class="nested-replies">
                               {#each comment.replies as reply}
@@ -6633,6 +7025,97 @@
     color: var(--text-primary);
     white-space: pre-wrap;
     line-height: 1.5;
+  }
+
+  .referenced-event {
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background: var(--bg-primary);
+    border-left: 3px solid var(--border-color);
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+  }
+
+  :global([data-theme="light"]) .referenced-event {
+    background: #e8e8e8;
+  }
+
+  :global([data-theme="dark"]) .referenced-event {
+    background: rgba(0, 0, 0, 0.2);
+  }
+
+  :global([data-theme="black"]) .referenced-event {
+    background: #0a0a0a;
+  }
+
+  .referenced-event-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .referenced-event-time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .referenced-event-content {
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    line-height: 1.5;
+    max-height: 10rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .nostr-link-event {
+    margin: 0.75rem 0;
+    padding: 0.75rem;
+    background: var(--bg-primary);
+    border-left: 3px solid var(--border-color);
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+  }
+
+  :global([data-theme="light"]) .nostr-link-event {
+    background: #e8e8e8;
+  }
+
+  :global([data-theme="dark"]) .nostr-link-event {
+    background: rgba(0, 0, 0, 0.2);
+  }
+
+  :global([data-theme="black"]) .nostr-link-event {
+    background: #0a0a0a;
+  }
+
+  .nostr-link-event-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .nostr-link-event-time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .nostr-link-event-content {
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    line-height: 1.5;
+    max-height: 10rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .nostr-link-placeholder {
+    color: var(--text-muted);
+    font-style: italic;
   }
 
   .nested-replies {
