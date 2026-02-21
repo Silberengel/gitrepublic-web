@@ -20,8 +20,13 @@ import { handleApiError, handleValidationError } from '$lib/utils/error-handler.
 import { verifyRelayWriteProofFromAuth, verifyRelayWriteProof } from '$lib/services/nostr/relay-write-proof.js';
 import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '$lib/types/nostr.js';
+import { resolve } from 'path';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
+import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 
-const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
+// Resolve GIT_REPO_ROOT to absolute path (handles both relative and absolute paths)
+const repoRootEnv = process.env.GIT_REPO_ROOT || '/repos';
+const repoRoot = resolve(repoRootEnv);
 const repoManager = new RepoManager(repoRoot);
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 
@@ -166,13 +171,7 @@ export const POST: RequestHandler = async (event) => {
     
     let authorAnnouncements: NostrEvent[];
     try {
-      authorAnnouncements = await nostrClient.fetchEvents([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [repoOwnerPubkey],
-          limit: 100 // Fetch more to ensure we find the repo even if author has many repos
-        }
-      ]);
+      authorAnnouncements = await fetchRepoAnnouncementsWithCache(nostrClient, repoOwnerPubkey, eventCache);
       
       logger.debug({ 
         npub, 
@@ -194,14 +193,10 @@ export const POST: RequestHandler = async (event) => {
       );
     }
 
-    // Filter case-insensitively to find the matching repo
-    const repoLower = repo.toLowerCase();
-    const events = authorAnnouncements.filter(event => {
-      const dTag = event.tags.find(t => t[0] === 'd')?.[1];
-      return dTag && dTag.toLowerCase() === repoLower;
-    });
+    // Find the matching repo announcement (case-insensitive)
+    const announcementEvent = findRepoAnnouncement(authorAnnouncements, repo);
 
-    if (events.length === 0) {
+    if (!announcementEvent) {
       const dTags = authorAnnouncements
         .map(e => e.tags.find(t => t[0] === 'd')?.[1])
         .filter(Boolean);
@@ -224,8 +219,26 @@ export const POST: RequestHandler = async (event) => {
         { operation: 'cloneRepo', npub, repo }
       );
     }
-
-    const announcementEvent = events[0];
+    
+    // Extract and log clone URLs for debugging
+    const cloneUrls: string[] = [];
+    for (const tag of announcementEvent.tags) {
+      if (tag[0] === 'clone') {
+        for (let i = 1; i < tag.length; i++) {
+          const url = tag[i];
+          if (url && typeof url === 'string') {
+            cloneUrls.push(url);
+          }
+        }
+      }
+    }
+    
+    logger.debug({ 
+      npub, 
+      repo, 
+      cloneUrlCount: cloneUrls.length,
+      cloneUrls: cloneUrls.slice(0, 5) // Log first 5 to avoid huge logs
+    }, 'Repository announcement clone URLs');
 
     // Attempt to clone the repository
     const result = await repoManager.fetchRepoOnDemand(npub, repo, announcementEvent);
@@ -237,10 +250,32 @@ export const POST: RequestHandler = async (event) => {
           { operation: 'cloneRepo', npub, repo }
         );
       }
+      
+      // Build detailed error message
+      let errorMessage = 'Could not clone repository.';
+      if (result.error) {
+        errorMessage += ` ${result.error}`;
+      }
+      if (result.cloneUrls && result.cloneUrls.length === 0) {
+        errorMessage += ' No clone URLs found in the repository announcement.';
+      } else if (result.remoteUrls && result.remoteUrls.length === 0) {
+        errorMessage += ' No accessible remote clone URLs found.';
+      } else if (result.cloneUrls && result.cloneUrls.length > 0) {
+        errorMessage += ` Attempted to clone from: ${result.cloneUrls.join(', ')}`;
+      }
+      
+      logger.error({ 
+        npub, 
+        repo, 
+        error: result.error,
+        cloneUrls: result.cloneUrls,
+        remoteUrls: result.remoteUrls
+      }, 'Failed to clone repository');
+      
       throw handleApiError(
-        new Error('Failed to clone repository from remote URLs'),
+        new Error(result.error || 'Failed to clone repository from remote URLs'),
         { operation: 'cloneRepo', npub, repo },
-        'Could not clone repository. Please check that the repository has valid clone URLs and is accessible.'
+        errorMessage
       );
     }
 

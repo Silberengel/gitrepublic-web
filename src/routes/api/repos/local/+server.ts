@@ -18,6 +18,8 @@ import { extractRequestContext } from '$lib/utils/api-context.js';
 import logger from '$lib/services/logger.js';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import type { RequestEvent } from '@sveltejs/kit';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
+import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
@@ -134,25 +136,16 @@ async function enrichLocalRepos(
   // Fetch announcements for each owner
   for (const [pubkey, repoNames] of ownerMap.entries()) {
     try {
-      const events = await nostrClient.fetchEvents([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [pubkey],
-          '#d': repoNames,
-          limit: repoNames.length
-        }
-      ]);
+      // Fetch all announcements by this author (case-insensitive matching) with caching
+      const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, pubkey, eventCache);
       
-      // Match announcements to repos
+      // Match announcements to repos (case-insensitive)
       for (const repo of repos) {
         try {
           const decoded = nip19.decode(repo.npub);
           if (decoded.type !== 'npub' || decoded.data !== pubkey) continue;
           
-          const announcement = events.find(e => {
-            const dTag = e.tags.find(t => t[0] === 'd')?.[1];
-            return dTag === repo.repoName;
-          });
+          const announcement = findRepoAnnouncement(allEvents, repo.repoName);
           
           if (announcement) {
             // Check if registered (has domain in clone URLs)

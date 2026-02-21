@@ -21,6 +21,8 @@ import { existsSync } from 'fs';
 import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
 import { extractRequestContext } from '$lib/utils/api-context.js';
 import { fetchUserEmail, fetchUserName } from '$lib/utils/user-profile.js';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
+import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
@@ -66,21 +68,15 @@ export const GET: RequestHandler = async (event) => {
           return error(400, 'Invalid npub format');
         }
 
-        // Fetch repository announcement from Nostr
-        const events = await nostrClient.fetchEvents([
-          {
-            kinds: [KIND.REPO_ANNOUNCEMENT],
-            authors: [repoOwnerPubkey],
-            '#d': [repo],
-            limit: 1
-          }
-        ]);
+        // Fetch repository announcement (case-insensitive) with caching
+        const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoOwnerPubkey, eventCache);
+        const announcement = findRepoAnnouncement(allEvents, repo);
 
-        if (events.length > 0) {
+        if (announcement) {
           // Try API-based fetching first (no cloning)
           try {
             const { tryApiFetchFile } = await import('$lib/utils/api-repo-helper.js');
-            const fileContent = await tryApiFetchFile(events[0], npub, repo, filePath, ref);
+            const fileContent = await tryApiFetchFile(announcement, npub, repo, filePath, ref);
             
             if (fileContent && fileContent.content) {
               return json(fileContent);
@@ -357,17 +353,11 @@ export const POST: RequestHandler = async ({ params, url, request }: { params: {
         return error(400, 'Invalid npub format');
       }
 
-      // Fetch repository announcement from Nostr
-      const events = await nostrClient.fetchEvents([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [repoOwnerPubkey],
-          '#d': [repo],
-          limit: 1
-        }
-      ]);
+      // Fetch repository announcement (case-insensitive) with caching
+      const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoOwnerPubkey, eventCache);
+      const announcement = findRepoAnnouncement(allEvents, repo);
 
-      if (events.length > 0) {
+      if (announcement) {
         // Repository exists in Nostr but is not cloned locally
         // For file editing, we need a local clone
         return error(404, 'Repository is not cloned locally. To edit files, the repository must be cloned to the server first. Please use the "Clone to Server" button if you have unlimited access, or contact a server administrator.');

@@ -25,8 +25,12 @@ import { getCachedUserLevel } from '$lib/services/security/user-level-cache.js';
 import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
 import logger from '$lib/services/logger.js';
 import { handleApiError, handleValidationError, handleNotFoundError, handleAuthorizationError } from '$lib/utils/error-handler.js';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
+import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 
-const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
+// Resolve GIT_REPO_ROOT to absolute path (handles both relative and absolute paths)
+const repoRootEnv = process.env.GIT_REPO_ROOT || '/repos';
+const repoRoot = resolve(repoRootEnv);
 const repoManager = new RepoManager(repoRoot);
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 const resourceLimits = new ResourceLimits(repoRoot);
@@ -150,21 +154,13 @@ export const POST: RequestHandler = async ({ params, request }) => {
       return error(404, 'Original repository not found');
     }
 
-    // Get original repo announcement
-    const originalAnnouncements = await nostrClient.fetchEvents([
-      {
-        kinds: [KIND.REPO_ANNOUNCEMENT],
-        authors: [originalOwnerPubkey],
-        '#d': [repo],
-        limit: 1
-      }
-    ]);
+    // Get original repo announcement (case-insensitive) with caching
+    const allAnnouncements = await fetchRepoAnnouncementsWithCache(nostrClient, originalOwnerPubkey, eventCache);
+    const originalAnnouncement = findRepoAnnouncement(allAnnouncements, repo);
 
-    if (originalAnnouncements.length === 0) {
+    if (!originalAnnouncement) {
       return error(404, 'Original repository announcement not found');
     }
-
-    const originalAnnouncement = originalAnnouncements[0];
 
     // Check if fork already exists
     const forkRepoPath = join(repoRoot, userNpub, `${forkRepoName}.git`);
@@ -450,21 +446,15 @@ export const GET: RequestHandler = async ({ params }) => {
       return error(400, 'Invalid npub format');
     }
 
-    // Get repo announcement
-    const announcements = await nostrClient.fetchEvents([
-      {
-        kinds: [KIND.REPO_ANNOUNCEMENT],
-        authors: [ownerPubkey],
-        '#d': [repo],
-        limit: 1
-      }
-    ]);
+    // Get repo announcement (case-insensitive) with caching
+    const allAnnouncements = await fetchRepoAnnouncementsWithCache(nostrClient, ownerPubkey, eventCache);
+    const announcement = findRepoAnnouncement(allAnnouncements, repo);
 
-    if (announcements.length === 0) {
+    if (!announcement) {
       return error(404, 'Repository announcement not found');
     }
 
-    const announcement = announcements[0];
+    // announcement is already set above
     const isFork = announcement.tags.some(t => t[0] === 't' && t[1] === 'fork');
     
     // Get original repo reference

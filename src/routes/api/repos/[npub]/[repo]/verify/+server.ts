@@ -16,6 +16,8 @@ import { decodeNpubToHex } from '$lib/utils/npub-utils.js';
 import { createRepoGetHandler } from '$lib/utils/api-handlers.js';
 import type { RepoRequestContext } from '$lib/utils/api-context.js';
 import { handleApiError } from '$lib/utils/error-handler.js';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
+import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
@@ -26,25 +28,17 @@ export const GET: RequestHandler = createRepoGetHandler(
     // Check if repository exists - verification doesn't require the repo to be cloned locally
     // We can verify ownership from Nostr events alone
 
-    // Fetch the repository announcement
-    const events = await nostrClient.fetchEvents([
-      {
-        kinds: [KIND.REPO_ANNOUNCEMENT],
-        authors: [context.repoOwnerPubkey],
-        '#d': [context.repo],
-        limit: 1
-      }
-    ]);
+    // Fetch the repository announcement (case-insensitive) with caching
+    const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, context.repoOwnerPubkey, eventCache);
+    const announcement = findRepoAnnouncement(allEvents, context.repo);
 
-    if (events.length === 0) {
+    if (!announcement) {
       return json({
         verified: false,
         error: 'Repository announcement not found',
         message: 'Could not find a NIP-34 repository announcement for this repository.'
       });
     }
-
-    const announcement = events[0];
 
     // Extract clone URLs from announcement
     const cloneUrls: string[] = [];

@@ -11,6 +11,8 @@ import type { NostrEvent } from '$lib/types/nostr.js';
 import { verifyEvent } from 'nostr-tools';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import logger from '$lib/services/logger.js';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
+import { findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 
 export const GET: RequestHandler = async ({ request }) => {
   const userPubkeyHex = request.headers.get('X-User-Pubkey');
@@ -87,15 +89,46 @@ export const GET: RequestHandler = async ({ request }) => {
 
       // Check if transfer is already completed by checking for a newer repo announcement from the new owner
       // This is a simple check - if there's a newer announcement from the new owner for this repo, transfer is complete
-      const newerAnnouncements = await searchClient.fetchEvents([
+      // Fetch announcements (case-insensitive) with caching
+      // Note: We use 'since' parameter, so we can't use the standard cache helper
+      const allNewerAnnouncements = await searchClient.fetchEvents([
         {
           kinds: [KIND.REPO_ANNOUNCEMENT],
           authors: [userPubkeyHex],
-          '#d': [repoName],
           since: event.created_at,
-          limit: 1
+          limit: 100 // Fetch more to allow case-insensitive filtering
         }
       ]);
+      
+      // Cache the results (without 'since' filter for better cache hit rate)
+      const cacheFilters = [
+        {
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          authors: [userPubkeyHex],
+          limit: 100
+        }
+      ];
+      const cached = eventCache.get(cacheFilters);
+      if (cached) {
+        // Merge with cached events
+        const eventMap = new Map<string, NostrEvent>();
+        cached.forEach(e => eventMap.set(e.id, e));
+        allNewerAnnouncements.forEach(e => {
+          const existing = eventMap.get(e.id);
+          if (!existing || e.created_at > existing.created_at) {
+            eventMap.set(e.id, e);
+          }
+        });
+        eventCache.set(cacheFilters, Array.from(eventMap.values()));
+      } else if (allNewerAnnouncements.length > 0) {
+        eventCache.set(cacheFilters, allNewerAnnouncements);
+      }
+      
+      // Filter case-insensitively to find the matching repo
+      const newerAnnouncements = allNewerAnnouncements.filter(announcement => {
+        const dTag = announcement.tags.find((t: string[]) => t[0] === 'd')?.[1];
+        return dTag && dTag.toLowerCase() === repoName.toLowerCase();
+      });
 
       // If there's a newer announcement from the new owner, transfer is complete
       if (newerAnnouncements.length > 0) {

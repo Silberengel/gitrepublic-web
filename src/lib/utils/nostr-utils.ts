@@ -3,7 +3,8 @@
  * Used across web-app, CLI, and API to ensure consistency
  */
 
-import type { NostrEvent } from '../types/nostr.js';
+import type { NostrEvent, NostrFilter } from '../types/nostr.js';
+import { KIND } from '../types/nostr.js';
 
 /**
  * Extract clone URLs from a NIP-34 repo announcement event
@@ -69,4 +70,88 @@ export function normalizeCloneUrl(url: string): string {
   }
   
   return url;
+}
+
+/**
+ * Fetch repository announcements by author with caching (case-insensitive)
+ * This helper function provides consistent caching behavior across all endpoints
+ * 
+ * @param nostrClient - The Nostr client to use for fetching
+ * @param authorPubkey - The author's pubkey (hex)
+ * @param eventCache - The event cache instance (optional, will import if not provided)
+ * @returns Promise resolving to all announcements by the author
+ */
+export async function fetchRepoAnnouncementsWithCache(
+  nostrClient: { fetchEvents: (filters: NostrFilter[]) => Promise<NostrEvent[]> },
+  authorPubkey: string,
+  eventCache?: { get: (filters: NostrFilter[]) => NostrEvent[] | null; set: (filters: NostrFilter[], events: NostrEvent[]) => void } | null
+): Promise<NostrEvent[]> {
+  const filters: NostrFilter[] = [
+    {
+      kinds: [KIND.REPO_ANNOUNCEMENT],
+      authors: [authorPubkey],
+      limit: 100 // Fetch more to allow case-insensitive filtering
+    }
+  ];
+  
+  // Lazy import eventCache if not provided (for server-side usage)
+  let cache = eventCache;
+  if (!cache) {
+    try {
+      const cacheModule = await import('../services/nostr/event-cache.js');
+      cache = cacheModule.eventCache;
+    } catch {
+      // Cache not available, skip caching
+      cache = null;
+    }
+  }
+  
+  // Check cache first
+  if (cache) {
+    const cachedEvents = cache.get(filters);
+    if (cachedEvents && cachedEvents.length > 0) {
+      // Return cached events immediately, fetch fresh in background
+      nostrClient.fetchEvents(filters).then(freshEvents => {
+        // Merge fresh events with cached ones (deduplicate by event ID)
+        const eventMap = new Map<string, NostrEvent>();
+        cachedEvents.forEach(e => eventMap.set(e.id, e));
+        freshEvents.forEach(e => {
+          const existing = eventMap.get(e.id);
+          if (!existing || e.created_at > existing.created_at) {
+            eventMap.set(e.id, e);
+          }
+        });
+        const mergedEvents = Array.from(eventMap.values());
+        cache!.set(filters, mergedEvents);
+      }).catch(() => {
+        // Ignore background fetch errors
+      });
+      
+      return cachedEvents;
+    }
+  }
+  
+  // No cache, fetch from relays
+  const freshEvents = await nostrClient.fetchEvents(filters);
+  // Cache the results
+  if (cache && freshEvents.length > 0) {
+    cache.set(filters, freshEvents);
+  }
+  return freshEvents;
+}
+
+/**
+ * Find a repository announcement by repo name (case-insensitive)
+ * 
+ * @param events - Array of announcement events
+ * @param repoName - The repository name to find
+ * @returns The matching announcement event or null
+ */
+export function findRepoAnnouncement(events: NostrEvent[], repoName: string): NostrEvent | null {
+  const repoLower = repoName.toLowerCase();
+  const matching = events.filter(event => {
+    const dTag = event.tags.find((t: string[]) => t[0] === 'd')?.[1];
+    return dTag && dTag.toLowerCase() === repoLower;
+  });
+  return matching.length > 0 ? matching[0] : null;
 }

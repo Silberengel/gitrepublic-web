@@ -754,24 +754,20 @@
                 {/if}
                 <div class="repo-card-content">
                   <div class="repo-header">
-                    {#if repoImage}
-                      <img src={repoImage} alt="Repository" class="repo-card-image" />
-                    {/if}
                     <div class="repo-header-text">
-                      <h3>{getRepoName(repo)}</h3>
+                      <div class="repo-title-row">
+                        {#if repoImage}
+                          <img src={repoImage} alt="Repository" class="repo-avatar" />
+                        {/if}
+                        <h3>{getRepoName(repo)}</h3>
+                      </div>
                       {#if getRepoDescription(repo)}
                         <p class="description">{getRepoDescription(repo)}</p>
                       {/if}
                     </div>
-                    <a href="/repos/{item.npub}/{item.repoName}" class="register-button">
-                      View & Edit →
+                    <a href="/repos/{item.npub}/{item.repoName}" class="view-button" title="View repository">
+                      <img src="/icons/arrow-right.svg" alt="View" />
                     </a>
-                  </div>
-                  <div class="clone-urls">
-                    <strong>Clone URLs:</strong>
-                    {#each getCloneUrls(repo) as url}
-                      <code>{url}</code>
-                    {/each}
                   </div>
                   <div class="repo-meta">
                     <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
@@ -813,11 +809,13 @@
                 {/if}
                 <div class="repo-card-content">
                   <div class="repo-header">
-                    {#if repoImage}
-                      <img src={repoImage} alt="Repository" class="repo-card-image" />
-                    {/if}
                     <div class="repo-header-text">
-                      <h3>{repo ? getRepoName(repo) : item.repoName}</h3>
+                      <div class="repo-title-row">
+                        {#if repoImage}
+                          <img src={repoImage} alt="Repository" class="repo-avatar" />
+                        {/if}
+                        <h3>{repo ? getRepoName(repo) : item.repoName}</h3>
+                      </div>
                       {#if repo && getRepoDescription(repo)}
                         <p class="description">{getRepoDescription(repo)}</p>
                       {:else}
@@ -825,37 +823,21 @@
                       {/if}
                     </div>
                     <div class="repo-actions">
-                      <a href="/repos/{item.npub}/{item.repoName}" class="register-button">
-                        View & Edit →
+                      <a href="/repos/{item.npub}/{item.repoName}" class="view-button" title="View repository">
+                        <img src="/icons/arrow-right.svg" alt="View" />
                       </a>
-                      {#if userPubkey}
-                        {#if canDelete}
-                          <button 
-                            class="delete-button"
-                            onclick={() => deleteLocalRepo(item.npub, item.repoName)}
-                            disabled={deletingRepo?.npub === item.npub && deletingRepo?.repo === item.repoName}
-                          >
-                            {deletingRepo?.npub === item.npub && deletingRepo?.repo === item.repoName ? 'Deleting...' : 'Delete'}
-                          </button>
-                        {:else if hasUnlimitedAccess($userStore.userLevel)}
-                          <button 
-                            class="register-button"
-                            onclick={() => registerRepo(item.npub, item.repoName)}
-                          >
-                            Register
-                          </button>
-                        {/if}
+                      {#if userPubkey && canDelete}
+                        <button 
+                          class="delete-button"
+                          onclick={() => deleteLocalRepo(item.npub, item.repoName)}
+                          disabled={deletingRepo?.npub === item.npub && deletingRepo?.repo === item.repoName}
+                          title="Delete repository"
+                        >
+                          {deletingRepo?.npub === item.npub && deletingRepo?.repo === item.repoName ? 'Deleting...' : 'Delete'}
+                        </button>
                       {/if}
                     </div>
                   </div>
-                  {#if repo}
-                    <div class="clone-urls">
-                      <strong>Clone URLs:</strong>
-                      {#each getCloneUrls(repo) as url}
-                        <code>{url}</code>
-                      {/each}
-                    </div>
-                  {/if}
                   <div class="repo-meta">
                     <span>Last modified: {new Date(item.lastModified).toLocaleDateString()}</span>
                     {#if repo}
@@ -1010,5 +992,203 @@
   .page-info {
     color: var(--text-secondary, #666);
     font-size: 0.9rem;
+  }
+
+  .repos-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+
+  .repo-card {
+    background: var(--card-bg, #ffffff);
+    border: 1px solid var(--border-color, #e0e0e0);
+    border-radius: 0.5rem;
+    overflow: hidden;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .repo-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    transform: translateY(-2px);
+  }
+
+  .repo-card-banner {
+    width: 100%;
+    height: 120px;
+    overflow: hidden;
+    background: var(--bg-secondary, #f5f5f5);
+  }
+
+  .repo-card-banner img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .repo-card-content {
+    padding: 1rem;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .repo-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .repo-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .repo-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    border: 1px solid var(--border-color, #e0e0e0);
+  }
+
+  .repo-header-text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .repo-header-text h3 {
+    margin: 0 0 0.25rem 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary, #1a1a1a);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .repo-header-text .description {
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--text-secondary, #666);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    line-height: 1.4;
+  }
+
+  .view-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: var(--accent, #007bff);
+    color: var(--accent-text, #ffffff);
+    text-decoration: none;
+    border-radius: 0.25rem;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+  }
+
+  .view-button:hover {
+    background: var(--accent-hover, #0056b3);
+    transform: translateX(2px);
+  }
+
+  .view-button img {
+    width: 18px;
+    height: 18px;
+    filter: brightness(0) invert(1);
+  }
+
+  .repo-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .delete-button {
+    padding: 0.375rem 0.75rem;
+    background: var(--error, #dc3545);
+    color: var(--error-text, #ffffff);
+    border: none;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .delete-button:hover:not(:disabled) {
+    background: var(--error-hover, #c82333);
+  }
+
+  .delete-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .repo-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: auto;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border-color, #e0e0e0);
+    font-size: 0.75rem;
+    color: var(--text-secondary, #666);
+  }
+
+  .fork-count {
+    color: var(--text-secondary, #666);
+  }
+
+  .repo-section {
+    margin: 2rem 0;
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .section-header h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    color: var(--text-primary, #1a1a1a);
+  }
+
+  .section-badge {
+    padding: 0.25rem 0.75rem;
+    background: var(--bg-secondary, #f5f5f5);
+    border: 1px solid var(--border-color, #e0e0e0);
+    border-radius: 1rem;
+    font-size: 0.875rem;
+    color: var(--text-secondary, #666);
+  }
+
+  .section-description {
+    font-size: 0.875rem;
+    color: var(--text-secondary, #666);
+    margin-left: auto;
+  }
+
+  @media (max-width: 768px) {
+    .repos-list {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

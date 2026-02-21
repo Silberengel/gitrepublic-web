@@ -16,6 +16,7 @@ import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
 import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS } from '$lib/config.js';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { eventCache } from '$lib/services/nostr/event-cache.js';
+import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 import logger from '$lib/services/logger.js';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
@@ -29,30 +30,22 @@ export const GET: RequestHandler = createRepoGetHandler(
     // If repo doesn't exist, try to fetch it on-demand
     if (!existsSync(repoPath)) {
       try {
-        // Try cached client first (cache-first lookup)
-        const filters = [
-          {
-            kinds: [KIND.REPO_ANNOUNCEMENT],
-            authors: [context.repoOwnerPubkey],
-            '#d': [context.repo],
-            limit: 1
-          }
-        ];
-        
-        let events = await nostrClient.fetchEvents(filters);
+        // Fetch repository announcement (case-insensitive) with caching
+        let allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, context.repoOwnerPubkey, eventCache);
+        let announcement = findRepoAnnouncement(allEvents, context.repo);
         
         // If no events found in cache/default relays, try all relays (default + search)
-        // But first invalidate the cache entry so we don't get the same cached empty result
-        if (events.length === 0) {
+        if (!announcement) {
           const allRelays = [...new Set([...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS])];
           // Only create new client if we have additional relays to try
           if (allRelays.length > DEFAULT_NOSTR_RELAYS.length) {
-            // Invalidate the cache entry so we can try fresh with all relays
-            eventCache.invalidate(filters);
             const allRelaysClient = new NostrClient(allRelays);
-            events = await allRelaysClient.fetchEvents(filters);
+            allEvents = await fetchRepoAnnouncementsWithCache(allRelaysClient, context.repoOwnerPubkey, eventCache);
+            announcement = findRepoAnnouncement(allEvents, context.repo);
           }
         }
+        
+        const events = announcement ? [announcement] : [];
 
         if (events.length > 0) {
           // Try API-based fetching first (no cloning)

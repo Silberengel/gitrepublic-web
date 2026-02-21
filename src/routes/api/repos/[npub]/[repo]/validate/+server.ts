@@ -12,6 +12,8 @@ import { KIND } from '$lib/types/nostr.js';
 import { requireNpubHex } from '$lib/utils/npub-utils.js';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import logger from '$lib/services/logger.js';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
+import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 
 /**
  * GET - Validate repository announcement
@@ -71,17 +73,12 @@ export const GET: RequestHandler = createRepoGetHandler(
     
     // Check announcement on relays
     try {
-      const events = await nostrClient.fetchEvents([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [repoOwnerPubkey],
-          '#d': [repo],
-          limit: 1
-        }
-      ]);
+      // Fetch repository announcement (case-insensitive) with caching
+      const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoOwnerPubkey, eventCache);
+      const announcement = findRepoAnnouncement(allEvents, repo);
       
-      if (events.length > 0) {
-        relayAnnouncement = events[0];
+      if (announcement) {
+        relayAnnouncement = announcement;
         onRelays = true;
       }
     } catch (err) {

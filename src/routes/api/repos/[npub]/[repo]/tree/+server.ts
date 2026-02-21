@@ -13,6 +13,8 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
 import logger from '$lib/services/logger.js';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
+import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
@@ -25,20 +27,14 @@ export const GET: RequestHandler = createRepoGetHandler(
     // If repo doesn't exist, try to fetch it on-demand
     if (!existsSync(repoPath)) {
       try {
-        // Fetch repository announcement from Nostr
-        const events = await nostrClient.fetchEvents([
-          {
-            kinds: [KIND.REPO_ANNOUNCEMENT],
-            authors: [context.repoOwnerPubkey],
-            '#d': [context.repo],
-            limit: 1
-          }
-        ]);
+        // Fetch repository announcement from Nostr (case-insensitive) with caching
+        const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, context.repoOwnerPubkey, eventCache);
+        const announcement = findRepoAnnouncement(allEvents, context.repo);
 
-        if (events.length > 0) {
+        if (announcement) {
           // Try API-based fetching first (no cloning)
           const { tryApiFetch } = await import('$lib/utils/api-repo-helper.js');
-          const apiData = await tryApiFetch(events[0], context.npub, context.repo);
+          const apiData = await tryApiFetch(announcement, context.npub, context.repo);
           
           if (apiData && apiData.files) {
             // Return API data directly without cloning

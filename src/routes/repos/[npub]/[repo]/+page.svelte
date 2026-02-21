@@ -64,7 +64,7 @@
   let userPubkey = $state<string | null>(null);
   let userPubkeyHex = $state<string | null>(null);
   let showCommitDialog = $state(false);
-  let activeTab = $state<'files' | 'history' | 'tags' | 'issues' | 'prs' | 'docs' | 'discussions'>('discussions');
+  let activeTab = $state<'files' | 'history' | 'tags' | 'issues' | 'prs' | 'docs' | 'discussions' | 'patches'>('files');
   let showRepoMenu = $state(false);
   
   // Tabs will be defined as derived after issues and prs are declared
@@ -309,13 +309,15 @@
   let selectedPR = $state<string | null>(null);
   
   // Tabs menu - defined after issues and prs
+  // Order: Files, Issues, PRs, Patches, Discussion, History, Tags, Docs
   const tabs = $derived([
-    { id: 'discussions', label: 'Discussions', icon: '/icons/message-circle.svg' },
     { id: 'files', label: 'Files', icon: '/icons/file-text.svg' },
-    { id: 'history', label: 'History', icon: '/icons/git-commit.svg' },
-    { id: 'tags', label: 'Tags', icon: '/icons/tag.svg' },
     { id: 'issues', label: 'Issues', icon: '/icons/alert-circle.svg', count: issues.length },
     { id: 'prs', label: 'Pull Requests', icon: '/icons/git-pull-request.svg', count: prs.length },
+    { id: 'patches', label: 'Patches', icon: '/icons/clipboard-list.svg' },
+    { id: 'discussions', label: 'Discussions', icon: '/icons/message-circle.svg' },
+    { id: 'history', label: 'History', icon: '/icons/git-commit.svg' },
+    { id: 'tags', label: 'Tags', icon: '/icons/tag.svg' },
     { id: 'docs', label: 'Docs', icon: '/icons/book.svg' }
   ]);
 
@@ -721,27 +723,41 @@
           
           // Render markdown if needed
           if (readmeIsMarkdown && readmeContent) {
-            const MarkdownIt = (await import('markdown-it')).default;
-            const hljsModule = await import('highlight.js');
-            const hljs = hljsModule.default || hljsModule;
-            
-            const md = new MarkdownIt({
-              highlight: function (str: string, lang: string): string {
-                if (lang && hljs.getLanguage(lang)) {
-                  try {
-                    return '<pre class="hljs"><code>' +
-                           hljs.highlight(str, { language: lang }).value +
-                           '</code></pre>';
-                  } catch (err) {
-                    // Fallback to escaped HTML if highlighting fails
-                    // This is expected for unsupported languages
+            try {
+              const MarkdownIt = (await import('markdown-it')).default;
+              const hljsModule = await import('highlight.js');
+              const hljs = hljsModule.default || hljsModule;
+              
+              const md = new MarkdownIt({
+                html: true, // Enable HTML tags in source
+                linkify: true, // Autoconvert URL-like text to links
+                typographer: true, // Enable some language-neutral replacement + quotes beautification
+                breaks: true, // Convert '\n' in paragraphs into <br>
+                highlight: function (str: string, lang: string): string {
+                  if (lang && hljs.getLanguage(lang)) {
+                    try {
+                      return '<pre class="hljs"><code>' +
+                             hljs.highlight(str, { language: lang }).value +
+                             '</code></pre>';
+                    } catch (err) {
+                      // Fallback to escaped HTML if highlighting fails
+                      // This is expected for unsupported languages
+                    }
                   }
+                  return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
                 }
-                return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
-              }
-            });
-            
-            readmeHtml = md.render(readmeContent);
+              });
+              
+              readmeHtml = md.render(readmeContent);
+              console.log('[README] Markdown rendered successfully, HTML length:', readmeHtml.length);
+            } catch (err) {
+              console.error('[README] Error rendering markdown:', err);
+              // Fallback: show as plain text if rendering fails
+              readmeHtml = '';
+            }
+          } else {
+            // Clear HTML if not markdown
+            readmeHtml = '';
           }
         }
       }
@@ -3542,7 +3558,20 @@
   $effect(() => {
     if (activeTab !== lastTab) {
       lastTab = activeTab;
-      if (activeTab === 'history') {
+      if (activeTab === 'files') {
+        // Files tab - ensure files are loaded and README is shown if available
+        if (files.length === 0 || currentPath !== '') {
+          loadFiles('');
+        } else if (files.length > 0 && !currentFile) {
+          // Files already loaded, ensure README is shown
+          const readmeFile = findReadmeFile(files);
+          if (readmeFile) {
+            setTimeout(() => {
+              loadFile(readmeFile.path);
+            }, 100);
+          }
+        }
+      } else if (activeTab === 'history') {
         loadCommitHistory();
       } else if (activeTab === 'tags') {
         loadTags();
@@ -3554,6 +3583,8 @@
         loadDocumentation();
       } else if (activeTab === 'discussions') {
         loadDiscussions();
+      } else if (activeTab === 'patches') {
+        // Patches tab - patches are loaded on demand when creating/viewing
       }
     }
   });
@@ -4057,7 +4088,7 @@
             </div>
             {#if loadingReadme}
               <div class="loading">Loading README...</div>
-            {:else if readmeIsMarkdown && readmeHtml}
+            {:else if readmeIsMarkdown && readmeHtml && readmeHtml.trim()}
               <div class="readme-content markdown">
                 {@html readmeHtml}
               </div>

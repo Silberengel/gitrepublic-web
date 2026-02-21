@@ -29,15 +29,10 @@ export const GET: RequestHandler = createRepoGetHandler(
     // If repo doesn't exist, try to fetch it on-demand
     if (!existsSync(repoPath)) {
       try {
-        // Fetch repository announcement from Nostr
-        const events = await nostrClient.fetchEvents([
-          {
-            kinds: [KIND.REPO_ANNOUNCEMENT],
-            authors: [context.repoOwnerPubkey],
-            '#d': [context.repo],
-            limit: 1
-          }
-        ]);
+        // Fetch repository announcement (case-insensitive) with caching
+        const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, context.repoOwnerPubkey, eventCache);
+        const announcement = findRepoAnnouncement(allEvents, context.repo);
+        const events = announcement ? [announcement] : [];
 
         if (events.length > 0) {
           // Download requires the actual repo files, so we can't use API fetching

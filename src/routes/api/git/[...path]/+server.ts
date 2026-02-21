@@ -21,7 +21,8 @@ import { BranchProtectionService } from '$lib/services/nostr/branch-protection-s
 import logger from '$lib/services/logger.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 import { isValidBranchName, sanitizeError } from '$lib/utils/security.js';
-import { extractCloneUrls } from '$lib/utils/nostr-utils.js';
+import { extractCloneUrls, fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
 
 // Resolve GIT_REPO_ROOT to absolute path (handles both relative and absolute paths)
 const repoRootEnv = process.env.GIT_REPO_ROOT || '/repos';
@@ -113,14 +114,10 @@ async function getRepoAnnouncement(npub: string, repoName: string): Promise<Nost
   try {
     const pubkey = requireNpubHex(npub);
 
-    const events = await nostrClient.fetchEvents([
-      {
-        kinds: [KIND.REPO_ANNOUNCEMENT],
-        authors: [pubkey],
-        '#d': [repoName],
-        limit: 1
-      }
-    ]);
+    // Fetch repository announcement (case-insensitive) with caching
+    const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, pubkey, eventCache);
+    const announcement = findRepoAnnouncement(allEvents, repoName);
+    const events = announcement ? [announcement] : [];
 
     return events.length > 0 ? events[0] : null;
   } catch {

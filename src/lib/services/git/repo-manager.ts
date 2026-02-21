@@ -3,7 +3,7 @@
  * Handles repo provisioning, syncing, and NIP-34 integration
  */
 
-import { existsSync, mkdirSync, statSync } from 'fs';
+import { existsSync, mkdirSync, statSync, accessSync, constants } from 'fs';
 import { join } from 'path';
 import { readdir, readFile } from 'fs/promises';
 import { spawn } from 'child_process';
@@ -16,6 +16,14 @@ import { shouldUseTor, getTorProxy } from '../../utils/tor.js';
 import { sanitizeError } from '../../utils/security.js';
 import { isPrivateRepo as checkIsPrivateRepo } from '../../utils/repo-privacy.js';
 import { extractCloneUrls } from '../../utils/nostr-utils.js';
+/**
+ * Check if a URL is a GRASP (Git Repository Access via Secure Protocol) URL
+ * GRASP URLs contain npub (Nostr public key) in the path: https://host/npub.../repo.git
+ */
+function isGraspUrl(url: string): boolean {
+  // GRASP URLs have npub (starts with npub1) in the path
+  return /\/npub1[a-z0-9]+/i.test(url);
+}
 
 /**
  * Execute git command with custom environment variables safely
@@ -293,6 +301,33 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
    * Supports GitHub tokens via GITHUB_TOKEN environment variable
    * Returns the original URL if no token is needed or available
    */
+  /**
+   * Convert SSH URL to HTTPS URL if possible
+   * e.g., git@github.com:user/repo.git -> https://github.com/user/repo.git
+   */
+  private convertSshToHttps(url: string): string | null {
+    // Check if it's an SSH URL (git@host:path or ssh://)
+    const sshMatch = url.match(/^git@([^:]+):(.+)$/);
+    if (sshMatch) {
+      const [, host, path] = sshMatch;
+      // Remove .git suffix if present, we'll add it back
+      const cleanPath = path.replace(/\.git$/, '');
+      return `https://${host}/${cleanPath}.git`;
+    }
+    
+    // Check for ssh:// URLs
+    if (url.startsWith('ssh://')) {
+      const sshUrlMatch = url.match(/^ssh:\/\/([^/]+)\/(.+)$/);
+      if (sshUrlMatch) {
+        const [, host, path] = sshUrlMatch;
+        const cleanPath = path.replace(/\.git$/, '');
+        return `https://${host}/${cleanPath}.git`;
+      }
+    }
+    
+    return null;
+  }
+
   private injectAuthToken(url: string): string {
     try {
       const urlObj = new URL(url);
@@ -633,7 +668,7 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
     npub: string,
     repoName: string,
     announcementEvent?: NostrEvent
-  ): Promise<{ success: boolean; needsAnnouncement?: boolean; announcement?: NostrEvent }> {
+  ): Promise<{ success: boolean; needsAnnouncement?: boolean; announcement?: NostrEvent; error?: string; cloneUrls?: string[]; remoteUrls?: string[] }> {
     const repoPath = join(this.repoRoot, npub, `${repoName}.git`);
     
     // If repo already exists, check if it has an announcement
@@ -702,17 +737,54 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
 
     try {
       
-      // Filter out localhost URLs and our own domain (we want external sources)
-      const externalUrls = cloneUrls.filter(url => {
+      // Filter and convert URLs:
+      // 1. Skip SSH URLs (git@... or ssh://) - convert to HTTPS when possible
+      // 2. Filter out localhost and our own domain
+      // 3. Prioritize HTTPS non-GRASP URLs, then GRASP URLs
+      const httpsUrls: string[] = [];
+      const sshUrls: string[] = [];
+      
+      for (const url of cloneUrls) {
         const lowerUrl = url.toLowerCase();
-        return !lowerUrl.includes('localhost') && 
-               !lowerUrl.includes('127.0.0.1') && 
-               !url.includes(this.domain);
-      });
+        
+        // Skip localhost and our own domain
+        if (lowerUrl.includes('localhost') || 
+            lowerUrl.includes('127.0.0.1') || 
+            url.includes(this.domain)) {
+          continue;
+        }
+        
+        // Check if it's an SSH URL
+        if (url.startsWith('git@') || url.startsWith('ssh://')) {
+          sshUrls.push(url);
+          // Try to convert to HTTPS
+          const httpsUrl = this.convertSshToHttps(url);
+          if (httpsUrl) {
+            httpsUrls.push(httpsUrl);
+          }
+        } else {
+          // It's already HTTPS/HTTP
+          httpsUrls.push(url);
+        }
+      }
+      
+      // Separate HTTPS URLs into non-GRASP and GRASP
+      const nonGraspHttpsUrls = httpsUrls.filter(url => !isGraspUrl(url));
+      const graspHttpsUrls = httpsUrls.filter(url => isGraspUrl(url));
+      
+      // Prioritize: non-GRASP HTTPS, then GRASP HTTPS, then converted SSH->HTTPS, finally SSH (if no HTTPS available)
+      remoteUrls = [...nonGraspHttpsUrls, ...graspHttpsUrls];
+      
+      // If no HTTPS URLs, try SSH URLs (but log a warning)
+      if (remoteUrls.length === 0 && sshUrls.length > 0) {
+        logger.warn({ npub, repoName, sshUrls }, 'No HTTPS URLs available, attempting SSH URLs (may fail without SSH keys configured)');
+        remoteUrls = sshUrls;
+      }
 
       // If no external URLs, try any URL that's not our domain
-      remoteUrls = externalUrls.length > 0 ? externalUrls : 
-                        cloneUrls.filter(url => !url.includes(this.domain));
+      if (remoteUrls.length === 0) {
+        remoteUrls = cloneUrls.filter(url => !url.includes(this.domain));
+      }
 
       // If still no remote URLs, but there are *any* clone URLs, try the first one
       // This handles cases where the only clone URL is our own domain, but the repo doesn't exist locally yet
@@ -728,10 +800,52 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
       
       logger.debug({ npub, repoName, cloneUrls, remoteUrls, isPublic }, 'On-demand fetch details');
 
+      // Check if repoRoot exists and is writable
+      if (!existsSync(this.repoRoot)) {
+        try {
+          mkdirSync(this.repoRoot, { recursive: true });
+          logger.info({ repoRoot: this.repoRoot }, 'Created repos root directory');
+        } catch (err) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          logger.error({ 
+            repoRoot: this.repoRoot,
+            error: error.message
+          }, 'Failed to create repos root directory');
+          throw new Error(`Cannot create repos root directory at ${this.repoRoot}. Please check permissions: ${error.message}`);
+        }
+      } else {
+        // Check if repoRoot is writable
+        try {
+          accessSync(this.repoRoot, constants.W_OK);
+        } catch (err) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          logger.error({ 
+            repoRoot: this.repoRoot,
+            error: error.message
+          }, 'Repos root directory is not writable');
+          throw new Error(`Repos root directory at ${this.repoRoot} is not writable. Please fix permissions (e.g., chmod 755 ${this.repoRoot} or chown to the correct user).`);
+        }
+      }
+
       // Create directory structure
       const repoDir = join(this.repoRoot, npub);
       if (!existsSync(repoDir)) {
-        mkdirSync(repoDir, { recursive: true });
+        try {
+          mkdirSync(repoDir, { recursive: true });
+        } catch (err) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          if (error.message.includes('EACCES') || error.message.includes('permission denied')) {
+            logger.error({ 
+              npub, 
+              repoName, 
+              repoDir,
+              repoRoot: this.repoRoot,
+              error: error.message
+            }, 'Permission denied when creating repository directory');
+            throw new Error(`Permission denied: Cannot create repository directory at ${repoDir}. Please check that the server has write permissions to ${this.repoRoot}.`);
+          }
+          throw error;
+        }
       }
 
       // Try to clone from the first available remote URL
@@ -816,15 +930,23 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
       return { success: true, announcement: announcementEvent };
     } catch (error) {
       const sanitizedError = sanitizeError(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error({ 
         error: sanitizedError, 
         npub, 
         repoName,
         cloneUrls,
         isPublic,
-        remoteUrls
+        remoteUrls,
+        errorMessage
       }, 'Failed to fetch repository on-demand');
-      return { success: false, needsAnnouncement: false };
+      return { 
+        success: false, 
+        needsAnnouncement: false,
+        error: errorMessage,
+        cloneUrls,
+        remoteUrls
+      };
     }
   }
 
