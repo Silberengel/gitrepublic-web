@@ -1026,6 +1026,44 @@
   overflow: hidden;
 }
 
+.copy-clone-url-button {
+  padding: 0.5rem 0.75rem;
+  background: var(--button-primary, var(--accent));
+  color: var(--accent-text, #ffffff);
+  border: none;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  margin-bottom: 0.5rem;
+  width: 100%;
+}
+
+.copy-clone-url-button:hover:not(:disabled) {
+  background: var(--button-primary-hover, var(--accent-hover));
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.copy-clone-url-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.copy-clone-url-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.copy-clone-url-button .icon-inline {
+  width: 16px;
+  height: 16px;
+}
+
 .clone-url-list.collapsed {
   max-height: 0;
   opacity: 0;
@@ -1068,6 +1106,37 @@
 }
 
 .clone-more {
+  background: var(--button-secondary, var(--bg-secondary));
+  border: 1px solid var(--border-color, #e0e0e0);
+  padding: 0.375rem 0.75rem;
+  margin: 0.5rem 0 0 0;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  display: inline-block;
+  font-weight: 500;
+}
+
+.clone-more:hover {
+  background: var(--button-secondary-hover, var(--bg-tertiary));
+  border-color: var(--accent, #007bff);
+  color: var(--accent, #007bff);
+}
+
+.clone-more:active {
+  transform: translateY(1px);
+}
+
+.clone-more:focus {
+  outline: 2px solid var(--accent, #007bff);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Legacy span version (if still used) */
+span.clone-more {
   color: var(--text-muted);
   font-size: 0.75rem;
   margin-top: 0.25rem;

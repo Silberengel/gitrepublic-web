@@ -376,18 +376,6 @@
         {/if}
       </div>
     {/if}
-
-    {#if isRepoCloned === true && onCopyCloneUrl}
-      <button 
-        class="copy-clone-button"
-        onclick={() => onCopyCloneUrl()}
-        disabled={copyingCloneUrl}
-        title="Copy clone URL"
-      >
-        <img src="/icons/copy.svg" alt="" class="icon" />
-        {copyingCloneUrl ? 'Copying...' : 'Copy Clone URL'}
-      </button>
-    {/if}
   </div>
 
 </header>

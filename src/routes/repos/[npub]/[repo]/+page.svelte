@@ -791,6 +791,8 @@
   let showLeftPanelOnMobile = $state(true);
   // Mobile collapse for clone URLs
   let cloneUrlsExpanded = $state(false);
+  // Show all clone URLs (beyond the first 3)
+  let showAllCloneUrls = $state(false);
   
   // Guard to prevent README auto-load loop
   let readmeAutoLoadAttempted = $state(false);
@@ -2945,9 +2947,20 @@
           await renderFileAsHtml(fileContent, ext || '');
         }
         
-        // Apply syntax highlighting for read-only view (non-maintainers) - only if not in preview mode
-        if (fileContent && !isMaintainer && !showFilePreview) {
-          await applySyntaxHighlighting(fileContent, ext || '');
+        // Apply syntax highlighting
+        // For files that support HTML preview (markdown, HTML, etc.), only show highlighting in raw mode
+        // For code files and other non-markup files, always show syntax highlighting
+        const hasHtmlPreview = supportsPreview(ext);
+        if (fileContent) {
+          if (hasHtmlPreview) {
+            // Markup files: only show highlighting when not in preview mode (raw mode)
+            if (!showFilePreview) {
+              await applySyntaxHighlighting(fileContent, ext || '');
+            }
+          } else {
+            // Code files and other non-markup files: always show syntax highlighting
+            await applySyntaxHighlighting(fileContent, ext || '');
+          }
         }
       }
     } catch (err) {
@@ -4319,7 +4332,18 @@
             </svg>
           </button>
           <div class="clone-url-list" class:collapsed={!cloneUrlsExpanded}>
-            {#each pageData.repoCloneUrls.slice(0, 3) as cloneUrl}
+            {#if isRepoCloned === true}
+              <button 
+                class="copy-clone-url-button"
+                onclick={() => copyCloneUrl()}
+                disabled={copyingCloneUrl}
+                title="Copy clone URL"
+              >
+                <img src="/icons/copy.svg" alt="" class="icon-inline" />
+                {copyingCloneUrl ? 'Copying...' : 'Copy Clone URL'}
+              </button>
+            {/if}
+            {#each (showAllCloneUrls ? pageData.repoCloneUrls : pageData.repoCloneUrls.slice(0, 3)) as cloneUrl}
             {@const cloneVerification = verificationStatus?.cloneVerifications?.find(cv => {
               const normalizeUrl = (url: string) => url.replace(/\/$/, '').toLowerCase().replace(/^https?:\/\//, '');
               const normalizedCv = normalizeUrl(cv.url);
@@ -4359,7 +4383,13 @@
             </div>
             {/each}
             {#if pageData.repoCloneUrls.length > 3}
-              <span class="clone-more">+{pageData.repoCloneUrls.length - 3} more</span>
+              <button 
+                class="clone-more" 
+                onclick={() => showAllCloneUrls = !showAllCloneUrls}
+                title={showAllCloneUrls ? 'Show fewer' : 'Show all clone URLs'}
+              >
+                {showAllCloneUrls ? `-${pageData.repoCloneUrls.length - 3} less` : `+${pageData.repoCloneUrls.length - 3} more`}
+              </button>
             {/if}
           </div>
         </div>
