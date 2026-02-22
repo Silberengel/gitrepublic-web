@@ -227,6 +227,26 @@
   let isRepoCloned = $state<boolean | null>(null); // null = unknown, true = cloned, false = not cloned
   let checkingCloneStatus = $state(false);
   let cloning = $state(false);
+  
+  // Word wrap toggle
+  let wordWrap = $state(false);
+  
+  // Function to toggle word wrap and refresh highlighting
+  async function toggleWordWrap() {
+    wordWrap = !wordWrap;
+    console.log('Word wrap toggled:', wordWrap);
+    // Force DOM update by accessing the element
+    await new Promise(resolve => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(resolve);
+      });
+    });
+    // Re-apply syntax highlighting to refresh the display
+    if (currentFile && fileContent) {
+      const ext = currentFile.split('.').pop() || '';
+      await applySyntaxHighlighting(fileContent, ext);
+    }
+  }
   let copyingCloneUrl = $state(false);
   
   // Helper: Check if repo needs to be cloned for write operations
@@ -706,6 +726,10 @@
 
   // Mobile view toggle for file list/file viewer
   let showFileListOnMobile = $state(true);
+  
+  // Guard to prevent README auto-load loop
+  let readmeAutoLoadAttempted = $state(false);
+  let readmeAutoLoadTimeout: ReturnType<typeof setTimeout> | null = null;
 
   async function loadReadme() {
     if (repoNotFound) return;
@@ -1838,6 +1862,10 @@
       clearInterval(autoSaveInterval);
       autoSaveInterval = null;
     }
+    if (readmeAutoLoadTimeout) {
+      clearTimeout(readmeAutoLoadTimeout);
+      readmeAutoLoadTimeout = null;
+    }
   });
 
   async function checkAuth() {
@@ -2028,6 +2056,59 @@
       alert(`Failed to ${isBookmarked ? 'remove' : 'add'} bookmark: ${String(err)}`);
     } finally {
       loadingBookmark = false;
+    }
+  }
+
+  async function copyEventId() {
+    if (!repoAddress || !repoOwnerPubkey) {
+      alert('Repository address not available');
+      return;
+    }
+
+    try {
+      // Parse the repo address: kind:pubkey:identifier
+      const parts = repoAddress.split(':');
+      if (parts.length < 3) {
+        throw new Error('Invalid repository address format');
+      }
+
+      const kind = parseInt(parts[0]);
+      const pubkey = parts[1];
+      const identifier = parts.slice(2).join(':'); // In case identifier contains ':'
+
+      // Generate naddr synchronously
+      const naddr = nip19.naddrEncode({
+        kind,
+        pubkey,
+        identifier,
+        relays: [] // Optional: could include relays if available
+      });
+
+      // Copy naddr to clipboard immediately (while we have user activation)
+      try {
+        await navigator.clipboard.writeText(naddr);
+      } catch (clipboardErr) {
+        // Fallback: use execCommand for older browsers or if clipboard API fails
+        const textArea = document.createElement('textarea');
+        textArea.value = naddr;
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+          document.execCommand('copy');
+          textArea.remove();
+        } catch (execErr) {
+          textArea.remove();
+          throw new Error('Failed to copy to clipboard. Please copy manually: ' + naddr);
+        }
+      }
+      
+      // Show message with naddr
+      alert(`Event ID copied to clipboard!\n\nnaddr (repository address):\n${naddr}`);
+    } catch (err) {
+      console.error('Failed to copy event ID:', err);
+      alert(`Failed to copy event ID: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -2380,13 +2461,39 @@
       currentPath = path;
       
       // Auto-load README if we're in the root directory and no file is currently selected
-      if (path === '' && !currentFile) {
+      // Only attempt once per path to prevent loops
+      if (path === '' && !currentFile && !readmeAutoLoadAttempted) {
         const readmeFile = findReadmeFile(files);
         if (readmeFile) {
+          readmeAutoLoadAttempted = true;
+          // Clear any existing timeout
+          if (readmeAutoLoadTimeout) {
+            clearTimeout(readmeAutoLoadTimeout);
+          }
           // Small delay to ensure UI is ready
-          setTimeout(() => {
-            loadFile(readmeFile.path);
+          readmeAutoLoadTimeout = setTimeout(() => {
+            loadFile(readmeFile.path).catch(err => {
+              // If load fails (e.g., 429 rate limit), reset the flag after a delay
+              // so we can retry later, but not immediately
+              if (err instanceof Error && err.message.includes('Too Many Requests')) {
+                console.warn('[README] Rate limited, will retry later');
+                setTimeout(() => {
+                  readmeAutoLoadAttempted = false;
+                }, 5000); // Retry after 5 seconds
+              } else {
+                // For other errors, reset immediately
+                readmeAutoLoadAttempted = false;
+              }
+            });
+            readmeAutoLoadTimeout = null;
           }, 100);
+        }
+      } else if (path !== '' || currentFile) {
+        // Reset flag when navigating away from root or when a file is selected
+        readmeAutoLoadAttempted = false;
+        if (readmeAutoLoadTimeout) {
+          clearTimeout(readmeAutoLoadTimeout);
+          readmeAutoLoadTimeout = null;
         }
       }
     } catch (err) {
@@ -2458,6 +2565,12 @@
       });
       
       if (!response.ok) {
+        // Handle rate limiting specifically to prevent loops
+        if (response.status === 429) {
+          const error = new Error(`Failed to load file: Too Many Requests`);
+          console.warn('[File Load] Rate limited, please wait before retrying');
+          throw error;
+        }
         throw new Error(`Failed to load file: ${response.statusText}`);
       }
 
@@ -2466,6 +2579,11 @@
       editedContent = data.content;
       currentFile = filePath;
       hasChanges = false;
+      
+      // Reset README auto-load flag when a file is successfully loaded
+      if (filePath && filePath.toLowerCase().includes('readme')) {
+        readmeAutoLoadAttempted = false;
+      }
 
       // Determine language from file extension
       const ext = filePath.split('.').pop()?.toLowerCase();
@@ -3709,6 +3827,7 @@
       hasUnlimitedAccess={hasUnlimitedAccess($userStore.userLevel)}
       needsClone={needsClone}
       allMaintainers={allMaintainers}
+      onCopyEventId={copyEventId}
     />
   {/if}
 
@@ -3810,6 +3929,14 @@
             onTabChange={(tab) => activeTab = tab as typeof activeTab}
           />
           <h2>Files</h2>
+          <button 
+            onclick={toggleWordWrap} 
+            class="word-wrap-button"
+            title={wordWrap ? 'Disable word wrap' : 'Enable word wrap'}
+            aria-label={wordWrap ? 'Disable word wrap' : 'Enable word wrap'}
+          >
+            {wordWrap ? 'Wrap' : 'No Wrap'}
+          </button>
           <div class="file-tree-actions">
             {#if pathStack.length > 0 || currentPath}
               <button onclick={handleBack} class="back-button">← Back</button>
@@ -4148,7 +4275,7 @@
                   readOnly={needsClone}
                 />
               {:else}
-                <div class="read-only-editor">
+                <div class="read-only-editor" class:word-wrap={wordWrap}>
                   {#if highlightedFileContent}
                     {@html highlightedFileContent}
                   {:else}
@@ -5078,3 +5205,39 @@
     </div>
   {/if}
 </div>
+
+<style>
+  /* Word wrap styles - ensure they apply with highest specificity */
+  :global(.read-only-editor.word-wrap) {
+    overflow-x: hidden !important;
+  }
+
+  :global(.read-only-editor.word-wrap pre) {
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
+    max-width: 100% !important;
+  }
+
+  :global(.read-only-editor.word-wrap pre code),
+  :global(.read-only-editor.word-wrap pre code.hljs),
+  :global(.read-only-editor.word-wrap code.hljs),
+  :global(.read-only-editor.word-wrap .hljs) {
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
+    display: block !important;
+    max-width: 100% !important;
+  }
+
+  :global(.read-only-editor.word-wrap pre code.hljs *),
+  :global(.read-only-editor.word-wrap pre code.hljs span),
+  :global(.read-only-editor.word-wrap code.hljs *),
+  :global(.read-only-editor.word-wrap .hljs *) {
+    white-space: pre-wrap !important;
+  }
+</style>

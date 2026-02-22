@@ -41,6 +41,7 @@
     hasUnlimitedAccess?: boolean;
     needsClone?: boolean;
     allMaintainers?: Array<{ pubkey: string; isOwner: boolean }>;
+    onCopyEventId?: () => void;
   }
 
   let { 
@@ -80,7 +81,8 @@
     deletingAnnouncement = false,
     hasUnlimitedAccess = false,
     needsClone = false,
-    allMaintainers = []
+    allMaintainers = [],
+    onCopyEventId
   }: Props = $props();
 
   let showCloneMenu = $state(false);
@@ -182,6 +184,11 @@
                   disabled={needsClone}
                 >
                   Create New Branch
+                </button>
+              {/if}
+              {#if onCopyEventId}
+                <button class="menu-item" onclick={() => { onCopyEventId(); showMoreMenu = false; }}>
+                  Copy Event ID
                 </button>
               {/if}
               {#if onDeleteAnnouncement}

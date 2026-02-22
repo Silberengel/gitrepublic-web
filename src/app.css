@@ -639,42 +639,80 @@ textarea:disabled::placeholder {
 }
 
 /* Make icon images theme-aware using filters */
+/* Target both img inside .icon and img with icon classes */
+img.icon,
+.icon img,
+img.icon-small,
 .icon-small img,
+img.icon-inline,
 .icon-inline img,
 .hamburger-icon img,
 .platform-icon img,
 .repo-badge-icon img,
 .btn-icon img {
-  filter: var(--icon-filter, brightness(0) saturate(100%) invert(var(--icon-invert, 0)));
-  transition: filter 0.3s ease;
-  opacity: 0.9;
+  filter: brightness(0) saturate(100%) invert(1) !important; /* Default white for dark themes */
+  opacity: 1 !important;
+  transition: filter 0.3s ease, opacity 0.3s ease;
+}
+
+/* Light theme: icons should be dark (black) */
+[data-theme="light"] img.icon,
+[data-theme="light"] .icon img,
+[data-theme="light"] img.icon-small,
+[data-theme="light"] .icon-small img,
+[data-theme="light"] img.icon-inline,
+[data-theme="light"] .icon-inline img,
+[data-theme="light"] .hamburger-icon img,
+[data-theme="light"] .platform-icon img,
+[data-theme="light"] .repo-badge-icon img,
+[data-theme="light"] .btn-icon img {
+  filter: brightness(0) saturate(100%) !important; /* Black in light theme */
+  opacity: 1 !important;
+}
+
+/* Dark theme (Purple): icons should be light (white/light gray) */
+[data-theme="dark"] img.icon,
+[data-theme="dark"] .icon img,
+[data-theme="dark"] img.icon-small,
+[data-theme="dark"] .icon-small img,
+[data-theme="dark"] img.icon-inline,
+[data-theme="dark"] .icon-inline img,
+[data-theme="dark"] .hamburger-icon img,
+[data-theme="dark"] .platform-icon img,
+[data-theme="dark"] .repo-badge-icon img,
+[data-theme="dark"] .btn-icon img {
+  filter: brightness(0) saturate(100%) invert(1) !important; /* White in dark/purple theme */
+  opacity: 1 !important;
+}
+
+/* Black theme: icons should be light (white/light gray) */
+[data-theme="black"] img.icon,
+[data-theme="black"] .icon img,
+[data-theme="black"] img.icon-small,
+[data-theme="black"] .icon-small img,
+[data-theme="black"] img.icon-inline,
+[data-theme="black"] .icon-inline img,
+[data-theme="black"] .hamburger-icon img,
+[data-theme="black"] .platform-icon img,
+[data-theme="black"] .repo-badge-icon img,
+[data-theme="black"] .btn-icon img {
+  filter: brightness(0) saturate(100%) invert(1) !important; /* White in black theme */
+  opacity: 1 !important;
 }
 
 /* Theme icons - handled separately for better control */
 .theme-icon img:not(.theme-toggle .theme-icon img),
 .theme-icon-option img:not(.theme-option .theme-icon-option img) {
-  filter: var(--icon-filter, brightness(0) saturate(100%) invert(var(--icon-invert, 0)));
-  transition: filter 0.3s ease;
-  opacity: 0.9;
+  filter: brightness(0) saturate(100%) invert(1) !important; /* Default white for dark backgrounds */
+  opacity: 1 !important;
+  transition: filter 0.3s ease, opacity 0.3s ease;
 }
 
-/* Light theme: icons should be dark (black) */
-:root,
-[data-theme="light"] {
-  --icon-filter: brightness(0) saturate(100%);
-  --icon-invert: 0;
-}
-
-/* Dark theme: icons should be light (white/light gray) */
-[data-theme="dark"] {
-  --icon-filter: brightness(0) saturate(100%) invert(1);
-  --icon-invert: 1;
-}
-
-/* Black theme: icons should be light (white/light gray) */
-[data-theme="black"] {
-  --icon-filter: brightness(0) saturate(100%) invert(1);
-  --icon-invert: 1;
+/* Light theme: theme icons should be dark */
+[data-theme="light"] .theme-icon img:not(.theme-toggle .theme-icon img),
+[data-theme="light"] .theme-icon-option img:not(.theme-option .theme-icon-option img) {
+  filter: brightness(0) saturate(100%) !important; /* Black in light theme */
+  opacity: 1 !important;
 }
 
 .icon-inline {
@@ -692,11 +730,71 @@ textarea:disabled::placeholder {
 }
 
 /* Ensure icons in buttons and interactive elements have proper contrast */
+button img.icon,
+button .icon img,
+button img.icon-inline,
 button .icon-inline img,
+button img.icon-small,
 button .icon-small img,
+.button img.icon,
+.button .icon img,
+.button img.icon-inline,
 .button .icon-inline img,
+.button img.icon-small,
 .button .icon-small img {
-  filter: var(--icon-filter, brightness(0) saturate(100%) invert(var(--icon-invert, 0)));
+  filter: brightness(0) saturate(100%) invert(1) !important; /* Default white for dark themes */
+  opacity: 1 !important;
+}
+
+/* Light theme: button icons should be dark */
+[data-theme="light"] button img.icon,
+[data-theme="light"] button .icon img,
+[data-theme="light"] button img.icon-inline,
+[data-theme="light"] button .icon-inline img,
+[data-theme="light"] button img.icon-small,
+[data-theme="light"] button .icon-small img,
+[data-theme="light"] .button img.icon,
+[data-theme="light"] .button .icon img,
+[data-theme="light"] .button img.icon-inline,
+[data-theme="light"] .button .icon-inline img,
+[data-theme="light"] .button img.icon-small,
+[data-theme="light"] .button .icon-small img {
+  filter: brightness(0) saturate(100%) !important; /* Black in light theme */
+  opacity: 1 !important;
+}
+
+/* Dark theme (Purple): button icons should be light */
+[data-theme="dark"] button img.icon,
+[data-theme="dark"] button .icon img,
+[data-theme="dark"] button img.icon-inline,
+[data-theme="dark"] button .icon-inline img,
+[data-theme="dark"] button img.icon-small,
+[data-theme="dark"] button .icon-small img,
+[data-theme="dark"] .button img.icon,
+[data-theme="dark"] .button .icon img,
+[data-theme="dark"] .button img.icon-inline,
+[data-theme="dark"] .button .icon-inline img,
+[data-theme="dark"] .button img.icon-small,
+[data-theme="dark"] .button .icon-small img {
+  filter: brightness(0) saturate(100%) invert(1) !important; /* White in dark/purple theme */
+  opacity: 1 !important;
+}
+
+/* Black theme: button icons should be light */
+[data-theme="black"] button img.icon,
+[data-theme="black"] button .icon img,
+[data-theme="black"] button img.icon-inline,
+[data-theme="black"] button .icon-inline img,
+[data-theme="black"] button img.icon-small,
+[data-theme="black"] button .icon-small img,
+[data-theme="black"] .button img.icon,
+[data-theme="black"] .button .icon img,
+[data-theme="black"] .button img.icon-inline,
+[data-theme="black"] .button .icon-inline img,
+[data-theme="black"] .button img.icon-small,
+[data-theme="black"] .button .icon-small img {
+  filter: brightness(0) saturate(100%) invert(1) !important; /* White in black theme */
+  opacity: 1 !important;
 }
 
 /* Icons on accent backgrounds should be white */
@@ -705,7 +803,8 @@ button[class*="primary"] .icon-small img,
 .button[class*="primary"] .icon-inline img,
 .button[class*="primary"] .icon-small img,
 .theme-toggle:hover .theme-icon img {
-  filter: brightness(0) saturate(100%) invert(1);
+  filter: brightness(0) saturate(100%) invert(1) !important;
+  opacity: 1 !important;
 }
 
 /* Theme toggle icons - ensure high contrast with maximum specificity */
@@ -1330,30 +1429,33 @@ button.theme-option.active img.theme-icon-option,
   color: var(--error-text);
 }
 
-/* Code blocks - consistent dark-gray background in both themes */
-code {
-  background: var(--bg-secondary);
+/* Unified code styling - all code uses highlight.js standard theme with dark-gray background */
+
+/* Inline code - matches highlight.js theme */
+code:not(pre code) {
+  background: #1e1e1e !important;
+  color: #d4d4d4 !important;
   padding: 0.125rem 0.25rem;
   border-radius: 0.25rem;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 0.875em;
-  color: var(--text-primary);
-}
-
-pre {
-  background: #1e1e1e; /* Consistent dark-gray background */
-  color: #d4d4d4; /* Light gray text for good contrast */
-  padding: 1rem;
-  border-radius: 0.5rem;
-  overflow-x: auto;
-  margin: 1rem 0;
   border: 1px solid #3a3a3a;
 }
 
-pre code {
-  background: transparent;
+/* Pre wrappers are transparent - only code.hljs has styling */
+pre {
+  margin: 0;
   padding: 0;
-  color: inherit;
+  background: transparent;
+  border: none;
+  overflow: visible;
+}
+
+/* Code blocks - highlight.js handles everything */
+pre code.hljs {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .clone-urls {
@@ -1365,14 +1467,14 @@ pre code {
 
 .clone-urls code {
   display: block;
-  background: var(--bg-secondary);
+  background: #1e1e1e !important; /* Dark-gray background - theme independent */
+  color: #d4d4d4 !important; /* Light gray text - theme independent */
   padding: 0.5rem;
   border-radius: 0.25rem;
   margin: 0.25rem 0;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 0.875rem;
-  color: var(--text-primary);
-  border: 1px solid var(--border-light);
+  border: 1px solid #3a3a3a;
   word-break: break-all;
   overflow-wrap: break-word;
 }
@@ -1806,93 +1908,98 @@ label.filter-checkbox > span,
 
 /* All pages use the same container width for consistency */
 
-/* Highlight.js Syntax Highlighting - Consistent dark-gray background */
+/* Highlight.js - unified code block styling - theme independent */
 .hljs {
-  background: #1e1e1e !important; /* Consistent dark-gray background in both themes */
-  color: #d4d4d4 !important; /* Light gray text for good contrast */
-  border: 1px solid #3a3a3a;
-  border-radius: 4px;
-  padding: 1rem;
+  display: block;
+  background: #1e1e1e !important;
+  color: #d4d4d4 !important;
+  border: 1px solid #3a3a3a !important;
+  border-radius: 4px !important;
+  padding: 1rem !important;
   overflow-x: auto;
+  margin: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
 }
 
-/* Syntax highlighting colors - high contrast for dark-gray background */
+/* Syntax highlighting colors - high contrast for dark-gray background - theme independent */
 .hljs-comment,
 .hljs-quote {
-  color: #6a9955; /* Green comments - good contrast */
+  color: #6a9955 !important; /* Green comments - good contrast */
   font-style: italic;
 }
 
 .hljs-keyword,
 .hljs-selector-tag,
 .hljs-subst {
-  color: #c586c0; /* Purple/magenta keywords - good contrast */
+  color: #c586c0 !important; /* Purple/magenta keywords - good contrast */
   font-weight: 500;
 }
 
 .hljs-number,
 .hljs-literal {
-  color: #b5cea8; /* Light green numbers - good contrast */
+  color: #b5cea8 !important; /* Light green numbers - good contrast */
   font-weight: 500;
 }
 
 .hljs-variable,
 .hljs-template-variable,
 .hljs-tag .hljs-attr {
-  color: #9cdcfe; /* Light blue variables - good contrast */
+  color: #9cdcfe !important; /* Light blue variables - good contrast */
 }
 
 .hljs-string,
 .hljs-doctag {
-  color: #ce9178; /* Orange strings - good contrast */
+  color: #ce9178 !important; /* Orange strings - good contrast */
 }
 
 .hljs-title,
 .hljs-section,
 .hljs-selector-id {
-  color: #dcdcaa; /* Yellow titles - good contrast */
+  color: #dcdcaa !important; /* Yellow titles - good contrast */
   font-weight: 600;
 }
 
 .hljs-type,
 .hljs-class .hljs-title {
-  color: #4ec9b0; /* Cyan types - good contrast */
+  color: #4ec9b0 !important; /* Cyan types - good contrast */
   font-weight: 500;
 }
 
 .hljs-tag,
 .hljs-name,
 .hljs-attribute {
-  color: #569cd6; /* Blue tags - good contrast */
+  color: #569cd6 !important; /* Blue tags - good contrast */
 }
 
 .hljs-regexp,
 .hljs-link {
-  color: #d16969; /* Red regexp - good contrast */
+  color: #d16969 !important; /* Red regexp - good contrast */
 }
 
 .hljs-symbol,
 .hljs-bullet {
-  color: #dcdcaa; /* Yellow symbols - good contrast */
+  color: #dcdcaa !important; /* Yellow symbols - good contrast */
 }
 
 .hljs-built_in,
 .hljs-builtin-name {
-  color: #4ec9b0; /* Cyan built-ins - good contrast */
+  color: #4ec9b0 !important; /* Cyan built-ins - good contrast */
 }
 
 .hljs-meta {
-  color: #808080; /* Gray meta - good contrast */
+  color: #808080 !important; /* Gray meta - good contrast */
 }
 
 .hljs-deletion {
-  background: #4a1f1f; /* Dark red background */
-  color: #ff8a8a; /* Light red text */
+  background: #4a1f1f !important; /* Dark red background */
+  color: #ff8a8a !important; /* Light red text */
 }
 
 .hljs-addition {
-  background: #1a3a2a; /* Dark green background */
-  color: #6aff9a; /* Light green text */
+  background: #1a3a2a !important; /* Dark green background */
+  color: #6aff9a !important; /* Light green text */
 }
 
 .hljs-emphasis {

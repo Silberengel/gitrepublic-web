@@ -115,21 +115,21 @@
   height: 18px;
   flex-shrink: 0;
   /* Theme-aware icon colors */
-  filter: brightness(0) saturate(100%) invert(1); /* Default white for dark themes */
-  opacity: 1;
+  filter: brightness(0) saturate(100%) invert(1) !important; /* Default white for dark themes */
+  opacity: 1 !important;
 }
 
 /* Light theme: black icon */
 :global([data-theme="light"]) .icon {
-  filter: brightness(0) saturate(100%); /* Black in light theme */
-  opacity: 1;
+  filter: brightness(0) saturate(100%) !important; /* Black in light theme */
+  opacity: 1 !important;
 }
 
 /* Dark themes: white icon */
 :global([data-theme="dark"]) .icon,
 :global([data-theme="black"]) .icon {
-  filter: brightness(0) saturate(100%) invert(1); /* White in dark themes */
-  opacity: 1;
+  filter: brightness(0) saturate(100%) invert(1) !important; /* White in dark themes */
+  opacity: 1 !important;
 }
 
 .repo-description {
