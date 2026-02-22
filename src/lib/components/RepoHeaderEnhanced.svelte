@@ -91,6 +91,27 @@
   let showMoreMenu = $state(false);
   let showBranchMenu = $state(false);
   let showOwnerMenu = $state(false);
+  let moreMenuElement = $state<HTMLDivElement | null>(null);
+  
+  // Adjust menu position to expand leftward on mobile if needed
+  $effect(() => {
+    if (showMoreMenu && moreMenuElement) {
+      // Use requestAnimationFrame to ensure DOM is updated
+      requestAnimationFrame(() => {
+        if (!moreMenuElement) return;
+        const rect = moreMenuElement.getBoundingClientRect();
+        const viewportWidth = window.innerWidth;
+        
+        // If menu would overflow on the right, position it to expand leftward
+        if (rect.right > viewportWidth - 10) {
+          const overflow = rect.right - (viewportWidth - 10);
+          moreMenuElement.style.transform = `translateX(-${overflow}px)`;
+        } else {
+          moreMenuElement.style.transform = 'translateX(0)';
+        }
+      });
+    }
+  });
 </script>
 
 <header class="repo-header">
@@ -139,7 +160,7 @@
               tabindex="0"
               aria-label="Close menu"
             ></div>
-            <div class="more-menu">
+            <div class="more-menu" bind:this={moreMenuElement}>
               {#if onFork}
                 <button class="menu-item" onclick={() => { onFork(); showMoreMenu = false; }} disabled={forking}>
                   {forking ? 'Forking...' : 'Fork'}

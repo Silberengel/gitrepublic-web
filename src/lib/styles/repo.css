@@ -89,10 +89,14 @@
   padding: 1rem;
   border-bottom: 1px solid var(--border-color);
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   gap: 0.75rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+  position: relative;
+  overflow: visible;
+  z-index: 1;
 }
 
 .file-tree-header h2 {
@@ -100,6 +104,8 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .file-list {
@@ -474,14 +480,58 @@
 
 /* Mobile responsive */
 @media (max-width: 768px) {
-  .file-tree {
+  .repo-layout {
+    flex-direction: column;
+    position: relative;
     width: 100%;
-    flex: 1 1 auto;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .file-tree,
+  .issues-sidebar,
+  .prs-sidebar,
+  .patches-sidebar,
+  .discussions-sidebar,
+  .docs-sidebar,
+  .history-sidebar,
+  .tags-sidebar {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100%;
+    flex: 1 1 100%;
+    min-height: 0;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    box-sizing: border-box;
+  }
+  
+  .issues-header,
+  .prs-header,
+  .patches-header,
+  .discussions-header,
+  .docs-header,
+  .history-header,
+  .tags-header,
+  .file-tree-header {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
   }
 
   .editor-area {
     width: 100%;
-    flex: 1;
+    height: 100%;
+    flex: 1 1 100%;
+    min-height: 0;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
   }
 
   .file-tree.hide-on-mobile {
@@ -492,17 +542,68 @@
     display: none !important;
   }
 
-  .repo-layout {
-    flex-direction: column;
+  .issues-sidebar.hide-on-mobile,
+  .prs-sidebar.hide-on-mobile,
+  .patches-sidebar.hide-on-mobile,
+  .discussions-sidebar.hide-on-mobile,
+  .docs-sidebar.hide-on-mobile,
+  .history-sidebar.hide-on-mobile,
+  .tags-sidebar.hide-on-mobile {
+    display: none !important;
+  }
+
+  .issues-content.hide-on-mobile,
+  .prs-content.hide-on-mobile,
+  .patches-content.hide-on-mobile,
+  .discussions-content.hide-on-mobile,
+  .docs-content.hide-on-mobile {
+    display: none !important;
   }
 
   .mobile-toggle-button {
     display: inline-flex;
-    padding: 0.5rem;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
     border-radius: 4px;
     cursor: pointer;
+    width: 2rem;
+    height: 2rem;
+    flex-shrink: 0;
+  }
+  
+  .mobile-toggle-button:hover {
+    background: var(--bg-hover);
+  }
+  
+  .mobile-toggle-button .icon-inline {
+    width: 18px;
+    height: 18px;
+  }
+  
+  .mobile-toggle-left {
+    transform: rotate(180deg);
+  }
+
+  .content-header-mobile {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    display: flex !important;
+    align-items: center;
+    background: var(--bg-secondary);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    width: 100%;
+    box-sizing: border-box;
+  }
+}
+
+@media (min-width: 769px) {
+  .content-header-mobile {
+    display: none;
   }
 }
 
@@ -713,6 +814,8 @@
 .file-tree-actions {
   display: flex;
   gap: 0.5rem;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .word-wrap-button {
@@ -723,8 +826,9 @@
   border-radius: 0.25rem;
   cursor: pointer;
   color: var(--text-primary);
-  margin-left: 0.5rem;
   transition: background 0.2s ease;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .word-wrap-button:hover {
@@ -783,7 +887,11 @@
 
 .patches-header h2,
 .discussions-header h2,
-.docs-header h2 {
+.docs-header h2,
+.prs-header h2,
+.issues-header h2,
+.history-header h2,
+.tags-header h2 {
   margin: 0;
   white-space: nowrap;
   flex-shrink: 0;

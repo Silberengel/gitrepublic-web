@@ -731,6 +731,8 @@
 
   // Mobile view toggle for file list/file viewer
   let showFileListOnMobile = $state(true);
+  // Mobile view toggle for all left/right panels (issues, PRs, patches, discussions, docs, history, tags)
+  let showLeftPanelOnMobile = $state(true);
   // Mobile collapse for clone URLs
   let cloneUrlsExpanded = $state(false);
   
@@ -4005,13 +4007,9 @@
             <button 
               onclick={() => showFileListOnMobile = !showFileListOnMobile} 
               class="mobile-toggle-button"
-              title={showFileListOnMobile ? 'Show file viewer' : 'Show file list'}
+              title="Show file viewer"
             >
-              {#if showFileListOnMobile}
-                <img src="/icons/file-text.svg" alt="Show file viewer" class="icon-inline" />
-              {:else}
-                <img src="/icons/package.svg" alt="Show file list" class="icon-inline" />
-              {/if}
+              <img src="/icons/arrow-right.svg" alt="Show file viewer" class="icon-inline" />
             </button>
           </div>
         </div>
@@ -4054,7 +4052,7 @@
 
       <!-- Commit History View -->
       {#if activeTab === 'history'}
-      <aside class="history-sidebar">
+      <aside class="history-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'history'}>
         <div class="history-header">
           <TabsMenu 
             activeTab={activeTab} 
@@ -4062,12 +4060,17 @@
             onTabChange={(tab) => activeTab = tab as typeof activeTab}
           />
           <h2>Commits</h2>
+          <button 
+            onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+            class="mobile-toggle-button"
+            title="Show content"
+          >
+            <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
+          </button>
         </div>
         {#if loadingCommits}
           <div class="loading">Loading commits...</div>
-        {:else if commits.length === 0}
-          <div class="empty">No commits found</div>
-        {:else}
+        {:else if commits.length > 0}
           <ul class="commit-list">
             {#each commits as commit}
               {@const commitHash = commit.hash || (commit as any).sha || ''}
@@ -4091,7 +4094,7 @@
 
       <!-- Tags View -->
       {#if activeTab === 'tags'}
-      <aside class="tags-sidebar">
+      <aside class="tags-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'tags'}>
         <div class="tags-header">
           <TabsMenu 
             activeTab={activeTab} 
@@ -4112,10 +4115,15 @@
               <img src="/icons/plus.svg" alt="New Tag" class="icon" />
             </button>
           {/if}
+          <button 
+            onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+            class="mobile-toggle-button"
+            title="Show content"
+          >
+            <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
+          </button>
         </div>
-        {#if tags.length === 0}
-          <div class="empty">No tags found</div>
-        {:else}
+        {#if tags.length > 0}
           <ul class="tag-list">
             {#each tags as tag}
               {@const tagHash = tag.hash || ''}
@@ -4136,7 +4144,7 @@
 
       <!-- Issues View -->
       {#if activeTab === 'issues'}
-      <aside class="issues-sidebar">
+      <aside class="issues-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'issues'}>
         <div class="issues-header">
           <TabsMenu 
             activeTab={activeTab} 
@@ -4152,12 +4160,17 @@
               <img src="/icons/plus.svg" alt="New Issue" class="icon" />
             </button>
           {/if}
+          <button 
+            onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+            class="mobile-toggle-button"
+            title="Show content"
+          >
+            <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
+          </button>
         </div>
         {#if loadingIssues}
           <div class="loading">Loading issues...</div>
-        {:else if issues.length === 0}
-          <div class="empty">No issues found</div>
-        {:else}
+        {:else if issues.length > 0}
           <ul class="issue-list">
             {#each issues as issue}
               <li class="issue-item">
@@ -4197,7 +4210,7 @@
 
       <!-- Pull Requests View -->
       {#if activeTab === 'prs'}
-      <aside class="prs-sidebar">
+      <aside class="prs-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'prs'}>
         <div class="prs-header">
           <TabsMenu 
             activeTab={activeTab} 
@@ -4213,12 +4226,17 @@
               <img src="/icons/plus.svg" alt="New PR" class="icon" />
             </button>
           {/if}
+          <button 
+            onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+            class="mobile-toggle-button"
+            title="Show content"
+          >
+            <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
+          </button>
         </div>
         {#if loadingPRs}
           <div class="loading">Loading pull requests...</div>
-        {:else if prs.length === 0}
-          <div class="empty">No pull requests found</div>
-        {:else}
+        {:else if prs.length > 0}
           <ul class="pr-list">
             {#each prs as pr}
               <li class="pr-item">
@@ -4245,7 +4263,7 @@
 
       <!-- Patches View -->
       {#if activeTab === 'patches'}
-      <aside class="patches-sidebar">
+      <aside class="patches-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'patches'}>
         <div class="patches-header">
           <TabsMenu 
             activeTab={activeTab} 
@@ -4262,12 +4280,17 @@
               <img src="/icons/plus.svg" alt="New Patch" class="icon" />
             </button>
           {/if}
+          <button 
+            onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+            class="mobile-toggle-button"
+            title="Show content"
+          >
+            <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
+          </button>
         </div>
         {#if loadingPatches}
           <div class="loading">Loading patches...</div>
-        {:else if patches.length === 0}
-          <div class="empty">No patches found</div>
-        {:else}
+        {:else if patches.length > 0}
           <ul class="patch-list">
             {#each patches as patch}
               <li class="patch-item" class:selected={selectedPatch === patch.id}>
@@ -4293,7 +4316,7 @@
 
       <!-- Discussions View -->
       {#if activeTab === 'discussions'}
-      <aside class="discussions-sidebar">
+      <aside class="discussions-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'discussions'}>
         <div class="discussions-header">
           <TabsMenu 
             activeTab={activeTab} 
@@ -4311,12 +4334,17 @@
               <img src="/icons/plus.svg" alt="New Discussion" class="icon" />
             </button>
           {/if}
+          <button 
+            onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+            class="mobile-toggle-button"
+            title="Show content"
+          >
+            <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
+          </button>
         </div>
         {#if loadingDiscussions}
           <div class="loading">Loading discussions...</div>
-        {:else if discussions.length === 0}
-          <div class="empty">No discussions found</div>
-        {:else}
+        {:else if discussions.length > 0}
           <ul class="discussion-list">
             {#each discussions as discussion}
               {@const hasComments = discussion.comments && discussion.comments.length > 0}
@@ -4351,7 +4379,7 @@
 
       <!-- Docs View -->
       {#if activeTab === 'docs'}
-      <aside class="docs-sidebar">
+      <aside class="docs-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'docs'}>
         <div class="docs-header">
           <TabsMenu 
             activeTab={activeTab} 
@@ -4359,13 +4387,19 @@
             onTabChange={(tab) => activeTab = tab as typeof activeTab}
           />
           <h2>Docs</h2>
+          <button 
+            onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+            class="mobile-toggle-button"
+            title="Show content"
+          >
+            <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
+          </button>
         </div>
-        <div class="empty">Documentation</div>
       </aside>
       {/if}
 
       <!-- Editor Area / Diff View / README -->
-      <div class="editor-area" class:hide-on-mobile={showFileListOnMobile && activeTab === 'files'}>
+      <div class="editor-area" class:hide-on-mobile={(showFileListOnMobile && activeTab === 'files') || (showLeftPanelOnMobile && activeTab !== 'files')}>
         {#if activeTab === 'files' && readmeContent && !currentFile}
           <div class="readme-section">
             <div class="readme-header">
@@ -4376,13 +4410,9 @@
                 <button 
                   onclick={() => showFileListOnMobile = !showFileListOnMobile} 
                   class="mobile-toggle-button"
-                  title={showFileListOnMobile ? 'Show file viewer' : 'Show file list'}
+                  title="Show file list"
                 >
-                  {#if showFileListOnMobile}
-                    <img src="/icons/file-text.svg" alt="Show file viewer" class="icon-inline" />
-                  {:else}
-                    <img src="/icons/package.svg" alt="Show file list" class="icon-inline" />
-                  {/if}
+                  <img src="/icons/arrow-right.svg" alt="Show file list" class="icon-inline mobile-toggle-left" />
                 </button>
               </div>
             </div>
@@ -4425,13 +4455,9 @@
               <button 
                 onclick={() => showFileListOnMobile = !showFileListOnMobile} 
                 class="mobile-toggle-button"
-                title={showFileListOnMobile ? 'Show file viewer' : 'Show file list'}
+                title="Show file list"
               >
-                {#if showFileListOnMobile}
-                  <img src="/icons/file-text.svg" alt="Show file viewer" class="icon-inline" />
-                {:else}
-                  <img src="/icons/package.svg" alt="Show file list" class="icon-inline" />
-                {/if}
+                <img src="/icons/arrow-right.svg" alt="Show file list" class="icon-inline mobile-toggle-left" />
               </button>
             </div>
           </div>
@@ -4459,12 +4485,30 @@
             </div>
           {/if}
         {:else if activeTab === 'files'}
+          <div class="content-header-mobile">
+            <button 
+              onclick={() => showFileListOnMobile = !showFileListOnMobile} 
+              class="mobile-toggle-button"
+              title="Show file list"
+            >
+              <img src="/icons/arrow-right.svg" alt="Show file list" class="icon-inline mobile-toggle-left" />
+            </button>
+          </div>
           <div class="empty-state">
             <p>Select a file from the sidebar to view and edit it</p>
           </div>
         {/if}
 
         {#if activeTab === 'history' && showDiff}
+          <div class="content-header-mobile">
+            <button 
+              onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+              class="mobile-toggle-button"
+              title="Show list"
+            >
+              <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
+            </button>
+          </div>
           <div class="diff-view">
             <div class="diff-header">
               <h3>Diff for commit {selectedCommit?.slice(0, 7)}</h3>
@@ -4484,19 +4528,46 @@
             {/each}
           </div>
         {:else if activeTab === 'history'}
+          <div class="content-header-mobile">
+            <button 
+              onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+              class="mobile-toggle-button"
+              title="Show list"
+            >
+              <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
+            </button>
+          </div>
           <div class="empty-state">
             <p>Select a commit to view its diff</p>
           </div>
         {/if}
 
         {#if activeTab === 'tags'}
+          <div class="content-header-mobile">
+            <button 
+              onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+              class="mobile-toggle-button"
+              title="Show list"
+            >
+              <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
+            </button>
+          </div>
           <div class="empty-state">
             <p>Tags are displayed in the sidebar</p>
           </div>
         {/if}
 
         {#if activeTab === 'issues'}
-          <div class="issues-content">
+          <div class="issues-content" class:hide-on-mobile={showLeftPanelOnMobile && activeTab === 'issues'}>
+            <div class="content-header-mobile">
+              <button 
+                onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+                class="mobile-toggle-button"
+                title="Show list"
+              >
+                <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
+              </button>
+            </div>
             {#if issues.length === 0}
               <div class="empty-state">
                 <p>No issues found. Create one to get started!</p>
@@ -4521,7 +4592,16 @@
         {/if}
 
         {#if activeTab === 'prs'}
-          <div class="prs-content">
+          <div class="prs-content" class:hide-on-mobile={showLeftPanelOnMobile && activeTab === 'prs'}>
+            <div class="content-header-mobile">
+              <button 
+                onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+                class="mobile-toggle-button"
+                title="Show list"
+              >
+                <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
+              </button>
+            </div>
             {#if prs.length === 0}
               <div class="empty-state">
                 <p>No pull requests found. Create one to get started!</p>
@@ -4577,7 +4657,16 @@
         {/if}
 
         {#if activeTab === 'patches'}
-          <div class="patches-content">
+          <div class="patches-content" class:hide-on-mobile={showLeftPanelOnMobile && activeTab === 'patches'}>
+            <div class="content-header-mobile">
+              <button 
+                onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+                class="mobile-toggle-button"
+                title="Show list"
+              >
+                <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
+              </button>
+            </div>
             {#if patches.length === 0}
               <div class="empty-state">
                 <p>No patches found. Create one to get started!</p>
@@ -4605,7 +4694,16 @@
         {/if}
 
         {#if activeTab === 'discussions'}
-          <div class="discussions-content">
+          <div class="discussions-content" class:hide-on-mobile={showLeftPanelOnMobile && activeTab === 'discussions'}>
+            <div class="content-header-mobile">
+              <button 
+                onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+                class="mobile-toggle-button"
+                title="Show list"
+              >
+                <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
+              </button>
+            </div>
             {#if discussions.length === 0}
               <div class="empty-state">
                 <p>No discussions found. {#if userPubkey}Create a new discussion thread to get started!{:else}Log in to create a discussion thread.{/if}</p>
@@ -4843,7 +4941,16 @@
         {/if}
 
         {#if activeTab === 'docs'}
-          <div class="docs-content">
+          <div class="docs-content" class:hide-on-mobile={showLeftPanelOnMobile && activeTab === 'docs'}>
+            <div class="content-header-mobile">
+              <button 
+                onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+                class="mobile-toggle-button"
+                title="Show list"
+              >
+                <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
+              </button>
+            </div>
             {#if loadingDocs}
               <div class="loading">Loading documentation...</div>
             {:else if documentationHtml}
