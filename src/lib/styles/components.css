@@ -415,7 +415,7 @@
 .more-menu {
   position: absolute;
   top: calc(100% + 0.25rem);
-  right: 0;
+  left: 0;
   background: var(--card-bg, #ffffff);
   border: 1px solid var(--border-color, #e0e0e0);
   border-radius: 0.375rem;
@@ -425,30 +425,23 @@
   max-width: min(90vw, 400px);
 }
 
-/* On mobile, ensure menu doesn't overflow screen and expands leftward */
+/* On mobile, ensure menu doesn't overflow screen */
 @media (max-width: 768px) {
   .repo-header-actions .more-menu {
-    right: 0;
-    left: auto;
+    left: 0;
+    right: auto;
     max-width: calc(100vw - 1rem);
     min-width: min(280px, calc(100vw - 1rem));
-    /* Ensure menu aligns to right edge of button but doesn't overflow */
-    transform: translateX(0);
   }
-  
-  /* If menu would overflow, it will be constrained by max-width */
-  /* The menu will naturally expand leftward when constrained */
 }
 
-/* On very small screens, ensure menu expands leftward and doesn't get cut off */
+/* On very small screens, ensure menu doesn't get cut off */
 @media (max-width: 480px) {
   .repo-header-actions .more-menu {
-    right: 0;
-    left: auto;
+    left: 0;
+    right: auto;
     max-width: calc(100vw - 0.5rem);
     min-width: min(260px, calc(100vw - 0.5rem));
-    /* Ensure menu doesn't get cut off on the left */
-    /* Position relative to viewport to prevent cutoff */
   }
 
   /* Ensure menu-button-wrapper allows proper positioning */

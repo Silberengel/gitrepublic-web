@@ -92,34 +92,49 @@
   let showBranchMenu = $state(false);
   let showOwnerMenu = $state(false);
   let moreMenuElement = $state<HTMLDivElement | null>(null);
+  let menuButtonElement = $state<HTMLButtonElement | null>(null);
   
-  // Adjust menu position to prevent overflow on both sides on mobile
+  // Adjust menu position to prevent overflow on the right side
   $effect(() => {
-    if (showMoreMenu && moreMenuElement) {
-      // Use requestAnimationFrame to ensure DOM is updated
+    if (showMoreMenu && moreMenuElement && menuButtonElement) {
+      // Use double requestAnimationFrame to ensure DOM is fully rendered
       requestAnimationFrame(() => {
-        if (!moreMenuElement) return;
-        const rect = moreMenuElement.getBoundingClientRect();
-        const viewportWidth = window.innerWidth;
-        const padding = 10; // Padding from viewport edges
-        
-        let transformX = 0;
-        
-        // Check if menu overflows on the right
-        if (rect.right > viewportWidth - padding) {
-          const overflow = rect.right - (viewportWidth - padding);
-          transformX = -overflow;
-        }
-        
-        // Check if menu overflows on the left (after right adjustment)
-        const adjustedLeft = rect.left + transformX;
-        if (adjustedLeft < padding) {
-          // Menu would be cut off on the left, shift it right
-          transformX = padding - rect.left;
-        }
-        
-        moreMenuElement.style.transform = `translateX(${transformX}px)`;
+        requestAnimationFrame(() => {
+          if (!moreMenuElement || !menuButtonElement) return;
+          
+          const menuRect = moreMenuElement.getBoundingClientRect();
+          const buttonRect = menuButtonElement.getBoundingClientRect();
+          const viewportWidth = window.innerWidth;
+          const padding = 16; // Padding from viewport edges
+          
+          // Menu is positioned with left: 0, so its left edge aligns with button's left edge
+          // Calculate where the menu's right edge currently is
+          const menuWidth = menuRect.width || 280; // Fallback to min-width
+          const currentLeft = buttonRect.left;
+          const currentRight = currentLeft + menuWidth;
+          
+          let transformX = 0;
+          
+          // Check if menu overflows on the right
+          if (currentRight > viewportWidth - padding) {
+            // Menu would overflow on the right, shift it left
+            const rightOverflow = currentRight - (viewportWidth - padding);
+            transformX = -rightOverflow;
+            
+            // Re-check left after adjustment - ensure we don't go off left
+            const finalLeft = currentLeft + transformX;
+            if (finalLeft < padding) {
+              // If we'd go off left, position it at the left edge with padding
+              transformX = padding - currentLeft;
+            }
+          }
+          
+          moreMenuElement.style.transform = `translateX(${transformX}px)`;
+        });
       });
+    } else if (moreMenuElement) {
+      // Reset transform when menu closes
+      moreMenuElement.style.transform = '';
     }
   });
 </script>
@@ -149,6 +164,7 @@
         <div class="menu-button-wrapper">
           <button 
             class="menu-button" 
+            bind:this={menuButtonElement}
             onclick={() => {
               onMenuToggle?.();
               showMoreMenu = !showMoreMenu;
