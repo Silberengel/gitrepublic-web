@@ -381,7 +381,7 @@
   }
   
   async function deleteLocalRepo(npub: string, repo: string) {
-    if (!confirm(`Are you sure you want to delete the local clone of ${repo}? This will remove the repository from this server but will not delete the announcement on Nostr.`)) {
+    if (!confirm(`⚠️ Are you sure you want to delete the local clone of "${repo}"?\n\nThis will permanently remove the repository from this server. The announcement on Nostr will NOT be deleted.\n\nThis action cannot be undone.\n\nClick OK to delete, or Cancel to abort.`)) {
       return;
     }
     

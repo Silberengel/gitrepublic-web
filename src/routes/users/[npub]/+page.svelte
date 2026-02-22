@@ -3583,7 +3583,22 @@ i   *
   .activity-icon {
     width: 1.25rem;
     height: 1.25rem;
-    filter: var(--icon-filter, none);
+    /* Theme-aware icon colors - same as settings button */
+    filter: brightness(0) saturate(100%) invert(1) !important; /* Default white for dark themes */
+    opacity: 1 !important;
+  }
+
+  /* Light theme: icons should be dark (black) */
+  :global([data-theme="light"]) .activity-icon {
+    filter: brightness(0) saturate(100%) !important; /* Black in light theme */
+    opacity: 1 !important;
+  }
+
+  /* Dark themes: icons should be light (white/light gray) */
+  :global([data-theme="dark"]) .activity-icon,
+  :global([data-theme="black"]) .activity-icon {
+    filter: brightness(0) saturate(100%) invert(1) !important; /* White in dark themes */
+    opacity: 1 !important;
   }
 
   /* Empty State */

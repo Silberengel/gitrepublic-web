@@ -217,6 +217,52 @@ a:hover {
   .container-narrow,
   .container-wide {
     padding: 1rem;
+    min-height: auto;
+    overflow: visible;
+  }
+
+  /* Ensure forms are fully visible on mobile */
+  .container main,
+  .container-narrow main,
+  .container-wide main {
+    min-height: auto;
+    overflow: visible;
+  }
+
+  /* Ensure body/html allow scrolling on mobile */
+  /* Remove height constraints to allow full content scrolling */
+  html {
+    height: auto;
+    min-height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  body {
+    height: auto;
+    min-height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    /* Ensure body can grow beyond viewport for proper scrolling */
+    position: relative;
+  }
+
+  /* Ensure container and main elements don't constrain height on mobile */
+  .container,
+  .container-narrow,
+  .container-wide {
+    min-height: auto;
+    height: auto;
+    padding-bottom: 2rem; /* Add bottom padding so content isn't cut off */
+  }
+
+  .container main,
+  .container-narrow main,
+  .container-wide main {
+    min-height: auto;
+    height: auto;
+    overflow: visible;
+    padding-bottom: 1rem; /* Add bottom padding */
   }
 
   /* Repo cards - make more responsive on mobile */

@@ -543,6 +543,17 @@
     flex-wrap: wrap;
   }
 
+  @media (max-width: 768px) {
+    .theme-options {
+      flex-direction: column;
+    }
+
+    .theme-option {
+      width: 100%;
+      min-width: auto;
+    }
+  }
+
   .theme-option {
     flex: 1;
     min-width: 120px;

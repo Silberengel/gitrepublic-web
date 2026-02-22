@@ -68,6 +68,13 @@
   cursor: pointer;
   display: flex;
   align-items: center;
+  transition: background 0.2s ease, opacity 0.2s ease;
+  border-radius: 0.25rem;
+}
+
+.bookmark-button:hover {
+  background: var(--bg-secondary, #f5f5f5);
+  opacity: 0.8;
 }
 
 .bookmark-button.bookmarked img {
@@ -250,7 +257,7 @@
 }
 
 .owner-menu-item:hover {
-  background: var(--bg-secondary, #f5f5f5);
+  background: var(--bg-tertiary, #e0e0e0);
 }
 
 .owner-menu-item :global(.user-badge) {
@@ -379,7 +386,7 @@
 
 .clone-url-item:hover,
 .branch-item:hover {
-  background: var(--bg-secondary, #f5f5f5);
+  background: var(--bg-tertiary, #e0e0e0);
 }
 
 .delete-branch-button {
@@ -424,7 +431,7 @@
     right: 0;
     left: auto;
     max-width: calc(100vw - 1rem);
-    min-width: 280px;
+    min-width: min(280px, calc(100vw - 1rem));
     /* Ensure menu aligns to right edge of button but doesn't overflow */
     transform: translateX(0);
   }
@@ -433,14 +440,20 @@
   /* The menu will naturally expand leftward when constrained */
 }
 
-/* On very small screens, ensure menu expands leftward */
+/* On very small screens, ensure menu expands leftward and doesn't get cut off */
 @media (max-width: 480px) {
   .repo-header-actions .more-menu {
     right: 0;
     left: auto;
     max-width: calc(100vw - 0.5rem);
-    min-width: 260px;
-    /* Menu will expand leftward when width is constrained */
+    min-width: min(260px, calc(100vw - 0.5rem));
+    /* Ensure menu doesn't get cut off on the left */
+    /* Position relative to viewport to prevent cutoff */
+  }
+
+  /* Ensure menu-button-wrapper allows proper positioning */
+  .repo-header-actions .menu-button-wrapper {
+    position: relative;
   }
 }
 
@@ -455,27 +468,38 @@
   cursor: pointer;
   font-size: 0.875rem;
   color: var(--text-primary, #1a1a1a);
+  transition: background 0.2s ease, color 0.2s ease;
 }
 
 .menu-item:last-child {
   border-bottom: none;
 }
 
-.menu-item:hover:not(:disabled) {
-  background: var(--bg-secondary, #f5f5f5);
+.menu-item:hover:not(:disabled),
+button.menu-item:hover:not(:disabled) {
+  background: var(--bg-tertiary, #e0e0e0) !important;
 }
 
-.menu-item:disabled {
+.menu-item:disabled,
+button.menu-item:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.menu-item-danger {
-  color: var(--error-text, #dc2626);
+.menu-item:disabled:hover,
+button.menu-item:disabled:hover {
+  background: transparent !important;
 }
 
-.menu-item-danger:hover:not(:disabled) {
-  background: var(--error-bg, #fee);
+.menu-item-danger {
+  color: var(--error-text, #dc2626);
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.menu-item-danger:hover:not(:disabled),
+button.menu-item-danger:hover:not(:disabled) {
+  background: var(--error-bg, #fee) !important;
+  color: var(--error-text, #dc2626);
 }
 
 /* Icon button - icon-only button style */
@@ -653,6 +677,11 @@
   font-size: 0.875rem;
   color: var(--text-primary, #1a1a1a);
   font-weight: 500;
+  transition: background 0.2s ease;
+}
+
+.mobile-menu-button:hover {
+  background: var(--bg-secondary, #f5f5f5);
 }
 
 .mobile-menu-button .icon {
@@ -723,7 +752,7 @@
 }
 
 .mobile-tab-item:hover {
-  background: var(--bg-secondary, #f5f5f5);
+  background: var(--bg-tertiary, #e0e0e0);
 }
 
 .mobile-tab-item.active {
@@ -799,6 +828,12 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.tabs-menu .menu-item:hover:not(:disabled),
+.tabs-menu button.menu-item:hover:not(:disabled) {
+  background: var(--bg-tertiary, #e0e0e0) !important;
 }
 
 .tab-icon-inline {

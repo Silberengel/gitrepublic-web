@@ -599,6 +599,28 @@
     width: 100%;
     box-sizing: border-box;
   }
+
+  .editor-header {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .file-path {
+    flex: 1;
+    min-width: 0;
+    word-break: break-all;
+  }
+
+  .editor-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .non-maintainer-notice {
+    width: 100%;
+    order: 1;
+    margin-top: 0.25rem;
+  }
 }
 
 @media (min-width: 769px) {
@@ -770,6 +792,12 @@
   border-radius: 0.25rem;
   cursor: pointer;
   color: var(--text-primary);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.back-button:hover {
+  background: var(--bg-secondary);
+  border-color: var(--accent);
 }
 
 .create-file-button,
@@ -997,6 +1025,12 @@
   border: none;
   cursor: pointer;
   color: inherit;
+  transition: background 0.2s ease;
+}
+
+.patch-item:not(.selected) .patch-item-button:hover,
+.discussion-item:not(.selected) .discussion-item-button:hover {
+  background: var(--bg-tertiary);
 }
 
 .patch-item.selected .patch-item-button,
@@ -1020,6 +1054,12 @@
   background: none;
   border: none;
   cursor: pointer;
+  transition: background 0.2s ease;
+  border-radius: 0.25rem;
+}
+
+.commit-button:hover {
+  background: var(--bg-tertiary);
 }
 
 .commit-hash {
@@ -1096,6 +1136,12 @@
   border-radius: 0.25rem;
   cursor: pointer;
   color: var(--text-primary);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.refresh-button:hover {
+  background: var(--bg-secondary);
+  border-color: var(--accent);
 }
 
 .verification-badge {

@@ -2295,7 +2295,13 @@
       return;
     }
 
-    if (!confirm('Are you sure you want to send a deletion request for this repository announcement? This will request relays to delete the announcement event. This action cannot be undone.')) {
+    // First confirmation
+    if (!confirm('⚠️ WARNING: Are you sure you want to delete this repository announcement?\n\nThis will permanently delete the repository announcement from Nostr relays. This action CANNOT be undone.\n\nClick OK to continue, or Cancel to abort.')) {
+      return;
+    }
+
+    // Second confirmation for critical operation
+    if (!confirm('⚠️ FINAL CONFIRMATION: This will permanently delete the repository announcement.\n\nAre you absolutely certain you want to proceed?\n\nThis action CANNOT be undone.')) {
       return;
     }
 
@@ -3130,7 +3136,7 @@
   }
 
   async function deleteFile(filePath: string) {
-    if (!confirm(`Are you sure you want to delete ${filePath}?`)) {
+    if (!confirm(`⚠️ Are you sure you want to delete "${filePath}"?\n\nThis will permanently delete the file from the repository. This action cannot be undone.\n\nClick OK to delete, or Cancel to abort.`)) {
       return;
     }
 
@@ -3258,7 +3264,7 @@
   }
 
   async function deleteBranch(branchName: string) {
-    if (!confirm(`Are you sure you want to delete the branch "${branchName}"? This action cannot be undone.`)) {
+    if (!confirm(`⚠️ Are you sure you want to delete the branch "${branchName}"?\n\nThis will permanently delete the branch from the repository. This action CANNOT be undone.\n\nClick OK to delete, or Cancel to abort.`)) {
       return;
     }
 

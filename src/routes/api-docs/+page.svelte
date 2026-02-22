@@ -339,6 +339,9 @@ const response = await fetch('https://gitrepublic.com/api/repos/list', {
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: 0.5rem;
+    min-width: 0; /* Allow shrinking */
+    overflow-wrap: break-word;
+    word-wrap: break-word;
   }
 
   .auth-method h3 {
@@ -346,12 +349,17 @@ const response = await fetch('https://gitrepublic.com/api/repos/list', {
     color: var(--text-primary);
     font-size: 1rem;
     font-weight: 600;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
   }
 
   .auth-method p {
     margin: 0.5rem 0;
     color: var(--text-secondary);
     font-size: 0.875rem;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    line-height: 1.5;
   }
 
   .code-example {
@@ -361,6 +369,9 @@ const response = await fetch('https://gitrepublic.com/api/repos/list', {
     padding: 1rem;
     margin: 0.75rem 0;
     overflow-x: auto;
+    overflow-y: hidden;
+    max-width: 100%;
+    box-sizing: border-box;
   }
 
   .code-example code {
@@ -373,12 +384,165 @@ const response = await fetch('https://gitrepublic.com/api/repos/list', {
     line-height: 1.5;
     color: var(--text-primary);
     white-space: pre;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    max-width: 100%;
   }
 
   @media (max-width: 768px) {
+    .api-docs-container {
+      padding: 1rem;
+    }
+
+    .api-docs-header {
+      padding-bottom: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .api-docs-header h1 {
+      font-size: 1.5rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .api-docs-header p {
+      font-size: 0.875rem;
+      line-height: 1.5;
+      margin: 0.5rem 0;
+    }
+
+    .api-docs-header .note {
+      padding: 0.75rem;
+      font-size: 0.875rem;
+      margin-top: 0.75rem;
+    }
+
     .auth-methods {
       grid-template-columns: 1fr;
       gap: 1rem;
+      margin: 1rem 0;
+      width: 100%;
+      max-width: 100%;
+    }
+
+    .auth-method {
+      padding: 0.75rem;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      overflow-wrap: break-word;
+      word-wrap: break-word;
+    }
+
+    .auth-method h3 {
+      font-size: 0.9375rem;
+      margin-bottom: 0.5rem;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      line-height: 1.3;
+    }
+
+    .auth-method p {
+      font-size: 0.8125rem;
+      margin: 0.5rem 0;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      line-height: 1.5;
+    }
+
+    .auth-method code {
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      font-size: 0.75rem;
+    }
+
+    .code-example {
+      padding: 0.75rem;
+      margin: 0.5rem 0;
+      font-size: 0.75rem;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .code-example code {
+      font-size: 0.75rem;
+      white-space: pre-wrap; /* Allow wrapping on mobile */
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      max-width: 100%;
+    }
+
+    /* Swagger UI code sections - make responsive on mobile */
+    :global(.swagger-ui pre),
+    :global(.swagger-ui .highlight-code),
+    :global(.swagger-ui .microlight),
+    :global(.swagger-ui .example),
+    :global(.swagger-ui .example-value),
+    :global(.swagger-ui .example-single),
+    :global(.swagger-ui .curl),
+    :global(.swagger-ui .curl-command) {
+      width: 100% !important;
+      max-width: 100% !important;
+      box-sizing: border-box !important;
+      padding: 0.75rem !important;
+      font-size: 0.75rem !important;
+      overflow-x: auto !important;
+      -webkit-overflow-scrolling: touch !important;
+      word-wrap: break-word !important;
+      overflow-wrap: break-word !important;
+    }
+
+    :global(.swagger-ui pre code),
+    :global(.swagger-ui .microlight code),
+    :global(.swagger-ui .example code),
+    :global(.swagger-ui .highlight-code code) {
+      white-space: pre-wrap !important; /* Allow wrapping on mobile */
+      word-wrap: break-word !important;
+      overflow-wrap: break-word !important;
+      max-width: 100% !important;
+      display: block !important;
+    }
+
+    /* Ensure code containers don't overflow */
+    :global(.swagger-ui .model-example),
+    :global(.swagger-ui .response-col_description),
+    :global(.swagger-ui .opblock-body),
+    :global(.swagger-ui .opblock-section) {
+      width: 100% !important;
+      max-width: 100% !important;
+      box-sizing: border-box !important;
+      overflow-x: auto !important;
+    }
+
+    /* Make tables responsive - horizontal scroll instead of breaking layout */
+    :global(.swagger-ui .responses-table),
+    :global(.swagger-ui table) {
+      width: 100% !important;
+      max-width: 100% !important;
+      display: table !important;
+      overflow-x: auto !important;
+      -webkit-overflow-scrolling: touch !important;
+      table-layout: auto !important;
+    }
+
+    :global(.swagger-ui .responses-table td),
+    :global(.swagger-ui .responses-table th) {
+      box-sizing: border-box !important;
+      word-wrap: break-word !important;
+      overflow-wrap: break-word !important;
+      min-width: 80px !important; /* Prevent columns from being too narrow */
+    }
+
+    /* Wrap table in scrollable container */
+    :global(.swagger-ui .responses-inner),
+    :global(.swagger-ui .responses-wrapper) {
+      width: 100% !important;
+      max-width: 100% !important;
+      overflow-x: auto !important;
+      -webkit-overflow-scrolling: touch !important;
     }
   }
 

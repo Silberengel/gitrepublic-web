@@ -93,7 +93,7 @@
   let showOwnerMenu = $state(false);
   let moreMenuElement = $state<HTMLDivElement | null>(null);
   
-  // Adjust menu position to expand leftward on mobile if needed
+  // Adjust menu position to prevent overflow on both sides on mobile
   $effect(() => {
     if (showMoreMenu && moreMenuElement) {
       // Use requestAnimationFrame to ensure DOM is updated
@@ -101,14 +101,24 @@
         if (!moreMenuElement) return;
         const rect = moreMenuElement.getBoundingClientRect();
         const viewportWidth = window.innerWidth;
+        const padding = 10; // Padding from viewport edges
         
-        // If menu would overflow on the right, position it to expand leftward
-        if (rect.right > viewportWidth - 10) {
-          const overflow = rect.right - (viewportWidth - 10);
-          moreMenuElement.style.transform = `translateX(-${overflow}px)`;
-        } else {
-          moreMenuElement.style.transform = 'translateX(0)';
+        let transformX = 0;
+        
+        // Check if menu overflows on the right
+        if (rect.right > viewportWidth - padding) {
+          const overflow = rect.right - (viewportWidth - padding);
+          transformX = -overflow;
         }
+        
+        // Check if menu overflows on the left (after right adjustment)
+        const adjustedLeft = rect.left + transformX;
+        if (adjustedLeft < padding) {
+          // Menu would be cut off on the left, shift it right
+          transformX = padding - rect.left;
+        }
+        
+        moreMenuElement.style.transform = `translateX(${transformX}px)`;
       });
     }
   });
