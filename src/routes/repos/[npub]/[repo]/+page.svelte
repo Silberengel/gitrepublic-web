@@ -2429,7 +2429,11 @@
           }
           
           // Only update currentBranch if it's not set or if the current branch doesn't exist
-          if (!currentBranch || !branchNames.includes(currentBranch)) {
+          // Also validate that currentBranch doesn't contain invalid characters (like '#')
+          if (!currentBranch || 
+              typeof currentBranch !== 'string' || 
+              currentBranch.includes('#') ||
+              !branchNames.includes(currentBranch)) {
             currentBranch = defaultBranch;
           }
         }
@@ -2455,7 +2459,24 @@
     loading = true;
     error = null;
     try {
-      const url = `/api/repos/${npub}/${repo}/tree?ref=${currentBranch}&path=${encodeURIComponent(path)}`;
+      // Validate and get a valid branch name
+      let branchName: string;
+      if (typeof currentBranch === 'string' && currentBranch.trim() !== '' && !currentBranch.includes('#')) {
+        const branchNames = branches.map((b: any) => typeof b === 'string' ? b : b.name);
+        if (branchNames.includes(currentBranch)) {
+          branchName = currentBranch;
+        } else {
+          branchName = defaultBranch || (branches.length > 0 
+            ? (typeof branches[0] === 'string' ? branches[0] : branches[0].name)
+            : 'master');
+        }
+      } else {
+        branchName = defaultBranch || (branches.length > 0 
+          ? (typeof branches[0] === 'string' ? branches[0] : branches[0].name)
+          : 'master');
+      }
+      
+      const url = `/api/repos/${npub}/${repo}/tree?ref=${encodeURIComponent(branchName)}&path=${encodeURIComponent(path)}`;
       const response = await fetch(url, {
         headers: buildApiHeaders()
       });
@@ -2570,14 +2591,38 @@
     try {
       // Ensure currentBranch is a string (branch name), not an object
       // If currentBranch is not set, use the first available branch or 'master' as fallback
-      const branchName = typeof currentBranch === 'string' 
-        ? currentBranch 
-        : (typeof currentBranch === 'object' && currentBranch !== null && 'name' in currentBranch 
-          ? (currentBranch as { name: string }).name 
-          : (branches.length > 0 
+      let branchName: string;
+      
+      if (typeof currentBranch === 'string' && currentBranch.trim() !== '') {
+        // Validate that currentBranch is actually a valid branch name
+        // Check if it exists in the branches list
+        const branchNames = branches.map((b: any) => typeof b === 'string' ? b : b.name);
+        if (branchNames.includes(currentBranch)) {
+          branchName = currentBranch;
+        } else {
+          // currentBranch is set but not in branches list, use defaultBranch or fallback
+          branchName = defaultBranch || (branches.length > 0 
             ? (typeof branches[0] === 'string' ? branches[0] : branches[0].name)
-            : 'master'));
-      const url = `/api/repos/${npub}/${repo}/file?path=${encodeURIComponent(filePath)}&ref=${branchName}`;
+            : 'master');
+        }
+      } else if (typeof currentBranch === 'object' && currentBranch !== null && 'name' in currentBranch) {
+        branchName = (currentBranch as { name: string }).name;
+      } else {
+        // currentBranch is null, undefined, or invalid - use defaultBranch or fallback
+        branchName = defaultBranch || (branches.length > 0 
+          ? (typeof branches[0] === 'string' ? branches[0] : branches[0].name)
+          : 'master');
+      }
+      
+      // Final validation: ensure branchName is a valid string and doesn't contain invalid characters
+      if (!branchName || typeof branchName !== 'string' || branchName.includes('#') || branchName.trim() === '') {
+        console.warn('[loadFile] Invalid branch name detected, using fallback:', branchName);
+        branchName = defaultBranch || (branches.length > 0 
+          ? (typeof branches[0] === 'string' ? branches[0] : branches[0].name)
+          : 'master');
+      }
+      
+      const url = `/api/repos/${npub}/${repo}/file?path=${encodeURIComponent(filePath)}&ref=${encodeURIComponent(branchName)}`;
       const response = await fetch(url, {
         headers: buildApiHeaders()
       });
@@ -4027,9 +4072,9 @@
               <li class="file-item" class:directory={file.type === 'directory'} class:selected={currentFile === file.path}>
                 <button onclick={() => handleFileClick(file)} class="file-button">
                   {#if file.type === 'directory'}
-                    <img src="/icons/package.svg" alt="Directory" class="icon-inline" />
+                    <img src="/icons/folder.svg" alt="Directory" class="icon-inline folder-icon" />
                   {:else}
-                    <img src="/icons/file-text.svg" alt="File" class="icon-inline" />
+                    <img src="/icons/file-text.svg" alt="File" class="icon-inline file-icon" />
                   {/if}
                   {file.name}
                   {#if file.size !== undefined}

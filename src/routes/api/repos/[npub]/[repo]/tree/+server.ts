@@ -43,7 +43,16 @@ export const GET: RequestHandler = createRepoGetHandler(
             const filteredFiles = path 
               ? apiData.files.filter(f => f.path.startsWith(path))
               : apiData.files.filter(f => !f.path.includes('/') || f.path.split('/').length === 1);
-            return json(filteredFiles);
+            
+            // Normalize type: API returns 'dir' but frontend expects 'directory'
+            const normalizedFiles = filteredFiles.map(f => ({
+              name: f.name,
+              path: f.path,
+              type: (f.type === 'dir' ? 'directory' : 'file') as 'file' | 'directory',
+              size: f.size
+            }));
+            
+            return json(normalizedFiles);
           }
           
           // API fetch failed - repo is not cloned and API fetch didn't work

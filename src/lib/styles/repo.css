@@ -123,6 +123,22 @@
   margin: 0;
 }
 
+.file-item.directory .file-button {
+  font-weight: 500;
+}
+
+.file-item.directory .folder-icon {
+  /* Use accent color filter - blue color that works across themes */
+  filter: brightness(0) saturate(100%) invert(27%) sepia(51%) saturate(2878%) hue-rotate(212deg) brightness(104%) contrast(97%);
+  flex-shrink: 0;
+  opacity: 1;
+}
+
+.file-item .file-icon {
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+
 .file-button {
   width: 100%;
   padding: 0.5rem 1rem;
