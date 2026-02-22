@@ -332,16 +332,19 @@
   // Order: Files, Issues, PRs, Patches, Discussion, History, Tags, Docs
   const tabs = $derived([
     { id: 'files', label: 'Files', icon: '/icons/file-text.svg' },
-    { id: 'issues', label: 'Issues', icon: '/icons/alert-circle.svg', count: issues.length },
-    { id: 'prs', label: 'Pull Requests', icon: '/icons/git-pull-request.svg', count: prs.length },
+    { id: 'issues', label: 'Issues', icon: '/icons/alert-circle.svg' },
+    { id: 'prs', label: 'Pull Requests', icon: '/icons/git-pull-request.svg' },
     { id: 'patches', label: 'Patches', icon: '/icons/clipboard-list.svg' },
     { id: 'discussions', label: 'Discussions', icon: '/icons/message-circle.svg' },
-    { id: 'history', label: 'History', icon: '/icons/git-commit.svg' },
+    { id: 'history', label: 'Commit History', icon: '/icons/git-commit.svg' },
     { id: 'tags', label: 'Tags', icon: '/icons/tag.svg' },
     { id: 'docs', label: 'Docs', icon: '/icons/book.svg' }
   ]);
 
   // Patches
+  let patches = $state<Array<{ id: string; subject: string; content: string; author: string; created_at: number; kind: number }>>([]);
+  let loadingPatches = $state(false);
+  let selectedPatch = $state<string | null>(null);
   let showCreatePatchDialog = $state(false);
   let newPatchContent = $state('');
   let newPatchSubject = $state('');
@@ -350,6 +353,7 @@
   // Documentation
   let documentationContent = $state<string | null>(null);
   let documentationHtml = $state<string | null>(null);
+  let documentationKind = $state<number | null>(null);
   let loadingDocs = $state(false);
 
   // Discussion threads
@@ -367,6 +371,7 @@
   let creatingReply = $state(false);
 
   // Discussions
+  let selectedDiscussion = $state<string | null>(null);
   let discussions = $state<Array<{ 
     type: 'thread' | 'comments'; 
     id: string; 
@@ -726,6 +731,8 @@
 
   // Mobile view toggle for file list/file viewer
   let showFileListOnMobile = $state(true);
+  // Mobile collapse for clone URLs
+  let cloneUrlsExpanded = $state(false);
   
   // Guard to prevent README auto-load loop
   let readmeAutoLoadAttempted = $state(false);
@@ -1570,8 +1577,10 @@
 
   async function loadDocumentation() {
     if (loadingDocs) return;
-    // Only skip if we already have rendered HTML (successful load)
-    if (documentationHtml !== null) return;
+    // Reset documentation when reloading
+    documentationHtml = null;
+    documentationContent = null;
+    documentationKind = null;
     
     loadingDocs = true;
     try {
@@ -1621,7 +1630,7 @@
         // Look for documentation tag in the announcement
         const documentationTag = announcement.tags.find(t => t[0] === 'documentation');
         
-        let docKind: number | null = null;
+        documentationKind = null;
         
         if (documentationTag && documentationTag[1]) {
           // Parse the a-tag format: kind:pubkey:identifier
@@ -1629,14 +1638,14 @@
           const parts = docAddress.split(':');
           
           if (parts.length >= 3) {
-            docKind = parseInt(parts[0]);
+            documentationKind = parseInt(parts[0]);
             const docPubkey = parts[1];
             const docIdentifier = parts.slice(2).join(':'); // In case identifier contains ':'
             
             // Fetch the documentation event
             const docEvents = await client.fetchEvents([
               {
-                kinds: [docKind],
+                kinds: [documentationKind],
                 authors: [docPubkey],
                 '#d': [docIdentifier],
                 limit: 1
@@ -1656,12 +1665,13 @@
         } else {
           // No documentation tag, try to use announcement content as fallback
           documentationContent = announcement.content || null;
+          // Announcement is kind 30617, not a doc kind, so keep documentationKind as null
         }
         
         // Render content based on kind: AsciiDoc for 30041 or 30818, Markdown otherwise
         if (documentationContent) {
           // Check if we should use AsciiDoc parser (kinds 30041 or 30818)
-          const useAsciiDoc = docKind === 30041 || docKind === 30818;
+          const useAsciiDoc = documentationKind === 30041 || documentationKind === 30818;
           
           if (useAsciiDoc) {
             // Use AsciiDoc parser
@@ -3020,8 +3030,10 @@
     
     // Reload documentation if docs tab is active (might be branch-specific)
     if (activeTab === 'docs') {
-      // Reset documentation HTML to force reload
+      // Reset documentation to force reload
       documentationHtml = null;
+      documentationContent = null;
+      documentationKind = null;
       reloadPromises.push(loadDocumentation().catch(err => console.warn('Failed to reload documentation after branch change:', err)));
     }
     
@@ -3663,11 +3675,40 @@
       newPatchContent = '';
       newPatchSubject = '';
       alert('Patch created successfully!');
+      // Reload patches
+      await loadPatches();
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to create patch';
       console.error('Error creating patch:', err);
     } finally {
       creatingPatch = false;
+    }
+  }
+
+  async function loadPatches() {
+    if (repoNotFound) return;
+    loadingPatches = true;
+    error = null;
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/patches`, {
+        headers: buildApiHeaders()
+      });
+      if (response.ok) {
+        const data = await response.json();
+        patches = data.map((patch: { id: string; tags: string[][]; content: string; pubkey: string; created_at: number; kind?: number }) => ({
+          id: patch.id,
+          subject: patch.tags.find((t: string[]) => t[0] === 'subject')?.[1] || 'Untitled',
+          content: patch.content,
+          author: patch.pubkey,
+          created_at: patch.created_at,
+          kind: patch.kind || KIND.PATCH
+        }));
+      }
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to load patches';
+      console.error('Error loading patches:', err);
+    } finally {
+      loadingPatches = false;
     }
   }
 
@@ -3702,7 +3743,7 @@
       } else if (activeTab === 'discussions') {
         loadDiscussions();
       } else if (activeTab === 'patches') {
-        // Patches tab - patches are loaded on demand when creating/viewing
+        loadPatches();
       }
     }
   });
@@ -3733,6 +3774,8 @@
       // Reload documentation if docs tab is active (reset to force reload)
       if (activeTab === 'docs') {
         documentationHtml = null;
+        documentationContent = null;
+        documentationKind = null;
         loadDocumentation().catch(err => console.warn('Failed to reload documentation after branch change:', err));
       }
     }
@@ -3790,6 +3833,7 @@
       cloneUrls={pageData.repoCloneUrls || []}
       branches={branches}
       currentBranch={currentBranch}
+      topics={pageData.repoTopics || []}
       defaultBranch={defaultBranch}
       isRepoCloned={isRepoCloned}
       copyingCloneUrl={copyingCloneUrl}
@@ -3849,20 +3893,23 @@
           {pageData.repoLanguage}
         </span>
       {/if}
-      {#if pageData.repoTopics && pageData.repoTopics.length > 0}
-        <div class="repo-topics">
-          {#each pageData.repoTopics as topic}
-            <span class="topic-tag">{topic}</span>
-          {/each}
-        </div>
-      {/if}
       {#if forkInfo?.isFork && forkInfo.originalRepo}
         <span class="fork-badge">Forked from <a href={`/repos/${forkInfo.originalRepo.npub}/${forkInfo.originalRepo.repo}`}>{forkInfo.originalRepo.repo}</a></span>
       {/if}
       {#if pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0}
         <div class="repo-clone-urls">
-          <span class="clone-label">Clone URLs:</span>
-          {#each pageData.repoCloneUrls.slice(0, 3) as cloneUrl}
+          <button 
+            class="clone-label-button"
+            onclick={() => cloneUrlsExpanded = !cloneUrlsExpanded}
+            aria-expanded={cloneUrlsExpanded}
+          >
+            <span class="clone-label">Clone URLs:</span>
+            <svg class="clone-toggle-icon" class:expanded={cloneUrlsExpanded} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 9l6 6 6-6"/>
+            </svg>
+          </button>
+          <div class="clone-url-list" class:collapsed={!cloneUrlsExpanded}>
+            {#each pageData.repoCloneUrls.slice(0, 3) as cloneUrl}
             {@const cloneVerification = verificationStatus?.cloneVerifications?.find(cv => {
               const normalizeUrl = (url: string) => url.replace(/\/$/, '').toLowerCase().replace(/^https?:\/\//, '');
               const normalizedCv = normalizeUrl(cv.url);
@@ -3900,10 +3947,11 @@
                 </span>
               {/if}
             </div>
-          {/each}
-          {#if pageData.repoCloneUrls.length > 3}
-            <span class="clone-more">+{pageData.repoCloneUrls.length - 3} more</span>
-          {/if}
+            {/each}
+            {#if pageData.repoCloneUrls.length > 3}
+              <span class="clone-more">+{pageData.repoCloneUrls.length - 3} more</span>
+            {/if}
+          </div>
         </div>
       {/if}
     </div>
@@ -3950,7 +3998,9 @@
                 class="create-file-button"
                 disabled={needsClone}
                 title={needsClone ? cloneTooltip : 'Create a new file'}
-              >+ New File</button>
+              >
+                <img src="/icons/plus.svg" alt="New File" class="icon" />
+              </button>
             {/if}
             <button 
               onclick={() => showFileListOnMobile = !showFileListOnMobile} 
@@ -4011,11 +4061,7 @@
             {tabs} 
             onTabChange={(tab) => activeTab = tab as typeof activeTab}
           />
-          <h2>Commit History</h2>
-          <button onclick={loadCommitHistory} class="refresh-button">
-            <img src="/icons/refresh-cw.svg" alt="" class="icon-inline" />
-            Refresh
-          </button>
+          <h2>Commits</h2>
         </div>
         {#if loadingCommits}
           <div class="loading">Loading commits...</div>
@@ -4062,7 +4108,9 @@
               class="create-tag-button"
               disabled={needsClone}
               title={needsClone ? cloneTooltip : 'Create a new tag'}
-            >+ New Tag</button>
+            >
+              <img src="/icons/plus.svg" alt="New Tag" class="icon" />
+            </button>
           {/if}
         </div>
         {#if tags.length === 0}
@@ -4100,7 +4148,9 @@
             <button onclick={() => {
               if (!userPubkey) return;
               showCreateIssueDialog = true;
-            }} class="create-issue-button">+ New Issue</button>
+            }} class="create-issue-button" title="Create a new issue">
+              <img src="/icons/plus.svg" alt="New Issue" class="icon" />
+            </button>
           {/if}
         </div>
         {#if loadingIssues}
@@ -4159,7 +4209,9 @@
             <button onclick={() => {
               if (!userPubkey) return;
               showCreatePRDialog = true;
-            }} class="create-pr-button">+ New PR</button>
+            }} class="create-pr-button" title="Create a new pull request">
+              <img src="/icons/plus.svg" alt="New PR" class="icon" />
+            </button>
           {/if}
         </div>
         {#if loadingPRs}
@@ -4188,6 +4240,127 @@
             {/each}
           </ul>
         {/if}
+      </aside>
+      {/if}
+
+      <!-- Patches View -->
+      {#if activeTab === 'patches'}
+      <aside class="patches-sidebar">
+        <div class="patches-header">
+          <TabsMenu 
+            activeTab={activeTab} 
+            {tabs} 
+            onTabChange={(tab) => activeTab = tab as typeof activeTab}
+          />
+          <h2>Patches</h2>
+          {#if userPubkey}
+            <button 
+              onclick={() => showCreatePatchDialog = true}
+              class="create-patch-button"
+              title="Create a new patch"
+            >
+              <img src="/icons/plus.svg" alt="New Patch" class="icon" />
+            </button>
+          {/if}
+        </div>
+        {#if loadingPatches}
+          <div class="loading">Loading patches...</div>
+        {:else if patches.length === 0}
+          <div class="empty">No patches found</div>
+        {:else}
+          <ul class="patch-list">
+            {#each patches as patch}
+              <li class="patch-item" class:selected={selectedPatch === patch.id}>
+                <button 
+                  onclick={() => selectedPatch = patch.id}
+                  class="patch-item-button"
+                >
+                  <div class="patch-header">
+                    <span class="patch-subject">{patch.subject}</span>
+                  </div>
+                  <div class="patch-meta">
+                    <span>#{patch.id.slice(0, 7)}</span>
+                    <span>{new Date(patch.created_at * 1000).toLocaleDateString()}</span>
+                    <EventCopyButton eventId={patch.id} kind={patch.kind} pubkey={patch.author} />
+                  </div>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </aside>
+      {/if}
+
+      <!-- Discussions View -->
+      {#if activeTab === 'discussions'}
+      <aside class="discussions-sidebar">
+        <div class="discussions-header">
+          <TabsMenu 
+            activeTab={activeTab} 
+            {tabs} 
+            onTabChange={(tab) => activeTab = tab as typeof activeTab}
+          />
+          <h2>Discussions</h2>
+          {#if userPubkey}
+            <button 
+              onclick={() => showCreateThreadDialog = true}
+              class="create-discussion-button"
+              disabled={creatingThread}
+              title={creatingThread ? 'Creating...' : 'New Discussion Thread'}
+            >
+              <img src="/icons/plus.svg" alt="New Discussion" class="icon" />
+            </button>
+          {/if}
+        </div>
+        {#if loadingDiscussions}
+          <div class="loading">Loading discussions...</div>
+        {:else if discussions.length === 0}
+          <div class="empty">No discussions found</div>
+        {:else}
+          <ul class="discussion-list">
+            {#each discussions as discussion}
+              {@const hasComments = discussion.comments && discussion.comments.length > 0}
+              {@const totalReplies = hasComments ? countAllReplies(discussion.comments) : 0}
+              <li class="discussion-item" class:selected={selectedDiscussion === discussion.id}>
+                <button 
+                  onclick={() => selectedDiscussion = discussion.id}
+                  class="discussion-item-button"
+                >
+                  <div class="discussion-header">
+                    <span class="discussion-title">{discussion.title}</span>
+                  </div>
+                  <div class="discussion-meta">
+                    {#if discussion.type === 'thread'}
+                      <span class="discussion-type">Thread</span>
+                      {#if hasComments}
+                        <span class="comment-count">{totalReplies} {totalReplies === 1 ? 'reply' : 'replies'}</span>
+                      {/if}
+                    {:else}
+                      <span class="discussion-type">Comments</span>
+                    {/if}
+                    <span>{new Date(discussion.createdAt * 1000).toLocaleDateString()}</span>
+                    <EventCopyButton eventId={discussion.id} kind={discussion.kind} pubkey={discussion.pubkey} />
+                  </div>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </aside>
+      {/if}
+
+      <!-- Docs View -->
+      {#if activeTab === 'docs'}
+      <aside class="docs-sidebar">
+        <div class="docs-header">
+          <TabsMenu 
+            activeTab={activeTab} 
+            {tabs} 
+            onTabChange={(tab) => activeTab = tab as typeof activeTab}
+          />
+          <h2>Docs</h2>
+        </div>
+        <div class="empty">Documentation</div>
       </aside>
       {/if}
 
@@ -4403,29 +4576,29 @@
           </div>
         {/if}
 
-        {#if activeTab === 'docs'}
-          <div class="docs-content">
-            <div class="docs-header">
-              <TabsMenu 
-                activeTab={activeTab} 
-                {tabs} 
-                onTabChange={(tab) => activeTab = tab as typeof activeTab}
-              />
-              <h2>Docs</h2>
-            </div>
-            {#if loadingDocs}
-              <div class="loading">Loading documentation...</div>
-            {:else if documentationHtml}
-              <div class="documentation-body">
-                {@html documentationHtml}
-              </div>
-            {:else if documentationContent === null}
+        {#if activeTab === 'patches'}
+          <div class="patches-content">
+            {#if patches.length === 0}
               <div class="empty-state">
-                <p>No documentation found for this repository.</p>
+                <p>No patches found. Create one to get started!</p>
               </div>
+            {:else if selectedPatch}
+              {#each patches.filter(p => p.id === selectedPatch) as patch}
+                <div class="patch-detail">
+                  <h3>{patch.subject}</h3>
+                  <div class="patch-meta-detail">
+                    <span>#{patch.id.slice(0, 7)}</span>
+                    <span>Created {new Date(patch.created_at * 1000).toLocaleString()}</span>
+                    <EventCopyButton eventId={patch.id} kind={patch.kind} pubkey={patch.author} />
+                  </div>
+                  <div class="patch-body">
+                    <pre class="patch-content">{patch.content}</pre>
+                  </div>
+                </div>
+              {/each}
             {:else}
               <div class="empty-state">
-                <p>Documentation content is empty.</p>
+                <p>Select a patch from the sidebar to view it</p>
               </div>
             {/if}
           </div>
@@ -4433,62 +4606,18 @@
 
         {#if activeTab === 'discussions'}
           <div class="discussions-content">
-            <div class="discussions-header">
-              <TabsMenu 
-                activeTab={activeTab} 
-                {tabs} 
-                onTabChange={(tab) => activeTab = tab as typeof activeTab}
-              />
-              <h2>Discussions</h2>
-              <div class="discussions-actions">
-                <button 
-                  class="btn btn-secondary icon-button"
-                  onclick={() => loadDiscussions()}
-                  disabled={loadingDiscussions}
-                  title={loadingDiscussions ? 'Refreshing...' : 'Refresh discussions'}
-                  aria-label={loadingDiscussions ? 'Refreshing...' : 'Refresh discussions'}
-                >
-                  <img src="/icons/refresh-cw.svg" alt="" class="icon" />
-                </button>
-                {#if userPubkey}
-                  <button 
-                    class="btn btn-primary icon-button"
-                    onclick={() => showCreateThreadDialog = true}
-                    disabled={creatingThread}
-                    title={creatingThread ? 'Creating...' : 'New Discussion Thread'}
-                    aria-label={creatingThread ? 'Creating...' : 'New Discussion Thread'}
-                  >
-                    <img src="/icons/message-circle.svg" alt="" class="icon" />
-                  </button>
-                {/if}
-              </div>
-            </div>
-            {#if loadingDiscussions}
-              <div class="loading">Loading discussions...</div>
-            {:else if discussions.length === 0}
+            {#if discussions.length === 0}
               <div class="empty-state">
                 <p>No discussions found. {#if userPubkey}Create a new discussion thread to get started!{:else}Log in to create a discussion thread.{/if}</p>
               </div>
-            {:else}
-              {#each discussions as discussion}
+            {:else if selectedDiscussion}
+              {#each discussions.filter(d => d.id === selectedDiscussion) as discussion}
                 {@const isExpanded = discussion.type === 'thread' && expandedThreads.has(discussion.id)}
                 {@const hasComments = discussion.comments && discussion.comments.length > 0}
-                <div class="discussion-item">
-                  <div class="discussion-header">
-                    <div class="discussion-title-row">
-                      {#if discussion.type === 'thread'}
-                        <button 
-                          class="expand-button"
-                          onclick={() => toggleThread(discussion.id)}
-                          aria-expanded={isExpanded}
-                          aria-label={isExpanded ? 'Collapse thread' : 'Expand thread'}
-                        >
-                          {isExpanded ? '▼' : '▶'}
-                        </button>
-                      {/if}
-                      <h3>{discussion.title}</h3>
-                    </div>
-                    <div class="discussion-meta">
+                <div class="discussion-detail">
+                  <div class="discussion-header-detail">
+                    <h3>{discussion.title}</h3>
+                    <div class="discussion-meta-detail">
                       {#if discussion.type === 'thread'}
                         <span class="discussion-type">Thread</span>
                         {#if hasComments}
@@ -4502,14 +4631,15 @@
                       <EventCopyButton eventId={discussion.id} kind={discussion.kind} pubkey={discussion.pubkey} />
                       {#if discussion.type === 'thread' && userPubkey}
                         <button 
-                          class="btn btn-small"
+                          class="create-reply-button"
                           onclick={() => {
                             replyingToThread = { id: discussion.id, kind: discussion.kind, pubkey: discussion.pubkey, author: discussion.author };
                             replyingToComment = null;
                             showReplyDialog = true;
                           }}
+                          title="Reply to thread"
                         >
-                          Reply
+                          <img src="/icons/plus.svg" alt="Reply" class="icon" />
                         </button>
                       {/if}
                     </div>
@@ -4519,7 +4649,7 @@
                       <p>{discussion.content}</p>
                     </div>
                   {/if}
-                  {#if discussion.type === 'thread' && isExpanded && hasComments}
+                  {#if discussion.type === 'thread' && hasComments}
                     {@const totalReplies = countAllReplies(discussion.comments)}
                     <div class="comments-section">
                       <h4>Replies ({totalReplies})</h4>
@@ -4531,14 +4661,15 @@
                             <EventCopyButton eventId={comment.id} kind={comment.kind} pubkey={comment.pubkey} />
                             {#if userPubkey}
                               <button 
-                                class="btn btn-small"
+                                class="create-reply-button"
                                 onclick={() => {
                                   replyingToThread = { id: discussion.id, kind: discussion.kind, pubkey: discussion.pubkey, author: discussion.author };
                                   replyingToComment = { id: comment.id, kind: comment.kind, pubkey: comment.pubkey, author: comment.author };
                                   showReplyDialog = true;
                                 }}
+                                title="Reply to comment"
                               >
-                                Reply
+                                <img src="/icons/plus.svg" alt="Reply" class="icon" />
                               </button>
                             {/if}
                           </div>
@@ -4587,14 +4718,15 @@
                                     <EventCopyButton eventId={reply.id} kind={reply.kind} pubkey={reply.pubkey} />
                                     {#if userPubkey}
                                       <button 
-                                        class="btn btn-small"
+                                        class="create-reply-button"
                                         onclick={() => {
                                           replyingToThread = { id: discussion.id, kind: discussion.kind, pubkey: discussion.pubkey, author: discussion.author };
                                           replyingToComment = { id: reply.id, kind: reply.kind, pubkey: reply.pubkey, author: reply.author };
                                           showReplyDialog = true;
                                         }}
+                                        title="Reply to comment"
                                       >
-                                        Reply
+                                        <img src="/icons/plus.svg" alt="Reply" class="icon" />
                                       </button>
                                     {/if}
                                   </div>
@@ -4611,14 +4743,15 @@
                                             <EventCopyButton eventId={nestedReply.id} kind={nestedReply.kind} pubkey={nestedReply.pubkey} />
                                             {#if userPubkey}
                                               <button 
-                                                class="btn btn-small"
+                                                class="create-reply-button"
                                                 onclick={() => {
                                                   replyingToThread = { id: discussion.id, kind: discussion.kind, pubkey: discussion.pubkey, author: discussion.author };
                                                   replyingToComment = { id: nestedReply.id, kind: nestedReply.kind, pubkey: nestedReply.pubkey, author: nestedReply.author };
                                                   showReplyDialog = true;
                                                 }}
+                                                title="Reply to comment"
                                               >
-                                                Reply
+                                                <img src="/icons/plus.svg" alt="Reply" class="icon" />
                                               </button>
                                             {/if}
                                           </div>
@@ -4648,14 +4781,15 @@
                             <EventCopyButton eventId={comment.id} kind={comment.kind} pubkey={comment.pubkey} />
                             {#if userPubkey}
                               <button 
-                                class="btn btn-small"
+                                class="create-reply-button"
                                 onclick={() => {
                                   replyingToThread = { id: discussion.id, kind: discussion.kind, pubkey: discussion.pubkey, author: discussion.author };
                                   replyingToComment = { id: comment.id, kind: comment.kind, pubkey: comment.pubkey, author: comment.author };
                                   showReplyDialog = true;
                                 }}
+                                title="Reply to comment"
                               >
-                                Reply
+                                <img src="/icons/plus.svg" alt="Reply" class="icon" />
                               </button>
                             {/if}
                           </div>
@@ -4694,68 +4828,36 @@
                               </div>
                             </div>
                           {/if}
-                          {#if comment.replies && comment.replies.length > 0}
-                            <div class="nested-replies">
-                              {#each comment.replies as reply}
-                                <div class="comment-item nested-comment">
-                                  <div class="comment-meta">
-                                    <UserBadge pubkey={reply.author} />
-                                    <span>{new Date(reply.createdAt * 1000).toLocaleString()}</span>
-                                    <EventCopyButton eventId={reply.id} kind={reply.kind} pubkey={reply.pubkey} />
-                                    {#if userPubkey}
-                                      <button 
-                                        class="btn btn-small"
-                                        onclick={() => {
-                                          replyingToThread = { id: discussion.id, kind: discussion.kind, pubkey: discussion.pubkey, author: discussion.author };
-                                          replyingToComment = { id: reply.id, kind: reply.kind, pubkey: reply.pubkey, author: reply.author };
-                                          showReplyDialog = true;
-                                        }}
-                                      >
-                                        Reply
-                                      </button>
-                                    {/if}
-                                  </div>
-                                  <div class="comment-content">
-                                    <p>{reply.content}</p>
-                                  </div>
-                                  {#if reply.replies && reply.replies.length > 0}
-                                    <div class="nested-replies">
-                                      {#each reply.replies as nestedReply}
-                                        <div class="comment-item nested-comment">
-                                          <div class="comment-meta">
-                                            <UserBadge pubkey={nestedReply.author} />
-                                            <span>{new Date(nestedReply.createdAt * 1000).toLocaleString()}</span>
-                                            <EventCopyButton eventId={nestedReply.id} kind={nestedReply.kind} pubkey={nestedReply.pubkey} />
-                                            {#if userPubkey}
-                                              <button 
-                                                class="btn btn-small"
-                                                onclick={() => {
-                                                  replyingToThread = { id: discussion.id, kind: discussion.kind, pubkey: discussion.pubkey, author: discussion.author };
-                                                  replyingToComment = { id: nestedReply.id, kind: nestedReply.kind, pubkey: nestedReply.pubkey, author: nestedReply.author };
-                                                  showReplyDialog = true;
-                                                }}
-                                              >
-                                                Reply
-                                              </button>
-                                            {/if}
-                                          </div>
-                                          <div class="comment-content">
-                                            <p>{nestedReply.content}</p>
-                                          </div>
-                                        </div>
-                                      {/each}
-                                    </div>
-                                  {/if}
-                                </div>
-                              {/each}
-                            </div>
-                          {/if}
                         </div>
                       {/each}
                     </div>
                   {/if}
                 </div>
               {/each}
+            {:else}
+              <div class="empty-state">
+                <p>Select a discussion from the sidebar to view it</p>
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+        {#if activeTab === 'docs'}
+          <div class="docs-content">
+            {#if loadingDocs}
+              <div class="loading">Loading documentation...</div>
+            {:else if documentationHtml}
+              <div class="documentation-body">
+                {@html documentationHtml}
+              </div>
+            {:else if documentationContent === null}
+              <div class="empty-state">
+                <p>No documentation found for this repository.</p>
+              </div>
+            {:else}
+              <div class="empty-state">
+                <p>Documentation content is empty.</p>
+              </div>
             {/if}
           </div>
         {/if}

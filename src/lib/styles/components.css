@@ -764,6 +764,9 @@
   max-width: min(calc(100vw - 1rem), 320px);
   width: auto;
   position: absolute;
+  max-height: calc(100vh - 8rem);
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 @media (max-width: 768px) {

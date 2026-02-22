@@ -42,6 +42,7 @@
     needsClone?: boolean;
     allMaintainers?: Array<{ pubkey: string; isOwner: boolean }>;
     onCopyEventId?: () => void;
+    topics?: string[];
   }
 
   let { 
@@ -82,7 +83,8 @@
     hasUnlimitedAccess = false,
     needsClone = false,
     allMaintainers = [],
-    onCopyEventId
+    onCopyEventId,
+    topics = []
   }: Props = $props();
 
   let showCloneMenu = $state(false);
@@ -209,6 +211,14 @@
   
   {#if repoDescription}
     <p class="repo-description">{repoDescription}</p>
+  {/if}
+
+  {#if topics && topics.length > 0}
+    <div class="repo-topics">
+      {#each topics as topic}
+        <span class="topic-tag">{topic}</span>
+      {/each}
+    </div>
   {/if}
 
   <div class="repo-meta">
