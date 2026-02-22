@@ -473,6 +473,7 @@ export class FileManager {
     const cacheKey = RepoCache.fileListKey(npub, repoName, ref, path);
     const cached = repoCache.get<FileEntry[]>(cacheKey);
     if (cached !== null) {
+      logger.debug({ npub, repoName, path, ref, cachedCount: cached.length }, '[FileManager] Returning cached file list');
       return cached;
     }
 
@@ -480,33 +481,144 @@ export class FileManager {
     
     try {
       // Get the tree for the specified path
-      const tree = await git.raw(['ls-tree', '-l', ref, path || '.']);
+      // For directories, git ls-tree needs a trailing slash to list contents
+      // For root, use '.' 
+      // Note: git ls-tree returns paths relative to repo root, not relative to the specified path
+      const gitPath = path ? (path.endsWith('/') ? path : `${path}/`) : '.';
+      logger.debug({ npub, repoName, path, ref, gitPath }, '[FileManager] Calling git ls-tree');
+      const tree = await git.raw(['ls-tree', '-l', ref, gitPath]);
       
-      if (!tree) {
+      if (!tree || !tree.trim()) {
         const emptyResult: FileEntry[] = [];
         // Cache empty result for shorter time (30 seconds)
         repoCache.set(cacheKey, emptyResult, 30 * 1000);
+        logger.debug({ npub, repoName, path, ref, gitPath }, '[FileManager] git ls-tree returned empty result');
         return emptyResult;
       }
+      
+      logger.debug({ npub, repoName, path, ref, gitPath, treeLength: tree.length, firstLines: tree.split('\n').slice(0, 5) }, '[FileManager] git ls-tree output');
 
       const entries: FileEntry[] = [];
       const lines = tree.trim().split('\n').filter(line => line.length > 0);
 
+      // Normalize the path for comparison (ensure it ends with / for directory matching)
+      const normalizedPath = path ? (path.endsWith('/') ? path : `${path}/`) : '';
+      
+      logger.debug({ path, normalizedPath, lineCount: lines.length }, '[FileManager] Starting to parse entries');
+
       for (const line of lines) {
         // Format: <mode> <type> <object> <size>\t<file>
-        const match = line.match(/^(\d+)\s+(\w+)\s+(\w+)\s+(\d+|-)\s+(.+)$/);
-        if (match) {
-          const [, , type, , size, name] = match;
-          const fullPath = path ? join(path, name) : name;
-          
-          entries.push({
-            name,
-            path: fullPath,
-            type: type === 'tree' ? 'directory' : 'file',
-            size: size !== '-' ? parseInt(size, 10) : undefined
-          });
+        // Note: git ls-tree uses a tab character between size and filename
+        // The format is: mode type object size<TAB>path
+        // Important: git ls-tree returns paths relative to repo root, not relative to the specified path
+        // We need to handle both spaces and tabs
+        const tabIndex = line.lastIndexOf('\t');
+        if (tabIndex === -1) {
+          // Try space-separated format as fallback
+          const match = line.match(/^(\d+)\s+(\w+)\s+(\w+)\s+(\d+|-)\s+(.+)$/);
+          if (match) {
+            const [, , type, , size, gitPath] = match;
+            // git ls-tree always returns paths relative to repo root
+            // If we're listing a subdirectory, the returned paths will start with that directory
+            let fullPath: string;
+            let displayName: string;
+            
+            if (normalizedPath) {
+              // We're listing a subdirectory
+              if (gitPath.startsWith(normalizedPath)) {
+                // Path already includes the directory prefix (normal case)
+                fullPath = gitPath;
+                // Extract just the filename/dirname (relative to the requested path)
+                const relativePath = gitPath.slice(normalizedPath.length);
+                // Remove any leading/trailing slashes
+                const cleanRelative = relativePath.replace(/^\/+|\/+$/g, '');
+                // For display name, get the first component (the immediate child)
+                // This handles both files (image.png) and nested dirs (screenshots/image.png -> screenshots)
+                displayName = cleanRelative.split('/')[0] || cleanRelative;
+              } else {
+                // Path doesn't start with directory prefix - this shouldn't happen normally
+                // but handle it by joining
+                logger.debug({ path, normalizedPath, gitPath }, '[FileManager] Path does not start with normalized path, joining (space-separated)');
+                fullPath = join(path, gitPath);
+                displayName = gitPath.split('/').pop() || gitPath;
+              }
+            } else {
+              // Root directory listing - paths are relative to root
+              fullPath = gitPath;
+              displayName = gitPath.split('/')[0]; // Get first component
+            }
+            
+            logger.debug({ gitPath, path, normalizedPath, fullPath, displayName, type }, '[FileManager] Parsed entry (space-separated)');
+            
+            entries.push({
+              name: displayName,
+              path: fullPath,
+              type: type === 'tree' ? 'directory' : 'file',
+              size: size !== '-' ? parseInt(size, 10) : undefined
+            });
+          } else {
+            logger.debug({ line, path, ref }, '[FileManager] Line did not match expected format (space-separated)');
+          }
+        } else {
+          // Tab-separated format (standard)
+          const beforeTab = line.substring(0, tabIndex);
+          const gitPath = line.substring(tabIndex + 1);
+          const match = beforeTab.match(/^(\d+)\s+(\w+)\s+(\w+)\s+(\d+|-)$/);
+          if (match) {
+            const [, , type, , size] = match;
+            // git ls-tree always returns paths relative to repo root
+            // If we're listing a subdirectory, the returned paths will start with that directory
+            let fullPath: string;
+            let displayName: string;
+            
+            if (normalizedPath) {
+              // We're listing a subdirectory
+              if (gitPath.startsWith(normalizedPath)) {
+                // Path already includes the directory prefix (normal case)
+                fullPath = gitPath;
+                // Extract just the filename/dirname (relative to the requested path)
+                const relativePath = gitPath.slice(normalizedPath.length);
+                // Remove any leading/trailing slashes
+                const cleanRelative = relativePath.replace(/^\/+|\/+$/g, '');
+                // For display name, get the first component (the immediate child)
+                // This handles both files (image.png) and nested dirs (screenshots/image.png -> screenshots)
+                displayName = cleanRelative.split('/')[0] || cleanRelative;
+              } else {
+                // Path doesn't start with directory prefix - this shouldn't happen normally
+                // but handle it by joining
+                logger.debug({ path, normalizedPath, gitPath }, '[FileManager] Path does not start with normalized path, joining (tab-separated)');
+                fullPath = join(path, gitPath);
+                displayName = gitPath.split('/').pop() || gitPath;
+              }
+            } else {
+              // Root directory listing - paths are relative to root
+              fullPath = gitPath;
+              displayName = gitPath.split('/')[0]; // Get first component
+            }
+            
+            logger.debug({ gitPath, path, normalizedPath, fullPath, displayName, type }, '[FileManager] Parsed entry (tab-separated)');
+            
+            entries.push({
+              name: displayName,
+              path: fullPath,
+              type: type === 'tree' ? 'directory' : 'file',
+              size: size !== '-' ? parseInt(size, 10) : undefined
+            });
+          } else {
+            logger.debug({ line, path, ref, beforeTab }, '[FileManager] Line did not match expected format (tab-separated)');
+          }
         }
       }
+      
+      // Debug logging to help diagnose missing files
+      logger.debug({ 
+        npub, 
+        repoName, 
+        path, 
+        ref, 
+        entryCount: entries.length,
+        entries: entries.map(e => ({ name: e.name, path: e.path, type: e.type }))
+      }, '[FileManager] Parsed file entries');
 
       const sortedEntries = entries.sort((a, b) => {
         // Directories first, then files, both alphabetically

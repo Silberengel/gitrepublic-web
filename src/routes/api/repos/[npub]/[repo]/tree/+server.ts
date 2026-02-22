@@ -40,17 +40,53 @@ export const GET: RequestHandler = createRepoGetHandler(
             // Return API data directly without cloning
             const path = context.path || '';
             // Filter files by path if specified
-            const filteredFiles = path 
-              ? apiData.files.filter(f => f.path.startsWith(path))
-              : apiData.files.filter(f => !f.path.includes('/') || f.path.split('/').length === 1);
+            let filteredFiles: typeof apiData.files;
+            if (path) {
+              // Normalize path: ensure it ends with / for directory matching
+              const normalizedPath = path.endsWith('/') ? path : `${path}/`;
+              // Filter files that are directly in this directory (not in subdirectories)
+              filteredFiles = apiData.files.filter(f => {
+                // File must start with the normalized path
+                if (!f.path.startsWith(normalizedPath)) {
+                  return false;
+                }
+                // Get the relative path after the directory prefix
+                const relativePath = f.path.slice(normalizedPath.length);
+                // If relative path is empty, skip (this would be the directory itself)
+                if (!relativePath) {
+                  return false;
+                }
+                // Remove trailing slash from relative path for directories
+                const cleanRelativePath = relativePath.endsWith('/') ? relativePath.slice(0, -1) : relativePath;
+                // Check if it's directly in this directory (no additional / in the relative path)
+                // This works for both files (e.g., "icon.svg") and directories (e.g., "subfolder")
+                return !cleanRelativePath.includes('/');
+              });
+            } else {
+              // Root directory: show only files and directories in root
+              filteredFiles = apiData.files.filter(f => {
+                // Remove trailing slash for directories
+                const cleanPath = f.path.endsWith('/') ? f.path.slice(0, -1) : f.path;
+                const pathParts = cleanPath.split('/');
+                // Include only items in root (single path segment)
+                return pathParts.length === 1;
+              });
+            }
             
             // Normalize type: API returns 'dir' but frontend expects 'directory'
-            const normalizedFiles = filteredFiles.map(f => ({
-              name: f.name,
-              path: f.path,
-              type: (f.type === 'dir' ? 'directory' : 'file') as 'file' | 'directory',
-              size: f.size
-            }));
+            // Also update name to be just the filename/dirname for display
+            const normalizedFiles = filteredFiles.map(f => {
+              // Extract display name from path
+              const cleanPath = f.path.endsWith('/') ? f.path.slice(0, -1) : f.path;
+              const pathParts = cleanPath.split('/');
+              const displayName = pathParts[pathParts.length - 1] || f.name;
+              return {
+                name: displayName,
+                path: f.path,
+                type: (f.type === 'dir' ? 'directory' : 'file') as 'file' | 'directory',
+                size: f.size
+              };
+            });
             
             return json(normalizedFiles);
           }
@@ -108,6 +144,15 @@ export const GET: RequestHandler = createRepoGetHandler(
     
     try {
       const files = await fileManager.listFiles(context.npub, context.repo, ref, path);
+      // Debug logging to help diagnose missing files
+      logger.debug({ 
+        npub: context.npub, 
+        repo: context.repo, 
+        path, 
+        ref, 
+        fileCount: files.length,
+        files: files.map(f => ({ name: f.name, path: f.path, type: f.type }))
+      }, '[Tree] Returning files from fileManager.listFiles');
       return json(files);
     } catch (err) {
       // Log the actual error for debugging

@@ -223,16 +223,23 @@ async function fetchFromGitHub(owner: string, repo: string): Promise<Partial<Api
         }))
       : [];
 
-    const files: ApiFile[] = treeResponse?.ok
-      ? (await treeResponse.json()).tree
-          ?.filter((item: any) => item.type === 'blob' || item.type === 'tree')
-          .map((item: any) => ({
-            name: item.path.split('/').pop(),
-            path: item.path,
-            type: item.type === 'tree' ? 'dir' : 'file',
-            size: item.size
-          })) || []
-      : [];
+    let files: ApiFile[] = [];
+    if (treeResponse?.ok) {
+      const treeData = await treeResponse.json();
+      // Check if the tree was truncated (GitHub API limitation)
+      if (treeData.truncated) {
+        logger.warn({ owner, repo }, 'GitHub tree response was truncated, some files may be missing');
+        // For truncated trees, we could make additional requests, but for now just log a warning
+      }
+      files = treeData.tree
+        ?.filter((item: any) => item.type === 'blob' || item.type === 'tree')
+        .map((item: any) => ({
+          name: item.path.split('/').pop(),
+          path: item.path,
+          type: item.type === 'tree' ? 'dir' : 'file',
+          size: item.size
+        })) || [];
+    }
 
     // Try to fetch README
     let readme: { path: string; content: string; format: 'markdown' | 'asciidoc' } | undefined;

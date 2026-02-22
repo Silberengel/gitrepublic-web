@@ -711,6 +711,62 @@
   let loadingReadme = $state(false);
   let readmeHtml = $state<string>('');
   let highlightedFileContent = $state<string>('');
+  let fileHtml = $state<string>(''); // Rendered HTML for markdown/asciidoc/HTML files
+  let showFilePreview = $state(true); // Toggle between preview and raw view (default: preview)
+  let copyingFile = $state(false); // Track copy operation
+  let isImageFile = $state(false); // Track if current file is an image
+  let imageUrl = $state<string | null>(null); // URL for image files
+
+  // Rewrite image paths in HTML to point to repository file API
+  function rewriteImagePaths(html: string, filePath: string | null): string {
+    if (!html || !filePath) return html;
+    
+    // Get the directory of the current file
+    const fileDir = filePath.includes('/') 
+      ? filePath.substring(0, filePath.lastIndexOf('/'))
+      : '';
+    
+    // Get current branch for the API URL
+    const branch = currentBranch || defaultBranch || 'main';
+    
+    // Rewrite relative image paths
+    return html.replace(/<img([^>]*)\ssrc=["']([^"']+)["']([^>]*)>/gi, (match, before, src, after) => {
+      // Skip if it's already an absolute URL (http/https/data)
+      if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:') || src.startsWith('/api/')) {
+        return match;
+      }
+      
+      // Resolve relative path
+      let imagePath: string;
+      if (src.startsWith('/')) {
+        // Absolute path from repo root
+        imagePath = src.substring(1);
+      } else if (src.startsWith('./')) {
+        // Relative to current file directory
+        imagePath = fileDir ? `${fileDir}/${src.substring(2)}` : src.substring(2);
+      } else {
+        // Relative to current file directory
+        imagePath = fileDir ? `${fileDir}/${src}` : src;
+      }
+      
+      // Normalize path (remove .. and .)
+      const pathParts = imagePath.split('/').filter(p => p !== '.' && p !== '');
+      const normalizedPath: string[] = [];
+      for (const part of pathParts) {
+        if (part === '..') {
+          normalizedPath.pop();
+        } else {
+          normalizedPath.push(part);
+        }
+      }
+      imagePath = normalizedPath.join('/');
+      
+      // Build API URL
+      const apiUrl = `/api/repos/${npub}/${repo}/raw?path=${encodeURIComponent(imagePath)}&ref=${encodeURIComponent(branch)}`;
+      
+      return `<img${before} src="${apiUrl}"${after}>`;
+    });
+  }
 
   // Fork
   let forkInfo = $state<{ isFork: boolean; originalRepo: { npub: string; repo: string } | null } | null>(null);
@@ -754,43 +810,74 @@
           readmePath = data.path;
           readmeIsMarkdown = data.isMarkdown;
           
-          // Render markdown if needed
-          if (readmeIsMarkdown && readmeContent) {
-            try {
-              const MarkdownIt = (await import('markdown-it')).default;
-              const hljsModule = await import('highlight.js');
-              const hljs = hljsModule.default || hljsModule;
-              
-              const md = new MarkdownIt({
-                html: true, // Enable HTML tags in source
-                linkify: true, // Autoconvert URL-like text to links
-                typographer: true, // Enable some language-neutral replacement + quotes beautification
-                breaks: true, // Convert '\n' in paragraphs into <br>
-                highlight: function (str: string, lang: string): string {
-                  if (lang && hljs.getLanguage(lang)) {
-                    try {
-                      return '<pre class="hljs"><code>' +
-                             hljs.highlight(str, { language: lang }).value +
-                             '</code></pre>';
-                    } catch (err) {
-                      // Fallback to escaped HTML if highlighting fails
-                      // This is expected for unsupported languages
+          // Reset preview mode for README
+          showFilePreview = true;
+          readmeHtml = '';
+          
+          // Render markdown or asciidoc if needed
+          if (readmeContent) {
+            const ext = readmePath?.split('.').pop()?.toLowerCase() || '';
+            if (readmeIsMarkdown || ext === 'md' || ext === 'markdown') {
+              try {
+                const MarkdownIt = (await import('markdown-it')).default;
+                const hljsModule = await import('highlight.js');
+                const hljs = hljsModule.default || hljsModule;
+                
+                const md = new MarkdownIt({
+                  html: true, // Enable HTML tags in source
+                  linkify: true, // Autoconvert URL-like text to links
+                  typographer: true, // Enable some language-neutral replacement + quotes beautification
+                  breaks: true, // Convert '\n' in paragraphs into <br>
+                  highlight: function (str: string, lang: string): string {
+                    if (lang && hljs.getLanguage(lang)) {
+                      try {
+                        return '<pre class="hljs"><code>' +
+                               hljs.highlight(str, { language: lang }).value +
+                               '</code></pre>';
+                      } catch (err) {
+                        // Fallback to escaped HTML if highlighting fails
+                        // This is expected for unsupported languages
+                      }
                     }
+                    return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
                   }
-                  return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
-                }
-              });
-              
-              readmeHtml = md.render(readmeContent);
-              console.log('[README] Markdown rendered successfully, HTML length:', readmeHtml.length);
-            } catch (err) {
-              console.error('[README] Error rendering markdown:', err);
-              // Fallback: show as plain text if rendering fails
+                });
+                
+                let rendered = md.render(readmeContent);
+                // Rewrite image paths to point to repository API
+                rendered = rewriteImagePaths(rendered, readmePath);
+                readmeHtml = rendered;
+                console.log('[README] Markdown rendered successfully, HTML length:', readmeHtml.length);
+              } catch (err) {
+                console.error('[README] Error rendering markdown:', err);
+                readmeHtml = '';
+              }
+            } else if (ext === 'adoc' || ext === 'asciidoc') {
+              try {
+                const Asciidoctor = (await import('@asciidoctor/core')).default;
+                const asciidoctor = Asciidoctor();
+                const converted = asciidoctor.convert(readmeContent, {
+                  safe: 'safe',
+                  attributes: {
+                    'source-highlighter': 'highlight.js'
+                  }
+                });
+                let rendered = typeof converted === 'string' ? converted : String(converted);
+                // Rewrite image paths to point to repository API
+                rendered = rewriteImagePaths(rendered, readmePath);
+                readmeHtml = rendered;
+                readmeIsMarkdown = true; // Treat as markdown for display purposes
+              } catch (err) {
+                console.error('[README] Error rendering asciidoc:', err);
+                readmeHtml = '';
+              }
+            } else if (ext === 'html' || ext === 'htm') {
+              // Rewrite image paths to point to repository API
+              readmeHtml = rewriteImagePaths(readmeContent, readmePath);
+              readmeIsMarkdown = true; // Treat as markdown for display purposes
+            } else {
               readmeHtml = '';
             }
-          } else {
-            // Clear HTML if not markdown
-            readmeHtml = '';
           }
         }
       }
@@ -853,6 +940,179 @@
       'ad': 'asciidoc',
     };
     return langMap[ext.toLowerCase()] || 'plaintext';
+  }
+
+  // Check if file type supports preview mode
+  function supportsPreview(ext: string): boolean {
+    const previewExtensions = ['md', 'markdown', 'adoc', 'asciidoc', 'html', 'htm', 'csv'];
+    return previewExtensions.includes(ext.toLowerCase());
+  }
+
+  // Check if a file is an image based on extension
+  function isImageFileType(ext: string): boolean {
+    const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'apng', 'avif'];
+    return imageExtensions.includes(ext.toLowerCase());
+  }
+
+  // Render markdown, asciidoc, or HTML files as HTML
+  async function renderFileAsHtml(content: string, ext: string) {
+    try {
+      const lowerExt = ext.toLowerCase();
+      
+      if (lowerExt === 'md' || lowerExt === 'markdown') {
+        // Render markdown
+        const MarkdownIt = (await import('markdown-it')).default;
+        const hljsModule = await import('highlight.js');
+        const hljs = hljsModule.default || hljsModule;
+        
+        const md = new MarkdownIt({
+          html: true,
+          linkify: true,
+          typographer: true,
+          breaks: true,
+          highlight: function (str: string, lang: string): string {
+            if (lang && hljs.getLanguage(lang)) {
+              try {
+                return hljs.highlight(str, { language: lang }).value;
+              } catch (__) {}
+            }
+            try {
+              return hljs.highlightAuto(str).value;
+            } catch (__) {}
+            return '';
+          }
+        });
+        
+        let rendered = md.render(content);
+        // Rewrite image paths to point to repository API
+        rendered = rewriteImagePaths(rendered, currentFile);
+        fileHtml = rendered;
+      } else if (lowerExt === 'adoc' || lowerExt === 'asciidoc') {
+        // Render asciidoc
+        const Asciidoctor = (await import('@asciidoctor/core')).default;
+        const asciidoctor = Asciidoctor();
+        const converted = asciidoctor.convert(content, {
+          safe: 'safe',
+          attributes: {
+            'source-highlighter': 'highlight.js'
+          }
+        });
+        let rendered = typeof converted === 'string' ? converted : String(converted);
+        // Rewrite image paths to point to repository API
+        rendered = rewriteImagePaths(rendered, currentFile);
+        fileHtml = rendered;
+      } else if (lowerExt === 'html' || lowerExt === 'htm') {
+        // HTML files - rewrite image paths
+        let rendered = content;
+        rendered = rewriteImagePaths(rendered, currentFile);
+        fileHtml = rendered;
+      } else if (lowerExt === 'csv') {
+        // Parse CSV and render as HTML table
+        fileHtml = renderCsvAsTable(content);
+      }
+    } catch (err) {
+      console.error('Error rendering file as HTML:', err);
+      fileHtml = '';
+    }
+  }
+
+  // Parse CSV content and render as HTML table
+  function renderCsvAsTable(csvContent: string): string {
+    try {
+      // Parse CSV - handle quoted fields and escaped quotes
+      const lines = csvContent.split(/\r?\n/).filter(line => line.trim() !== '');
+      if (lines.length === 0) {
+        return '<div class="csv-empty"><p>Empty CSV file</p></div>';
+      }
+
+      const rows: string[][] = [];
+      
+      for (const line of lines) {
+        const row: string[] = [];
+        let currentField = '';
+        let inQuotes = false;
+        
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          const nextChar = line[i + 1];
+          
+          if (char === '"') {
+            if (inQuotes && nextChar === '"') {
+              // Escaped quote
+              currentField += '"';
+              i++; // Skip next quote
+            } else {
+              // Toggle quote state
+              inQuotes = !inQuotes;
+            }
+          } else if (char === ',' && !inQuotes) {
+            // Field separator
+            row.push(currentField);
+            currentField = '';
+          } else {
+            currentField += char;
+          }
+        }
+        
+        // Add the last field
+        row.push(currentField);
+        rows.push(row);
+      }
+
+      if (rows.length === 0) {
+        return '<div class="csv-empty"><p>No data in CSV file</p></div>';
+      }
+
+      // Find the maximum number of columns to ensure consistent table structure
+      const maxColumns = Math.max(...rows.map(row => row.length));
+
+      // Determine if first row should be treated as header (if it has more than 1 row)
+      const hasHeader = rows.length > 1;
+      const headerRow = hasHeader ? rows[0] : null;
+      const dataRows = hasHeader ? rows.slice(1) : rows;
+
+      // Build HTML table
+      let html = '<div class="csv-table-wrapper"><table class="csv-table">';
+      
+      // Add header row if we have one
+      if (hasHeader && headerRow) {
+        html += '<thead><tr>';
+        for (let i = 0; i < maxColumns; i++) {
+          const cell = headerRow[i] || '';
+          html += `<th>${escapeHtml(cell)}</th>`;
+        }
+        html += '</tr></thead>';
+      }
+      
+      // Add data rows
+      html += '<tbody>';
+      for (const row of dataRows) {
+        html += '<tr>';
+        for (let i = 0; i < maxColumns; i++) {
+          const cell = row[i] || '';
+          html += `<td>${escapeHtml(cell)}</td>`;
+        }
+        html += '</tr>';
+      }
+      html += '</tbody></table></div>';
+
+      return html;
+    } catch (err) {
+      console.error('Error parsing CSV:', err);
+      return `<div class="csv-error"><p>Error parsing CSV: ${escapeHtml(err instanceof Error ? err.message : String(err))}</p></div>`;
+    }
+  }
+
+  // Escape HTML to prevent XSS
+  function escapeHtml(text: string): string {
+    const map: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#039;'
+    };
+    return text.replace(/[&<>"']/g, (m) => map[m]);
   }
 
   async function applySyntaxHighlighting(content: string, ext: string) {
@@ -2622,51 +2882,73 @@
           : 'master');
       }
       
-      const url = `/api/repos/${npub}/${repo}/file?path=${encodeURIComponent(filePath)}&ref=${encodeURIComponent(branchName)}`;
-      const response = await fetch(url, {
-        headers: buildApiHeaders()
-      });
+      // Determine language from file extension first to check if it's an image
+      const ext = filePath.split('.').pop()?.toLowerCase() || '';
       
-      if (!response.ok) {
-        // Handle rate limiting specifically to prevent loops
-        if (response.status === 429) {
-          const error = new Error(`Failed to load file: Too Many Requests`);
-          console.warn('[File Load] Rate limited, please wait before retrying');
-          throw error;
-        }
-        throw new Error(`Failed to load file: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      fileContent = data.content;
-      editedContent = data.content;
-      currentFile = filePath;
-      hasChanges = false;
+      // Check if this is an image file BEFORE making the API call
+      isImageFile = isImageFileType(ext);
       
-      // Reset README auto-load flag when a file is successfully loaded
-      if (filePath && filePath.toLowerCase().includes('readme')) {
-        readmeAutoLoadAttempted = false;
-      }
-
-      // Determine language from file extension
-      const ext = filePath.split('.').pop()?.toLowerCase();
-      if (ext === 'md' || ext === 'markdown') {
-        fileLanguage = 'markdown';
-      } else if (ext === 'adoc' || ext === 'asciidoc') {
-        fileLanguage = 'asciidoc';
-      } else {
+      if (isImageFile) {
+        // For image files, construct the raw file URL and skip loading text content
+        imageUrl = `/api/repos/${npub}/${repo}/raw?path=${encodeURIComponent(filePath)}&ref=${encodeURIComponent(branchName)}`;
+        fileContent = ''; // Clear content for images
+        editedContent = ''; // Clear edited content for images
+        fileHtml = ''; // Clear HTML for images
+        highlightedFileContent = ''; // Clear highlighted content
         fileLanguage = 'text';
-      }
-      
-      // Apply syntax highlighting for read-only view (non-maintainers)
-      if (fileContent && !isMaintainer) {
-        await applySyntaxHighlighting(fileContent, ext || '');
-      }
-      
-      // Apply syntax highlighting to file content if not in editor
-      if (fileContent && !isMaintainer) {
-        // For read-only view, apply highlight.js
-        await applySyntaxHighlighting(fileContent, ext || '');
+        currentFile = filePath;
+        hasChanges = false;
+      } else {
+        // Not an image, load file content normally
+        imageUrl = null;
+        
+        const url = `/api/repos/${npub}/${repo}/file?path=${encodeURIComponent(filePath)}&ref=${encodeURIComponent(branchName)}`;
+        const response = await fetch(url, {
+          headers: buildApiHeaders()
+        });
+        
+        if (!response.ok) {
+          // Handle rate limiting specifically to prevent loops
+          if (response.status === 429) {
+            const error = new Error(`Failed to load file: Too Many Requests`);
+            console.warn('[File Load] Rate limited, please wait before retrying');
+            throw error;
+          }
+          throw new Error(`Failed to load file: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        fileContent = data.content;
+        editedContent = data.content;
+        currentFile = filePath;
+        hasChanges = false;
+        
+        // Reset README auto-load flag when a file is successfully loaded
+        if (filePath && filePath.toLowerCase().includes('readme')) {
+          readmeAutoLoadAttempted = false;
+        }
+        
+        if (ext === 'md' || ext === 'markdown') {
+          fileLanguage = 'markdown';
+        } else if (ext === 'adoc' || ext === 'asciidoc') {
+          fileLanguage = 'asciidoc';
+        } else {
+          fileLanguage = 'text';
+        }
+        
+        // Reset preview mode to default (preview) when loading a new file
+        showFilePreview = true;
+        fileHtml = '';
+        
+        // Render markdown/asciidoc/HTML/CSV files as HTML for preview
+        if (fileContent && (ext === 'md' || ext === 'markdown' || ext === 'adoc' || ext === 'asciidoc' || ext === 'html' || ext === 'htm' || ext === 'csv')) {
+          await renderFileAsHtml(fileContent, ext || '');
+        }
+        
+        // Apply syntax highlighting for read-only view (non-maintainers) - only if not in preview mode
+        if (fileContent && !isMaintainer && !showFilePreview) {
+          await applySyntaxHighlighting(fileContent, ext || '');
+        }
       }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load file';
@@ -2691,6 +2973,81 @@
       if (window.innerWidth <= 768) {
         showFileListOnMobile = false;
       }
+    }
+  }
+
+  // Copy file content to clipboard
+  async function copyFileContent(event?: Event) {
+    if (!fileContent || copyingFile) return;
+    
+    copyingFile = true;
+    try {
+      await navigator.clipboard.writeText(fileContent);
+      // Show temporary feedback
+      const button = event?.target as HTMLElement;
+      if (button) {
+        const originalTitle = button.getAttribute('title') || '';
+        button.setAttribute('title', 'Copied!');
+        setTimeout(() => {
+          button.setAttribute('title', originalTitle);
+        }, 2000);
+      }
+    } catch (err) {
+      console.error('Failed to copy file content:', err);
+      alert('Failed to copy file content to clipboard');
+    } finally {
+      copyingFile = false;
+    }
+  }
+
+  // Download file
+  function downloadFile() {
+    if (!fileContent || !currentFile) return;
+    
+    try {
+      // Determine MIME type based on file extension
+      const ext = currentFile.split('.').pop()?.toLowerCase() || '';
+      const mimeTypes: Record<string, string> = {
+        'js': 'text/javascript',
+        'ts': 'text/typescript',
+        'json': 'application/json',
+        'css': 'text/css',
+        'html': 'text/html',
+        'htm': 'text/html',
+        'md': 'text/markdown',
+        'txt': 'text/plain',
+        'csv': 'text/csv',
+        'xml': 'application/xml',
+        'svg': 'image/svg+xml',
+        'py': 'text/x-python',
+        'java': 'text/x-java-source',
+        'c': 'text/x-csrc',
+        'cpp': 'text/x-c++src',
+        'h': 'text/x-csrc',
+        'hpp': 'text/x-c++src',
+        'sh': 'text/x-shellscript',
+        'bash': 'text/x-shellscript',
+        'yaml': 'text/yaml',
+        'yml': 'text/yaml',
+        'toml': 'text/toml',
+        'ini': 'text/plain',
+        'conf': 'text/plain',
+        'log': 'text/plain'
+      };
+      
+      const mimeType = mimeTypes[ext] || 'text/plain';
+      const blob = new Blob([fileContent], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = currentFile.split('/').pop() || 'file';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to download file:', err);
+      alert('Failed to download file');
     }
   }
 
@@ -4456,6 +4813,17 @@
             <div class="readme-header">
               <h3>README</h3>
               <div class="readme-actions">
+                {#if readmePath && supportsPreview((readmePath.split('.').pop() || '').toLowerCase())}
+                  <button 
+                    onclick={() => {
+                      showFilePreview = !showFilePreview;
+                    }}
+                    class="preview-toggle-button"
+                    title={showFilePreview ? 'Show raw' : 'Show preview'}
+                  >
+                    {showFilePreview ? 'Raw' : 'Preview'}
+                  </button>
+                {/if}
                 <a href={`/api/repos/${npub}/${repo}/raw?path=${readmePath}`} target="_blank" class="raw-link">View Raw</a>
                 <a href={`/api/repos/${npub}/${repo}/download?format=zip`} class="download-link">Download ZIP</a>
                 <button 
@@ -4469,7 +4837,7 @@
             </div>
             {#if loadingReadme}
               <div class="loading">Loading README...</div>
-            {:else if readmeIsMarkdown && readmeHtml && readmeHtml.trim()}
+            {:else if showFilePreview && readmeHtml && readmeHtml.trim()}
               <div class="readme-content markdown">
                 {@html readmeHtml}
               </div>
@@ -4487,6 +4855,39 @@
             <div class="editor-actions">
               {#if hasChanges}
                 <span class="unsaved-indicator">● Unsaved changes</span>
+              {/if}
+              {#if currentFile && supportsPreview((currentFile.split('.').pop() || '').toLowerCase()) && !isMaintainer}
+                <button 
+                  onclick={() => {
+                    showFilePreview = !showFilePreview;
+                    if (!showFilePreview && fileContent && currentFile) {
+                      // When switching to raw, apply syntax highlighting
+                      const ext = currentFile.split('.').pop() || '';
+                      applySyntaxHighlighting(fileContent, ext).catch(err => console.error('Error applying syntax highlighting:', err));
+                    }
+                  }}
+                  class="preview-toggle-button"
+                  title={showFilePreview ? 'Show raw' : 'Show preview'}
+                >
+                  {showFilePreview ? 'Raw' : 'Preview'}
+                </button>
+              {/if}
+              {#if currentFile && fileContent}
+                <button 
+                  onclick={(e) => copyFileContent(e)}
+                  disabled={copyingFile}
+                  class="file-action-button"
+                  title="Copy raw content to clipboard"
+                >
+                  <img src="/icons/copy.svg" alt="Copy" class="icon-inline" />
+                </button>
+                <button 
+                  onclick={downloadFile}
+                  class="file-action-button"
+                  title="Download file"
+                >
+                  <img src="/icons/download.svg" alt="Download" class="icon-inline" />
+                </button>
               {/if}
               {#if isMaintainer}
                 <button 
@@ -4526,9 +4927,21 @@
                 />
               {:else}
                 <div class="read-only-editor" class:word-wrap={wordWrap}>
-                  {#if highlightedFileContent}
+                  {#if isImageFile && imageUrl}
+                    <!-- Image file: display as image -->
+                    <div class="file-preview image-preview">
+                      <img src={imageUrl} alt={currentFile?.split('/').pop() || 'Image'} class="file-image" />
+                    </div>
+                  {:else if currentFile && showFilePreview && fileHtml && supportsPreview((currentFile.split('.').pop() || '').toLowerCase())}
+                    <!-- Preview mode: show rendered HTML -->
+                    <div class="file-preview markdown">
+                      {@html fileHtml}
+                    </div>
+                  {:else if highlightedFileContent}
+                    <!-- Raw mode: show syntax highlighted code -->
                     {@html highlightedFileContent}
                   {:else}
+                    <!-- Fallback: plain text -->
                     <pre><code class="hljs">{fileContent}</code></pre>
                   {/if}
                 </div>
@@ -5499,5 +5912,25 @@
   :global(.read-only-editor.word-wrap code.hljs *),
   :global(.read-only-editor.word-wrap .hljs *) {
     white-space: pre-wrap !important;
+  }
+
+  /* Image preview styling */
+  :global(.image-preview) {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 1rem;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    min-height: 200px;
+  }
+
+  :global(.file-image) {
+    max-width: 100%;
+    max-height: 80vh;
+    height: auto;
+    object-fit: contain;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   }
 </style>
