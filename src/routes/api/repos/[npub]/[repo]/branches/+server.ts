@@ -10,7 +10,7 @@ import { createRepoGetHandler, createRepoPostHandler } from '$lib/utils/api-hand
 import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
 import { handleValidationError, handleApiError, handleNotFoundError } from '$lib/utils/error-handler.js';
 import { KIND } from '$lib/types/nostr.js';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { existsSync } from 'fs';
 import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
 import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS } from '$lib/config.js';
@@ -132,6 +132,23 @@ export const POST: RequestHandler = createRepoPostHandler(
       throw handleValidationError('Missing branchName parameter', { operation: 'createBranch', npub: context.npub, repo: context.repo });
     }
 
+    const repoPath = join(repoRoot, context.npub, `${context.repo}.git`);
+    const repoExists = existsSync(repoPath);
+
+    // Create repo if it doesn't exist
+    if (!repoExists) {
+      logger.info({ npub: context.npub, repo: context.repo }, 'Creating new empty repository for branch creation');
+      const { mkdir } = await import('fs/promises');
+      const repoDir = dirname(repoPath);
+      await mkdir(repoDir, { recursive: true });
+      
+      // Initialize bare repository
+      const simpleGit = (await import('simple-git')).default;
+      const git = simpleGit();
+      await git.init(['--bare', repoPath]);
+      logger.info({ npub: context.npub, repo: context.repo }, 'Empty repository created successfully');
+    }
+
     // Get default branch if fromBranch not provided
     // If repo has no branches, use 'master' as default
     let sourceBranch = fromBranch;
@@ -148,7 +165,7 @@ export const POST: RequestHandler = createRepoPostHandler(
     await fileManager.createBranch(context.npub, context.repo, branchName, sourceBranch);
     return json({ success: true, message: 'Branch created successfully' });
   },
-  { operation: 'createBranch' }
+  { operation: 'createBranch', requireRepoExists: false } // Allow creating branches in empty repos
 );
 
 export const DELETE: RequestHandler = createRepoPostHandler(

@@ -139,6 +139,112 @@ export class FileManager {
     
     // Create new worktree
     try {
+      // First, check if the branch exists and has commits
+      let branchExists = false;
+      let branchHasCommits = false;
+      try {
+        // Check if branch exists
+        const branchList = await git.branch(['-a']);
+        const branchNames = branchList.all.map(b => b.replace(/^remotes\/origin\//, '').replace(/^remotes\//, ''));
+        branchExists = branchNames.includes(branch);
+        
+        if (branchExists) {
+          // Check if branch has commits by trying to get the latest commit
+          try {
+            const commitHash = await git.raw(['rev-parse', `refs/heads/${branch}`]);
+            branchHasCommits = !!(commitHash && commitHash.trim().length > 0);
+          } catch {
+            // Branch exists but has no commits (orphan branch)
+            branchHasCommits = false;
+          }
+        }
+      } catch (err) {
+        logger.debug({ error: err, branch }, 'Could not check branch status, will try to create worktree');
+      }
+      
+      // If branch exists but has no commits, create an initial empty commit first
+      if (branchExists && !branchHasCommits) {
+        logger.debug({ branch }, 'Branch exists but has no commits, creating initial empty commit');
+        try {
+          // Fetch repo announcement to use as commit message
+          let commitMessage = 'Initial commit';
+          try {
+            const { NostrClient } = await import('../nostr/nostr-client.js');
+            const { DEFAULT_NOSTR_RELAYS } = await import('../../config.js');
+            const { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } = await import('../../utils/nostr-utils.js');
+            const { eventCache } = await import('../nostr/event-cache.js');
+            const { nip19 } = await import('nostr-tools');
+            const { requireNpubHex } = await import('../../utils/npub-utils.js');
+            
+            const repoOwnerPubkey = requireNpubHex(npub);
+            const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+            const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoOwnerPubkey, eventCache);
+            const announcement = findRepoAnnouncement(allEvents, repoName);
+            
+            if (announcement) {
+              // Format announcement as commit message
+              const name = announcement.tags.find((t: string[]) => t[0] === 'name')?.[1] || repoName;
+              const description = announcement.tags.find((t: string[]) => t[0] === 'description')?.[1] || '';
+              commitMessage = `Repository announcement: ${name}${description ? '\n\n' + description : ''}\n\nEvent ID: ${announcement.id}`;
+              logger.debug({ branch, announcementId: announcement.id }, 'Using repo announcement as initial commit message');
+            }
+          } catch (announcementErr) {
+            logger.debug({ error: announcementErr, branch }, 'Failed to fetch announcement, using default commit message');
+          }
+          
+          // Create a temporary worktree with a temp branch name to make the initial commit
+          const tempBranchName = `.temp-init-${Date.now()}`;
+          const tempWorktreePath = resolve(join(this.repoRoot, npub, `${repoName}.worktrees`, tempBranchName));
+          const { mkdir } = await import('fs/promises');
+          await mkdir(dirname(tempWorktreePath), { recursive: true });
+          
+          // Create orphan worktree with temp branch
+          await new Promise<void>((resolve, reject) => {
+            const orphanProcess = spawn('git', ['worktree', 'add', '--orphan', tempBranchName, tempWorktreePath], {
+              cwd: repoPath,
+              stdio: ['ignore', 'pipe', 'pipe']
+            });
+            
+            let orphanStderr = '';
+            orphanProcess.stderr.on('data', (chunk: Buffer) => {
+              orphanStderr += chunk.toString();
+            });
+            
+            orphanProcess.on('close', (code) => {
+              if (code === 0) {
+                resolve();
+              } else {
+                reject(new Error(`Failed to create orphan worktree: ${orphanStderr}`));
+              }
+            });
+            
+            orphanProcess.on('error', reject);
+          });
+          
+          // Create initial empty commit in temp branch with announcement as message
+          const tempGit = simpleGit(tempWorktreePath);
+          await tempGit.commit(commitMessage, ['--allow-empty'], {
+            '--author': 'GitRepublic <noreply@gitrepublic.com>'
+          });
+          
+          // Get the commit hash
+          const commitHash = await tempGit.revparse(['HEAD']);
+          
+          // Update the actual branch to point to this commit
+          await git.raw(['update-ref', `refs/heads/${branch}`, commitHash.trim()]);
+          
+          // Remove temporary worktree and temp branch
+          await this.removeWorktree(repoPath, tempWorktreePath);
+          await git.raw(['branch', '-D', tempBranchName]).catch(() => {
+            // Ignore if branch deletion fails
+          });
+          
+          logger.debug({ branch, commitHash }, 'Created initial empty commit on orphan branch with announcement');
+        } catch (err) {
+          logger.warn({ error: err, branch }, 'Failed to create initial commit, will try normal worktree creation');
+        }
+      }
+      
       // Use spawn for worktree add (safer than exec)
       await new Promise<void>((resolve, reject) => {
         const gitProcess = spawn('git', ['worktree', 'add', worktreePath, branch], {
@@ -156,7 +262,7 @@ export class FileManager {
             resolve();
           } else {
             // If branch doesn't exist, create it first using git branch (works on bare repos)
-            if (stderr.includes('fatal: invalid reference') || stderr.includes('fatal: not a valid object name')) {
+            if (stderr.includes('fatal: invalid reference') || stderr.includes('fatal: not a valid object name') || stderr.includes('Ungültige Referenz')) {
               // First, try to find a source branch (HEAD, main, or master)
               const findSourceBranch = async (): Promise<string> => {
                 try {
@@ -200,7 +306,31 @@ export class FileManager {
                     if (branchCode === 0) {
                       resolveBranch();
                     } else {
-                      rejectBranch(new Error(`Failed to create branch: ${branchStderr}`));
+                      // If creating branch from source fails, try creating orphan branch
+                      if (branchStderr.includes('fatal: invalid reference') || branchStderr.includes('Ungültige Referenz')) {
+                        // Create orphan branch instead
+                        const orphanProcess = spawn('git', ['branch', branch], {
+                          cwd: repoPath,
+                          stdio: ['ignore', 'pipe', 'pipe']
+                        });
+                        
+                        let orphanStderr = '';
+                        orphanProcess.stderr.on('data', (chunk: Buffer) => {
+                          orphanStderr += chunk.toString();
+                        });
+                        
+                        orphanProcess.on('close', (orphanCode) => {
+                          if (orphanCode === 0) {
+                            resolveBranch();
+                          } else {
+                            rejectBranch(new Error(`Failed to create orphan branch: ${orphanStderr}`));
+                          }
+                        });
+                        
+                        orphanProcess.on('error', rejectBranch);
+                      } else {
+                        rejectBranch(new Error(`Failed to create branch: ${branchStderr}`));
+                      }
                     }
                   });
                   
@@ -223,7 +353,30 @@ export class FileManager {
                     if (code2 === 0) {
                       resolve2();
                     } else {
-                      reject2(new Error(`Failed to create worktree after creating branch: ${retryStderr}`));
+                      // If still failing, try with --orphan
+                      if (retryStderr.includes('fatal: invalid reference') || retryStderr.includes('Ungültige Referenz')) {
+                        const orphanWorktreeProcess = spawn('git', ['worktree', 'add', '--orphan', branch, worktreePath], {
+                          cwd: repoPath,
+                          stdio: ['ignore', 'pipe', 'pipe']
+                        });
+                        
+                        let orphanWorktreeStderr = '';
+                        orphanWorktreeProcess.stderr.on('data', (chunk: Buffer) => {
+                          orphanWorktreeStderr += chunk.toString();
+                        });
+                        
+                        orphanWorktreeProcess.on('close', (orphanWorktreeCode) => {
+                          if (orphanWorktreeCode === 0) {
+                            resolve2();
+                          } else {
+                            reject2(new Error(`Failed to create orphan worktree: ${orphanWorktreeStderr}`));
+                          }
+                        });
+                        
+                        orphanWorktreeProcess.on('error', reject2);
+                      } else {
+                        reject2(new Error(`Failed to create worktree after creating branch: ${retryStderr}`));
+                      }
                     }
                   });
                   
@@ -486,7 +639,41 @@ export class FileManager {
       // Note: git ls-tree returns paths relative to repo root, not relative to the specified path
       const gitPath = path ? (path.endsWith('/') ? path : `${path}/`) : '.';
       logger.debug({ npub, repoName, path, ref, gitPath }, '[FileManager] Calling git ls-tree');
-      const tree = await git.raw(['ls-tree', '-l', ref, gitPath]);
+      
+      let tree: string;
+      try {
+        tree = await git.raw(['ls-tree', '-l', ref, gitPath]);
+      } catch (lsTreeError) {
+        // Handle empty branches (orphan branches with no commits)
+        // git ls-tree will fail with "fatal: not a valid object name" or similar
+        const errorMsg = lsTreeError instanceof Error ? lsTreeError.message : String(lsTreeError);
+        const errorStr = String(lsTreeError).toLowerCase();
+        const errorMsgLower = errorMsg.toLowerCase();
+        
+        // Check for various error patterns that indicate empty branch/no commits
+        const isEmptyBranchError = 
+          errorMsgLower.includes('not a valid object') ||
+          errorMsgLower.includes('not found') ||
+          errorMsgLower.includes('bad revision') ||
+          errorMsgLower.includes('ambiguous argument') ||
+          errorStr.includes('not a valid object') ||
+          errorStr.includes('not found') ||
+          errorStr.includes('bad revision') ||
+          errorStr.includes('ambiguous argument') ||
+          errorMsgLower.includes('fatal:') && (errorMsgLower.includes('master') || errorMsgLower.includes('refs/heads'));
+        
+        if (isEmptyBranchError) {
+          logger.debug({ npub, repoName, path, ref, gitPath, error: errorMsg, errorStr }, '[FileManager] Branch has no commits, returning empty list');
+          const emptyResult: FileEntry[] = [];
+          // Cache empty result for shorter time (30 seconds)
+          repoCache.set(cacheKey, emptyResult, 30 * 1000);
+          return emptyResult;
+        }
+        // Log the error for debugging
+        logger.error({ npub, repoName, path, ref, gitPath, error: lsTreeError, errorMsg, errorStr }, '[FileManager] Unexpected error from git ls-tree');
+        // Re-throw if it's a different error
+        throw lsTreeError;
+      }
       
       if (!tree || !tree.trim()) {
         const emptyResult: FileEntry[] = [];
@@ -633,7 +820,31 @@ export class FileManager {
       
       return sortedEntries;
     } catch (error) {
-      logger.error({ error, repoPath, ref }, 'Error listing files');
+      // Check if this is an empty branch error that wasn't caught earlier
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorStr = String(error).toLowerCase();
+      const errorMsgLower = errorMsg.toLowerCase();
+      
+      const isEmptyBranchError = 
+        errorMsgLower.includes('not a valid object') ||
+        errorMsgLower.includes('not found') ||
+        errorMsgLower.includes('bad revision') ||
+        errorMsgLower.includes('ambiguous argument') ||
+        errorStr.includes('not a valid object') ||
+        errorStr.includes('not found') ||
+        errorStr.includes('bad revision') ||
+        errorStr.includes('ambiguous argument') ||
+        (errorMsgLower.includes('fatal:') && (errorMsgLower.includes('master') || errorMsgLower.includes('refs/heads')));
+      
+      if (isEmptyBranchError) {
+        logger.debug({ npub, repoName, path, ref, error: errorMsg, errorStr }, '[FileManager] Branch has no commits (caught in outer catch), returning empty list');
+        const emptyResult: FileEntry[] = [];
+        // Cache empty result for shorter time (30 seconds)
+        repoCache.set(cacheKey, emptyResult, 30 * 1000);
+        return emptyResult;
+      }
+      
+      logger.error({ error, repoPath, ref, errorMsg, errorStr }, 'Error listing files');
       throw new Error(`Failed to list files: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -1382,6 +1593,31 @@ export class FileManager {
 
       // If no branches exist, create an orphan branch (branch with no parent)
       if (!hasBranches) {
+        // Fetch repo announcement to use as initial commit message
+        let commitMessage = 'Initial commit';
+        try {
+          const { NostrClient } = await import('../nostr/nostr-client.js');
+          const { DEFAULT_NOSTR_RELAYS } = await import('../../config.js');
+          const { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } = await import('../../utils/nostr-utils.js');
+          const { eventCache } = await import('../nostr/event-cache.js');
+          const { requireNpubHex } = await import('../../utils/npub-utils.js');
+          
+          const repoOwnerPubkey = requireNpubHex(npub);
+          const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+          const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoOwnerPubkey, eventCache);
+          const announcement = findRepoAnnouncement(allEvents, repoName);
+          
+          if (announcement) {
+            // Format announcement as commit message
+            const name = announcement.tags.find((t: string[]) => t[0] === 'name')?.[1] || repoName;
+            const description = announcement.tags.find((t: string[]) => t[0] === 'description')?.[1] || '';
+            commitMessage = `Repository announcement: ${name}${description ? '\n\n' + description : ''}\n\nEvent ID: ${announcement.id}`;
+            logger.debug({ branchName, announcementId: announcement.id }, 'Using repo announcement as initial commit message');
+          }
+        } catch (announcementErr) {
+          logger.debug({ error: announcementErr, branchName }, 'Failed to fetch announcement, using default commit message');
+        }
+        
         // Create worktree for the new branch directly (orphan branch)
         const worktreeRoot = join(this.repoRoot, npub, `${repoName}.worktrees`);
         const worktreePath = resolve(join(worktreeRoot, branchName));
@@ -1403,8 +1639,16 @@ export class FileManager {
         // Create worktree with orphan branch
         await git.raw(['worktree', 'add', worktreePath, '--orphan', branchName]);
         
+        // Create initial empty commit with announcement as message
+        const workGit: SimpleGit = simpleGit(worktreePath);
+        await workGit.commit(commitMessage, ['--allow-empty'], {
+          '--author': 'GitRepublic <noreply@gitrepublic.com>'
+        });
+        
         // Set the default branch to the new branch in the bare repo
         await git.raw(['symbolic-ref', 'HEAD', `refs/heads/${branchName}`]);
+        
+        logger.debug({ branchName }, 'Created orphan branch with initial commit');
         
         // Clean up worktree
         await this.removeWorktree(repoPath, worktreePath);

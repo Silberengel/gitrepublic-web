@@ -2698,6 +2698,16 @@
               !branchNames.includes(currentBranch)) {
             currentBranch = defaultBranch;
           }
+        } else {
+          // No branches loaded yet or empty repo - set currentBranch from settings if not set
+          if (!currentBranch) {
+            try {
+              const settings = await settingsStore.getSettings();
+              currentBranch = settings.defaultBranch || 'master';
+            } catch {
+              currentBranch = 'master';
+            }
+          }
         }
       } else if (response.status === 404) {
         // Repository not provisioned yet - set error message and flag
@@ -4285,6 +4295,9 @@
         } catch {
           defaultBranchName = 'master';
         }
+        // Preset the default branch name in the input field
+        newBranchName = defaultBranchName;
+        newBranchFrom = null; // Reset from branch selection
         showCreateBranchDialog = true;
       }}
       onSettings={() => goto(`/signup?npub=${npub}&repo=${repo}`)}
@@ -4883,6 +4896,25 @@
           <div class="editor-header">
             <span class="file-path">{currentFile}</span>
             <div class="editor-actions">
+              {#if branches.length > 0 && isMaintainer}
+                <select 
+                  bind:value={currentBranch} 
+                  class="branch-selector" 
+                  disabled={saving || needsClone} 
+                  title="Select branch"
+                  onchange={() => {
+                    // Use the existing handleBranchChange function
+                    handleBranchChangeDirect(currentBranch || '');
+                  }}
+                >
+                  {#each branches as branch}
+                    {@const branchName = typeof branch === 'string' ? branch : branch.name}
+                    <option value={branchName}>{branchName}{#if branchName === defaultBranch} (default){/if}</option>
+                  {/each}
+                </select>
+              {:else if currentBranch && isMaintainer}
+                <span class="branch-display" title="Current branch">{currentBranch}</span>
+              {/if}
               {#if hasChanges}
                 <span class="unsaved-indicator">● Unsaved changes</span>
               {/if}
@@ -5485,6 +5517,22 @@
         onclick={(e) => e.stopPropagation()}
       >
         <h3>Create New File</h3>
+        {#if branches.length > 0}
+          <label>
+            Branch:
+            <select bind:value={currentBranch} disabled={saving}>
+              {#each branches as branch}
+                {@const branchName = typeof branch === 'string' ? branch : branch.name}
+                <option value={branchName}>{branchName}{#if branchName === defaultBranch} (default){/if}</option>
+              {/each}
+            </select>
+          </label>
+        {:else if currentBranch}
+          <label>
+            Branch:
+            <input type="text" value={currentBranch} disabled />
+          </label>
+        {/if}
         <label>
           File Name:
           <input type="text" bind:value={newFileName} placeholder="filename.md" />
@@ -5497,9 +5545,9 @@
           <button onclick={() => showCreateFileDialog = false} class="cancel-button">Cancel</button>
           <button 
             onclick={createFile} 
-            disabled={!newFileName.trim() || saving || needsClone} 
+            disabled={!newFileName.trim() || saving || needsClone || !currentBranch} 
             class="save-button"
-            title={needsClone ? cloneTooltip : ''}
+            title={needsClone ? cloneTooltip : (!currentBranch ? 'Please select a branch' : '')}
           >
             {saving ? 'Creating...' : 'Create'}
           </button>
@@ -5535,11 +5583,14 @@
           From Branch:
           <select bind:value={newBranchFrom}>
             {#if branches.length === 0}
-              <option value={null}>No branches - will create initial branch ({defaultBranchName})</option>
+              <option value={null}>No branches - will create initial branch</option>
             {:else}
               {#each branches as branch}
                 {@const branchName = typeof branch === 'string' ? branch : (branch as { name: string }).name}
-                <option value={branchName}>{branchName}</option>
+                {@const isDefaultBranch = branchName === defaultBranchName}
+                {#if !isDefaultBranch}
+                  <option value={branchName}>{branchName}</option>
+                {/if}
               {/each}
             {/if}
           </select>
@@ -5841,6 +5892,22 @@
         onclick={(e) => e.stopPropagation()}
       >
         <h3>Commit Changes</h3>
+        {#if branches.length > 0}
+          <label>
+            Branch:
+            <select bind:value={currentBranch} disabled={saving}>
+              {#each branches as branch}
+                {@const branchName = typeof branch === 'string' ? branch : branch.name}
+                <option value={branchName}>{branchName}{#if branchName === defaultBranch} (default){/if}</option>
+              {/each}
+            </select>
+          </label>
+        {:else if currentBranch}
+          <label>
+            Branch:
+            <input type="text" value={currentBranch} disabled />
+          </label>
+        {/if}
         <label>
           Commit Message:
           <textarea 
@@ -5853,9 +5920,9 @@
           <button onclick={() => showCommitDialog = false} class="cancel-button">Cancel</button>
           <button 
             onclick={saveFile} 
-            disabled={!commitMessage.trim() || saving || needsClone} 
+            disabled={!commitMessage.trim() || saving || needsClone || !currentBranch} 
             class="save-button"
-            title={needsClone ? cloneTooltip : ''}
+            title={needsClone ? cloneTooltip : (!currentBranch ? 'Please select a branch' : '')}
           >
             {saving ? 'Saving...' : 'Commit & Save'}
           </button>

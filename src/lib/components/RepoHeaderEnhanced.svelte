@@ -351,17 +351,18 @@
       </div>
     {/if}
 
-    {#if branches.length > 0 && currentBranch}
+    {#if currentBranch}
       <div class="repo-branch">
         <button 
           class="branch-button"
           onclick={() => showBranchMenu = !showBranchMenu}
           aria-expanded={showBranchMenu}
+          disabled={branches.length === 0}
         >
           <img src="/icons/git-branch.svg" alt="" class="icon" />
           {currentBranch}
         </button>
-        {#if showBranchMenu}
+        {#if showBranchMenu && branches.length > 0}
           <div class="branch-menu">
             {#each branches as branch}
               {@const branchName = typeof branch === 'string' ? branch : branch.name}
