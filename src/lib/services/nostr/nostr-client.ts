@@ -197,6 +197,7 @@ export class NostrClient {
   private connectionAttempts: Map<string, { count: number; lastAttempt: number }> = new Map();
   private readonly MAX_CONCURRENT_CONNECTIONS = 3; // Max concurrent connections per relay
   private readonly CONNECTION_BACKOFF_BASE = 1000; // Base backoff in ms
+  private readonly THROTTLE_RESET_TIME = 5 * 60 * 1000; // Reset throttling after 5 minutes
 
   constructor(relays: string[]) {
     this.relays = relays;
@@ -230,8 +231,10 @@ export class NostrClient {
 
   /**
    * Get or create a WebSocket connection to a relay
+   * @param relay - The relay URL
+   * @param isReadOperation - If true, this is a read operation (like search) that can bypass throttling more easily
    */
-  private async getConnection(relay: string): Promise<WebSocket | null> {
+  private async getConnection(relay: string, isReadOperation: boolean = false): Promise<WebSocket | null> {
     const existing = this.connectionPool.get(relay);
     
     // Reuse existing connection if it's open
@@ -246,12 +249,41 @@ export class NostrClient {
     const now = Date.now();
     const timeSinceLastAttempt = now - attemptInfo.lastAttempt;
     
+    // Reset throttling if enough time has passed (relays may have recovered)
+    if (attemptInfo.count > 0 && timeSinceLastAttempt > this.THROTTLE_RESET_TIME) {
+      logger.debug({ relay, timeSinceLastAttempt }, 'Resetting throttling - enough time has passed');
+      this.connectionAttempts.set(relay, { count: 0, lastAttempt: now });
+    }
+    
     // If we've had too many recent failures, apply exponential backoff
+    // For read operations, use less aggressive throttling (half the backoff time)
     if (attemptInfo.count > 0) {
-      const backoffTime = this.CONNECTION_BACKOFF_BASE * Math.pow(2, Math.min(attemptInfo.count - 1, 5));
+      const backoffMultiplier = isReadOperation ? 0.5 : 1.0;
+      const backoffTime = this.CONNECTION_BACKOFF_BASE * Math.pow(2, Math.min(attemptInfo.count - 1, 5)) * backoffMultiplier;
+      
       if (timeSinceLastAttempt < backoffTime) {
-        logger.debug({ relay, backoffTime, timeSinceLastAttempt }, 'Throttling connection attempt');
-        return null; // Don't attempt connection yet
+        const waitTime = backoffTime - timeSinceLastAttempt;
+        
+        // For read operations, be more lenient - allow longer waits or bypass if we have cached data
+        const maxWaitTime = isReadOperation ? 10000 : 5000; // 10s for reads, 5s for writes
+        
+        if (waitTime <= maxWaitTime) {
+          logger.debug({ relay, backoffTime, timeSinceLastAttempt, waitTime, isReadOperation }, 'Throttling connection attempt - waiting for backoff');
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          // After waiting, check if connection is now available
+          const existingAfterWait = this.connectionPool.get(relay);
+          if (existingAfterWait && (existingAfterWait.ws.readyState === WebSocket.OPEN || existingAfterWait.ws.readyState === WebSocket.CONNECTING)) {
+            existingAfterWait.pendingRequests++;
+            return existingAfterWait.ws;
+          }
+          // Continue to create new connection after backoff
+        } else {
+          // Backoff is too long, return null to avoid long waits
+          // For read operations, we might still want to try (if we have no cached data)
+          // but for now, we'll be conservative and return null
+          logger.debug({ relay, waitTime, maxWaitTime, isReadOperation }, 'Backoff too long, skipping connection attempt');
+          return null;
+        }
       }
     }
     
@@ -712,7 +744,8 @@ export class NostrClient {
       let authPromise: Promise<boolean> | null = null;
       
       // Get connection from pool or create new one
-      this.getConnection(relay).then(websocket => {
+      // fetchFromRelay is always a read operation, so pass isReadOperation: true
+      this.getConnection(relay, true).then(websocket => {
         if (!websocket) {
           resolveOnce([]);
           return;

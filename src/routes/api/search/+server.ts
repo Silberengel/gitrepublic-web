@@ -57,7 +57,12 @@ export const GET: RequestHandler = async (event) => {
     }
     
     const relays = Array.from(allRelays);
-    logger.debug({ relayCount: relays.length }, 'Using relays for search');
+    logger.info({ 
+      relayCount: relays.length, 
+      relays: relays.slice(0, 5), // Log first 5 relays
+      query: query.trim().substring(0, 50), // Log first 50 chars of query
+      hasUserPubkey: !!userPubkey 
+    }, 'Starting search with relays');
     
     // Create client with all available relays
     const nostrClient = new NostrClient(relays);
@@ -105,20 +110,25 @@ export const GET: RequestHandler = async (event) => {
         
         // Return cached events immediately, fetch from relays in background
         nostrClient.fetchEvents(filters).then(freshEvents => {
-          // Merge fresh events with cached ones (deduplicate by event ID)
-          const eventMap = new Map<string, NostrEvent>();
-          cachedEvents.forEach(e => eventMap.set(e.id, e));
-          freshEvents.forEach(e => {
-            const existing = eventMap.get(e.id);
-            if (!existing || e.created_at > existing.created_at) {
-              eventMap.set(e.id, e);
-            }
-          });
-          
-          const mergedEvents = Array.from(eventMap.values());
-          // Update cache with merged results
-          eventCache.set(filters, mergedEvents);
-          logger.debug({ filters, mergedCount: mergedEvents.length }, 'Updated cache with fresh events');
+          // Only update cache if we got results (don't replace with empty results from failed fetches)
+          if (freshEvents.length > 0) {
+            // Merge fresh events with cached ones (deduplicate by event ID)
+            const eventMap = new Map<string, NostrEvent>();
+            cachedEvents.forEach(e => eventMap.set(e.id, e));
+            freshEvents.forEach(e => {
+              const existing = eventMap.get(e.id);
+              if (!existing || e.created_at > existing.created_at) {
+                eventMap.set(e.id, e);
+              }
+            });
+            
+            const mergedEvents = Array.from(eventMap.values());
+            // Update cache with merged results
+            eventCache.set(filters, mergedEvents);
+            logger.debug({ filters, mergedCount: mergedEvents.length }, 'Updated cache with fresh events');
+          } else {
+            logger.debug({ filters }, 'Background fetch returned no events (relays may be throttled), keeping cached data');
+          }
         }).catch(err => {
           logger.debug({ error: err, filters }, 'Background fetch failed, using cached events');
         });
@@ -126,13 +136,30 @@ export const GET: RequestHandler = async (event) => {
         return cachedEvents;
       }
       
-      // No cache, fetch from relays
-      const freshEvents = await nostrClient.fetchEvents(filters);
-      // Cache the results
-      if (freshEvents.length > 0) {
-        eventCache.set(filters, freshEvents);
+      // No cache, fetch from relays with timeout
+      try {
+        const freshEvents = await Promise.race([
+          nostrClient.fetchEvents(filters),
+          new Promise<NostrEvent[]>((resolve) => {
+            setTimeout(() => {
+              logger.warn({ filters, relayCount: relays.length }, 'Fetch timeout - relays may be throttled or slow');
+              resolve([]); // Return empty array on timeout
+            }, 10000); // 10 second timeout for search
+          })
+        ]);
+        
+        // Cache the results only if we got some
+        if (freshEvents.length > 0) {
+          eventCache.set(filters, freshEvents);
+          logger.debug({ filters, fetchedCount: freshEvents.length }, 'Fetched and cached events from relays');
+        } else {
+          logger.warn({ filters, relayCount: relays.length }, 'No events fetched from relays - may be throttled or unavailable');
+        }
+        return freshEvents;
+      } catch (err) {
+        logger.warn({ error: err, filters, relayCount: relays.length }, 'Failed to fetch events from relays');
+        return []; // Return empty array on error
       }
-      return freshEvents;
     }
     
     let events: NostrEvent[] = [];
@@ -158,12 +185,23 @@ export const GET: RequestHandler = async (event) => {
       const normalizedQuery = normalizeUrl(query.trim());
       
       // Fetch all repos with cache-first strategy
-      const allRepos = await fetchEventsWithCache([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          limit: 1000 // Get more to find URL matches
+      let allRepos: NostrEvent[] = [];
+      try {
+        allRepos = await fetchEventsWithCache([
+          {
+            kinds: [KIND.REPO_ANNOUNCEMENT],
+            limit: 1000 // Get more to find URL matches
+          }
+        ]);
+        
+        // If we got no results and cache was empty, log a warning
+        if (allRepos.length === 0) {
+          logger.warn({ query: query.trim(), relayCount: relays.length }, 'No repos found for URL search - relays may be throttled or unavailable');
         }
-      ]);
+      } catch (err) {
+        logger.warn({ error: err, query: query.trim() }, 'Failed to fetch repos for URL search');
+        allRepos = [];
+      }
       
       // Filter for repos that have a matching clone URL
       events = allRepos.filter(event => {
@@ -191,22 +229,39 @@ export const GET: RequestHandler = async (event) => {
       logger.debug({ query: query.trim(), resolvedPubkey }, 'Searching for repos by pubkey');
       
       // Fetch repos where this pubkey is the owner (cache-first)
-      const ownerEvents = await fetchEventsWithCache([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [resolvedPubkey],
-          limit: limit * 2
-        }
-      ]);
+      let ownerEvents: NostrEvent[] = [];
+      try {
+        ownerEvents = await fetchEventsWithCache([
+          {
+            kinds: [KIND.REPO_ANNOUNCEMENT],
+            authors: [resolvedPubkey],
+            limit: limit * 2
+          }
+        ]);
+      } catch (err) {
+        logger.warn({ error: err, resolvedPubkey }, 'Failed to fetch owner repos for pubkey search');
+        ownerEvents = [];
+      }
       
       // Fetch repos where this pubkey is a maintainer (cache-first)
       // We need to fetch all repos and filter by maintainer tags
-      const allRepos = await fetchEventsWithCache([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          limit: 1000 // Get more to find maintainer matches
+      let allRepos: NostrEvent[] = [];
+      try {
+        allRepos = await fetchEventsWithCache([
+          {
+            kinds: [KIND.REPO_ANNOUNCEMENT],
+            limit: 1000 // Get more to find maintainer matches
+          }
+        ]);
+        
+        // If we got no results, log a warning
+        if (allRepos.length === 0) {
+          logger.warn({ resolvedPubkey, relayCount: relays.length }, 'No repos found for maintainer search - relays may be throttled or unavailable');
         }
-      ]);
+      } catch (err) {
+        logger.warn({ error: err, resolvedPubkey }, 'Failed to fetch repos for maintainer search');
+        allRepos = [];
+      }
       
       // Filter for repos where resolvedPubkey is in maintainers tag
       const maintainerEvents = allRepos.filter(event => {
@@ -256,30 +311,44 @@ export const GET: RequestHandler = async (event) => {
         logger.debug({ cachedCount: cachedAllRepos.length }, 'Using cached repos for text search');
         allReposForTextSearch = cachedAllRepos;
         
-        // Fetch fresh data in background
+        // Fetch fresh data in background (don't wait, use cached data immediately)
         nostrClient.fetchEvents([{ kinds: [KIND.REPO_ANNOUNCEMENT], limit: 1000 }]).then(freshRepos => {
-          // Merge and update cache
-          const eventMap = new Map<string, NostrEvent>();
-          cachedAllRepos.forEach(e => eventMap.set(e.id, e));
-          freshRepos.forEach(e => {
-            const existing = eventMap.get(e.id);
-            if (!existing || e.created_at > existing.created_at) {
-              eventMap.set(e.id, e);
-            }
-          });
-          const merged = Array.from(eventMap.values());
-          eventCache.set([{ kinds: [KIND.REPO_ANNOUNCEMENT], limit: 1000 }], merged);
+          // Only update cache if we got results (don't replace with empty results)
+          if (freshRepos.length > 0) {
+            // Merge and update cache
+            const eventMap = new Map<string, NostrEvent>();
+            cachedAllRepos.forEach(e => eventMap.set(e.id, e));
+            freshRepos.forEach(e => {
+              const existing = eventMap.get(e.id);
+              if (!existing || e.created_at > existing.created_at) {
+                eventMap.set(e.id, e);
+              }
+            });
+            const merged = Array.from(eventMap.values());
+            eventCache.set([{ kinds: [KIND.REPO_ANNOUNCEMENT], limit: 1000 }], merged);
+            logger.debug({ mergedCount: merged.length, freshCount: freshRepos.length }, 'Updated cache with fresh repos');
+          }
         }).catch(err => {
-          logger.debug({ error: err }, 'Background fetch failed for text search');
+          logger.debug({ error: err }, 'Background fetch failed for text search, using cached data');
         });
       } else {
-        // No cache, fetch all repos
-        allReposForTextSearch = await nostrClient.fetchEvents([
-          { kinds: [KIND.REPO_ANNOUNCEMENT], limit: 1000 }
-        ]);
-        // Cache the results
-        if (allReposForTextSearch.length > 0) {
-          eventCache.set([{ kinds: [KIND.REPO_ANNOUNCEMENT], limit: 1000 }], allReposForTextSearch);
+        // No cache, try to fetch all repos
+        logger.debug({ relayCount: relays.length }, 'No cache available, fetching repos from relays');
+        try {
+          allReposForTextSearch = await nostrClient.fetchEvents([
+            { kinds: [KIND.REPO_ANNOUNCEMENT], limit: 1000 }
+          ]);
+          
+          // Only cache if we got results
+          if (allReposForTextSearch.length > 0) {
+            eventCache.set([{ kinds: [KIND.REPO_ANNOUNCEMENT], limit: 1000 }], allReposForTextSearch);
+            logger.debug({ fetchedCount: allReposForTextSearch.length }, 'Fetched and cached repos from relays');
+          } else {
+            logger.warn({ relayCount: relays.length }, 'No repos fetched from relays - all relays may be throttled or unavailable');
+          }
+        } catch (err) {
+          logger.warn({ error: err, relayCount: relays.length }, 'Failed to fetch repos from relays');
+          allReposForTextSearch = []; // Empty array if fetch fails
         }
       }
       
@@ -608,6 +677,13 @@ export const GET: RequestHandler = async (event) => {
       });
 
     results.repos = results.repos.slice(0, limit);
+
+    logger.info({ 
+      query: query.trim().substring(0, 50),
+      resultCount: results.repos.length,
+      total: results.repos.length,
+      relayCount: relays.length
+    }, 'Search completed');
 
     return json({
       query,
