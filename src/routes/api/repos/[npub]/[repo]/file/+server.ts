@@ -79,6 +79,7 @@ export const GET: RequestHandler = async (event) => {
             const fileContent = await tryApiFetchFile(announcement, npub, repo, filePath, ref);
             
             if (fileContent && fileContent.content) {
+              logger.debug({ npub, repo, filePath, ref }, 'Successfully fetched file via API fallback');
               return json(fileContent);
             }
           } catch (apiErr) {
@@ -87,7 +88,16 @@ export const GET: RequestHandler = async (event) => {
           }
           
           // API fetch failed - repo is not cloned and API fetch didn't work
-          return error(404, 'Repository is not cloned locally and could not fetch file via API. Privileged users can clone this repository using the "Clone to Server" button.');
+          // Check if announcement has clone URLs to provide better error message
+          const { extractCloneUrls } = await import('$lib/utils/nostr-utils.js');
+          const cloneUrls = extractCloneUrls(announcement);
+          const hasCloneUrls = cloneUrls.length > 0;
+          
+          logger.debug({ npub, repo, filePath, hasCloneUrls, cloneUrlCount: cloneUrls.length }, 'API fallback failed or no clone URLs available');
+          
+          return error(404, hasCloneUrls 
+            ? 'Repository is not cloned locally and could not fetch file via API. Privileged users can clone this repository using the "Clone to Server" button.'
+            : 'Repository is not cloned locally and has no external clone URLs for API fallback. Privileged users can clone this repository using the "Clone to Server" button.');
         } else {
           return error(404, 'Repository announcement not found in Nostr');
         }

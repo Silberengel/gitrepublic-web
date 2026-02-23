@@ -180,11 +180,18 @@
 
   async function checkPendingTransfers(userPubkeyHex: string) {
     try {
+      // Add timeout to prevent hanging
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
       const response = await fetch('/api/transfers/pending', {
         headers: {
           'X-User-Pubkey': userPubkeyHex
-        }
+        },
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (response.ok) {
         const data = await response.json();
@@ -196,7 +203,11 @@
         }
       }
     } catch (err) {
-      console.error('Failed to check for pending transfers:', err);
+      // Only log if it's not an abort (timeout)
+      if (err instanceof Error && err.name !== 'AbortError') {
+        console.error('Failed to check for pending transfers:', err);
+      }
+      // Silently ignore timeouts - they're expected if the server is slow
     }
   }
 

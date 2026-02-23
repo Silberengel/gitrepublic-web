@@ -37,6 +37,7 @@ export const GET: RequestHandler = createRepoGetHandler(
           const apiData = await tryApiFetch(announcement, context.npub, context.repo);
           
           if (apiData && apiData.files) {
+            logger.debug({ npub: context.npub, repo: context.repo, fileCount: apiData.files.length }, 'Successfully fetched files via API fallback');
             // Return API data directly without cloning
             const path = context.path || '';
             // Filter files by path if specified
@@ -92,8 +93,17 @@ export const GET: RequestHandler = createRepoGetHandler(
           }
           
           // API fetch failed - repo is not cloned and API fetch didn't work
+          // Check if announcement has clone URLs to provide better error message
+          const { extractCloneUrls } = await import('$lib/utils/nostr-utils.js');
+          const cloneUrls = extractCloneUrls(announcement);
+          const hasCloneUrls = cloneUrls.length > 0;
+          
+          logger.debug({ npub: context.npub, repo: context.repo, hasCloneUrls, cloneUrlCount: cloneUrls.length }, 'API fallback failed or no clone URLs available');
+          
           throw handleNotFoundError(
-            'Repository is not cloned locally and could not be fetched via API. Privileged users can clone this repository using the "Clone to Server" button.',
+            hasCloneUrls 
+              ? 'Repository is not cloned locally and could not be fetched via API. Privileged users can clone this repository using the "Clone to Server" button.'
+              : 'Repository is not cloned locally and has no external clone URLs for API fallback. Privileged users can clone this repository using the "Clone to Server" button.',
             { operation: 'listFiles', npub: context.npub, repo: context.repo }
           );
         } else {

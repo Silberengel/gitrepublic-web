@@ -2814,23 +2814,26 @@
           }
         }
       } else if (response.status === 404) {
-        // Check if this is a "not cloned" error with API fallback suggestion
+        // Check if this is a "not cloned" error - API fallback might be available
         const errorText = await response.text().catch(() => '');
-        if (errorText.includes('not cloned locally') && errorText.includes('API')) {
-          // API fallback might be available, but this specific request failed
-          // Try to detect if API fallback works by checking if we have clone URLs
+        if (errorText.includes('not cloned locally')) {
+          // Repository is not cloned - check if API fallback might be available
           if (pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0) {
             // We have clone URLs, so API fallback might work - mark as unknown for now
             // It will be set to true if a subsequent request succeeds
             apiFallbackAvailable = null;
+            // Don't set repoNotFound or error yet - allow API fallback to be attempted
           } else {
+            // No clone URLs, API fallback won't work
+            repoNotFound = true;
             apiFallbackAvailable = false;
+            error = errorText || `Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`;
           }
         } else {
-          // Repository not provisioned yet - set error message and flag
+          // Generic 404 - repository doesn't exist
           repoNotFound = true;
-          error = `Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`;
           apiFallbackAvailable = false;
+          error = `Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`;
         }
       } else if (response.status === 403) {
         // Access denied - don't set repoNotFound, allow retry after login
@@ -2874,20 +2877,28 @@
       
       if (!response.ok) {
         if (response.status === 404) {
-          // Check if this is a "not cloned" error with API fallback suggestion
+          // Check if this is a "not cloned" error - API fallback might be available
           const errorText = await response.text().catch(() => '');
-          if (errorText.includes('not cloned locally') && errorText.includes('API')) {
-            // API fallback might be available, but this specific request failed
+          if (errorText.includes('not cloned locally')) {
+            // Repository is not cloned - check if API fallback might be available
             if (pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0) {
-              apiFallbackAvailable = null; // Unknown, will be set if a request succeeds
+              // We have clone URLs, so API fallback might work - mark as unknown for now
+              // It will be set to true if a subsequent request succeeds
+              apiFallbackAvailable = null;
+              // Don't set repoNotFound - allow API fallback to be attempted
             } else {
+              // No clone URLs, API fallback won't work
+              repoNotFound = true;
               apiFallbackAvailable = false;
             }
+            // Throw error but use the actual error text from the API
+            throw new Error(errorText || 'Repository not found. This repository exists in Nostr but hasn\'t been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.');
           } else {
+            // Generic 404 - repository doesn't exist
             repoNotFound = true;
             apiFallbackAvailable = false;
+            throw new Error(`Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`);
           }
-          throw new Error(`Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`);
         } else if (response.status === 403) {
           // 403 means access denied - don't set repoNotFound, just show error
           // This allows retry after login

@@ -22,8 +22,22 @@ export const GET: RequestHandler = async ({ request }) => {
   }
 
   try {
-    // Get user's relays for comprehensive search
-    const { inbox, outbox } = await getUserRelays(userPubkeyHex, nostrClient);
+    // Get user's relays for comprehensive search (with timeout)
+    let inbox: string[] = [];
+    let outbox: string[] = [];
+    try {
+      const userRelaysResult = await Promise.race([
+        getUserRelays(userPubkeyHex, nostrClient),
+        new Promise<{ inbox: string[]; outbox: string[] }>((resolve) => {
+          setTimeout(() => resolve({ inbox: [], outbox: [] }), 3000); // 3s timeout for user relays
+        })
+      ]);
+      inbox = userRelaysResult.inbox;
+      outbox = userRelaysResult.outbox;
+    } catch (err) {
+      logger.debug({ error: err, userPubkeyHex }, 'Failed to get user relays, using defaults');
+    }
+    
     // Combine user relays with default and search relays
     const userRelays = [...inbox, ...outbox];
     const allRelays = [...new Set([...userRelays, ...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS])];
@@ -32,13 +46,21 @@ export const GET: RequestHandler = async ({ request }) => {
     const { NostrClient } = await import('$lib/services/nostr/nostr-client.js');
     const searchClient = new NostrClient(allRelays);
 
-    // Search for transfer events where this user is the new owner (p tag)
-    const transferEvents = await searchClient.fetchEvents([
-      {
-        kinds: [KIND.OWNERSHIP_TRANSFER],
-        '#p': [userPubkeyHex],
-        limit: 100
-      }
+    // Search for transfer events where this user is the new owner (p tag) (with timeout)
+    const transferEvents = await Promise.race([
+      searchClient.fetchEvents([
+        {
+          kinds: [KIND.OWNERSHIP_TRANSFER],
+          '#p': [userPubkeyHex],
+          limit: 100
+        }
+      ]),
+      new Promise<NostrEvent[]>((resolve) => {
+        setTimeout(() => {
+          logger.debug({ userPubkeyHex }, 'Transfer events fetch timeout (5s)');
+          resolve([]);
+        }, 5000); // 5s timeout
+      })
     ]);
 
     // Filter for valid, non-self-transfer events that haven't been completed

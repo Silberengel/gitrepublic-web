@@ -1,12 +1,13 @@
 /**
- * API endpoint for searching repositories and code
+ * API endpoint for searching repositories
+ * Cache-first with parallel relay queries (normal filters + NIP-50)
  */
 
-import { json, error } from '@sveltejs/kit';
+import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
-import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS, combineRelays } from '$lib/config.js';
+import { DEFAULT_NOSTR_SEARCH_RELAYS } from '$lib/config.js';
 import { KIND } from '$lib/types/nostr.js';
 import type { NostrEvent, NostrFilter } from '$lib/types/nostr.js';
 import { nip19 } from 'nostr-tools';
@@ -15,9 +16,8 @@ import { extractRequestContext } from '$lib/utils/api-context.js';
 import { resolvePubkey } from '$lib/utils/pubkey-resolver.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import { eventCache } from '$lib/services/nostr/event-cache.js';
+import { decodeNostrAddress } from '$lib/services/nostr/nip19-utils.js';
 import logger from '$lib/services/logger.js';
-
-// MaintainerService will be created with all available relays per request
 
 export const GET: RequestHandler = async (event) => {
   const query = event.url.searchParams.get('q');
@@ -36,17 +36,13 @@ export const GET: RequestHandler = async (event) => {
   }
 
   try {
-    // Collect all available relays
+    // Collect all available relays - prioritize DEFAULT_NOSTR_SEARCH_RELAYS
     const allRelays = new Set<string>();
-    
-    // Add default search relays
     DEFAULT_NOSTR_SEARCH_RELAYS.forEach(relay => allRelays.add(relay));
-    DEFAULT_NOSTR_RELAYS.forEach(relay => allRelays.add(relay));
     
     // Add user's relays if logged in
     if (userPubkey) {
       try {
-        // Create a temporary client to fetch user relays
         const tempClient = new NostrClient(Array.from(allRelays));
         const userRelays = await getUserRelays(userPubkey, tempClient);
         userRelays.inbox.forEach(relay => allRelays.add(relay));
@@ -56,641 +52,521 @@ export const GET: RequestHandler = async (event) => {
       }
     }
     
-    const relays = Array.from(allRelays);
+    const relays = [
+      ...DEFAULT_NOSTR_SEARCH_RELAYS,
+      ...Array.from(allRelays).filter(r => !DEFAULT_NOSTR_SEARCH_RELAYS.includes(r))
+    ];
+    
     logger.info({ 
       relayCount: relays.length, 
-      relays: relays.slice(0, 5), // Log first 5 relays
-      query: query.trim().substring(0, 50), // Log first 50 chars of query
+      query: query.trim().substring(0, 50),
       hasUserPubkey: !!userPubkey 
-    }, 'Starting search with relays');
+    }, 'Starting search');
     
-    // Create client with all available relays
+    // Create client with all available relays (no throttling for read operations)
     const nostrClient = new NostrClient(relays);
-    
-    // Create maintainer service with all available relays
     const maintainerService = new MaintainerService(relays);
     
-    const results: {
-      repos: Array<{ 
-        id: string; 
-        name: string; 
-        description: string; 
-        owner: string; 
-        npub: string;
-        repoId?: string; // The actual repo ID (d-tag) from the announcement
-        maintainers?: Array<{ pubkey: string; isOwner: boolean }>;
-        announcement?: any; // Full announcement event
-      }>;
-    } = {
-      repos: []
-    };
-
-    // Check if query is a URL (clone URL search)
-    const isUrl = (str: string): boolean => {
-      const trimmed = str.trim();
-      return trimmed.startsWith('http://') || 
-             trimmed.startsWith('https://') || 
-             trimmed.startsWith('git://') ||
-             trimmed.startsWith('ssh://') ||
-             trimmed.includes('.git') ||
-             (trimmed.includes('://') && trimmed.includes('/'));
-    };
+    // Step 1: Check cache and return results immediately
+    const cacheKey = [{ kinds: [KIND.REPO_ANNOUNCEMENT], limit: 1000 }];
+    const cachedRepos = eventCache.get(cacheKey) || [];
     
-    const queryIsUrl = isUrl(query.trim());
+    logger.debug({ cachedReposCount: cachedRepos.length, query: query.trim().substring(0, 50) }, 'Cache check');
     
-    // Check if query is a pubkey (hex, npub, nprofile, or NIP-05)
-    const resolvedPubkey = await resolvePubkey(query.trim());
+    // Normalize query for searching
+    const queryLower = query.trim().toLowerCase();
+    const queryTrimmed = query.trim();
     
-    // Helper function to fetch events with cache-first strategy
-    async function fetchEventsWithCache(filters: NostrFilter[]): Promise<NostrEvent[]> {
-      // Check cache first
-      const cachedEvents = eventCache.get(filters);
-      if (cachedEvents && cachedEvents.length > 0) {
-        logger.debug({ filters, cachedCount: cachedEvents.length }, 'Returning cached events for search');
-        
-        // Return cached events immediately, fetch from relays in background
-        nostrClient.fetchEvents(filters).then(freshEvents => {
-          // Only update cache if we got results (don't replace with empty results from failed fetches)
-          if (freshEvents.length > 0) {
-            // Merge fresh events with cached ones (deduplicate by event ID)
-            const eventMap = new Map<string, NostrEvent>();
-            cachedEvents.forEach(e => eventMap.set(e.id, e));
-            freshEvents.forEach(e => {
-              const existing = eventMap.get(e.id);
-              if (!existing || e.created_at > existing.created_at) {
-                eventMap.set(e.id, e);
-              }
-            });
-            
-            const mergedEvents = Array.from(eventMap.values());
-            // Update cache with merged results
-            eventCache.set(filters, mergedEvents);
-            logger.debug({ filters, mergedCount: mergedEvents.length }, 'Updated cache with fresh events');
-          } else {
-            logger.debug({ filters }, 'Background fetch returned no events (relays may be throttled), keeping cached data');
-          }
-        }).catch(err => {
-          logger.debug({ error: err, filters }, 'Background fetch failed, using cached events');
-        });
-        
-        return cachedEvents;
+    // Try to resolve query as various identifiers
+    let resolvedPubkey: string | null = null;
+    let decodedAddress: ReturnType<typeof decodeNostrAddress> | null = null;
+    
+    // Try to resolve as pubkey (npub, nprofile, hex, nip-05)
+    try {
+      resolvedPubkey = await resolvePubkey(queryTrimmed);
+      if (resolvedPubkey) {
+        logger.debug({ query: queryTrimmed.substring(0, 50), resolvedPubkey: resolvedPubkey.substring(0, 16) + '...' }, 'Resolved query as pubkey');
       }
-      
-      // No cache, fetch from relays with timeout
-      try {
-        const freshEvents = await Promise.race([
-          nostrClient.fetchEvents(filters),
-          new Promise<NostrEvent[]>((resolve) => {
-            setTimeout(() => {
-              logger.warn({ filters, relayCount: relays.length }, 'Fetch timeout - relays may be throttled or slow');
-              resolve([]); // Return empty array on timeout
-            }, 10000); // 10 second timeout for search
-          })
-        ]);
-        
-        // Cache the results only if we got some
-        if (freshEvents.length > 0) {
-          eventCache.set(filters, freshEvents);
-          logger.debug({ filters, fetchedCount: freshEvents.length }, 'Fetched and cached events from relays');
-        } else {
-          logger.warn({ filters, relayCount: relays.length }, 'No events fetched from relays - may be throttled or unavailable');
-        }
-        return freshEvents;
-      } catch (err) {
-        logger.warn({ error: err, filters, relayCount: relays.length }, 'Failed to fetch events from relays');
-        return []; // Return empty array on error
-      }
+    } catch {
+      // Not a pubkey, continue
     }
     
-    let events: NostrEvent[] = [];
-    
-    if (queryIsUrl) {
-      // Search for repos by clone URL
-      logger.debug({ query: query.trim() }, 'Searching for repos by clone URL');
-      
-      // Normalize the URL for matching (remove trailing .git, trailing slash, etc.)
-      const normalizeUrl = (url: string): string => {
-        let normalized = url.trim().toLowerCase();
-        // Remove trailing .git
-        if (normalized.endsWith('.git')) {
-          normalized = normalized.slice(0, -4);
-        }
-        // Remove trailing slash
-        normalized = normalized.replace(/\/$/, '');
-        // Remove protocol for more flexible matching
-        normalized = normalized.replace(/^(https?|git|ssh):\/\//, '');
-        return normalized;
-      };
-      
-      const normalizedQuery = normalizeUrl(query.trim());
-      
-      // Fetch all repos with cache-first strategy
-      let allRepos: NostrEvent[] = [];
-      try {
-        allRepos = await fetchEventsWithCache([
-          {
-            kinds: [KIND.REPO_ANNOUNCEMENT],
-            limit: 1000 // Get more to find URL matches
-          }
-        ]);
-        
-        // If we got no results and cache was empty, log a warning
-        if (allRepos.length === 0) {
-          logger.warn({ query: query.trim(), relayCount: relays.length }, 'No repos found for URL search - relays may be throttled or unavailable');
-        }
-      } catch (err) {
-        logger.warn({ error: err, query: query.trim() }, 'Failed to fetch repos for URL search');
-        allRepos = [];
-      }
-      
-      // Filter for repos that have a matching clone URL
-      events = allRepos.filter(event => {
-        for (const tag of event.tags) {
-          if (tag[0] === 'clone') {
-            for (let i = 1; i < tag.length; i++) {
-              const cloneUrl = tag[i];
-              if (!cloneUrl || typeof cloneUrl !== 'string') continue;
-              
-              const normalizedCloneUrl = normalizeUrl(cloneUrl);
-              
-              // Check if the normalized query matches the normalized clone URL
-              // Support partial matches (e.g., "example.com/repo" matches "https://example.com/user/repo.git")
-              if (normalizedCloneUrl.includes(normalizedQuery) || normalizedQuery.includes(normalizedCloneUrl)) {
-                return true;
-              }
-            }
-          }
-        }
-        return false;
-      });
-      
-    } else if (resolvedPubkey) {
-      // Search for repos by owner or maintainer pubkey
-      logger.debug({ query: query.trim(), resolvedPubkey }, 'Searching for repos by pubkey');
-      
-      // Fetch repos where this pubkey is the owner (cache-first)
-      let ownerEvents: NostrEvent[] = [];
-      try {
-        ownerEvents = await fetchEventsWithCache([
-          {
-            kinds: [KIND.REPO_ANNOUNCEMENT],
-            authors: [resolvedPubkey],
-            limit: limit * 2
-          }
-        ]);
-      } catch (err) {
-        logger.warn({ error: err, resolvedPubkey }, 'Failed to fetch owner repos for pubkey search');
-        ownerEvents = [];
-      }
-      
-      // Fetch repos where this pubkey is a maintainer (cache-first)
-      // We need to fetch all repos and filter by maintainer tags
-      let allRepos: NostrEvent[] = [];
-      try {
-        allRepos = await fetchEventsWithCache([
-          {
-            kinds: [KIND.REPO_ANNOUNCEMENT],
-            limit: 1000 // Get more to find maintainer matches
-          }
-        ]);
-        
-        // If we got no results, log a warning
-        if (allRepos.length === 0) {
-          logger.warn({ resolvedPubkey, relayCount: relays.length }, 'No repos found for maintainer search - relays may be throttled or unavailable');
-        }
-      } catch (err) {
-        logger.warn({ error: err, resolvedPubkey }, 'Failed to fetch repos for maintainer search');
-        allRepos = [];
-      }
-      
-      // Filter for repos where resolvedPubkey is in maintainers tag
-      const maintainerEvents = allRepos.filter(event => {
-        for (const tag of event.tags) {
-          if (tag[0] === 'maintainers') {
-            for (let i = 1; i < tag.length; i++) {
-              const maintainer = tag[i];
-              if (!maintainer || typeof maintainer !== 'string') continue;
-              
-              // Maintainer can be npub or hex pubkey
-              let maintainerPubkey = maintainer;
-              try {
-                const decoded = nip19.decode(maintainer);
-                if (decoded.type === 'npub') {
-                  maintainerPubkey = decoded.data as string;
-                }
-              } catch {
-                // Assume it's already a hex pubkey
-              }
-              
-              if (maintainerPubkey.toLowerCase() === resolvedPubkey.toLowerCase()) {
-                return true;
-              }
-            }
-          }
-        }
-        return false;
-      });
-      
-      // Combine owner and maintainer events, deduplicate by event ID
-      const eventMap = new Map<string, typeof events[0]>();
-      ownerEvents.forEach(e => eventMap.set(e.id, e));
-      maintainerEvents.forEach(e => eventMap.set(e.id, e));
-      events = Array.from(eventMap.values());
-      
-    } else {
-      // Regular text search using NIP-50
-      const searchQuery = query.trim().toLowerCase();
-      
-      // For text search, we'll use cache-first for all repos, then filter
-      // This allows us to leverage cache while still supporting NIP-50
-      let allReposForTextSearch: NostrEvent[] = [];
-      
-      // Check cache first for all repo announcements
-      const cachedAllRepos = eventCache.get([{ kinds: [KIND.REPO_ANNOUNCEMENT], limit: 1000 }]);
-      if (cachedAllRepos && cachedAllRepos.length > 0) {
-        logger.debug({ cachedCount: cachedAllRepos.length }, 'Using cached repos for text search');
-        allReposForTextSearch = cachedAllRepos;
-        
-        // Fetch fresh data in background (don't wait, use cached data immediately)
-        nostrClient.fetchEvents([{ kinds: [KIND.REPO_ANNOUNCEMENT], limit: 1000 }]).then(freshRepos => {
-          // Only update cache if we got results (don't replace with empty results)
-          if (freshRepos.length > 0) {
-            // Merge and update cache
-            const eventMap = new Map<string, NostrEvent>();
-            cachedAllRepos.forEach(e => eventMap.set(e.id, e));
-            freshRepos.forEach(e => {
-              const existing = eventMap.get(e.id);
-              if (!existing || e.created_at > existing.created_at) {
-                eventMap.set(e.id, e);
-              }
-            });
-            const merged = Array.from(eventMap.values());
-            eventCache.set([{ kinds: [KIND.REPO_ANNOUNCEMENT], limit: 1000 }], merged);
-            logger.debug({ mergedCount: merged.length, freshCount: freshRepos.length }, 'Updated cache with fresh repos');
-          }
-        }).catch(err => {
-          logger.debug({ error: err }, 'Background fetch failed for text search, using cached data');
-        });
-      } else {
-        // No cache, try to fetch all repos
-        logger.debug({ relayCount: relays.length }, 'No cache available, fetching repos from relays');
-        try {
-          allReposForTextSearch = await nostrClient.fetchEvents([
-            { kinds: [KIND.REPO_ANNOUNCEMENT], limit: 1000 }
-          ]);
-          
-          // Only cache if we got results
-          if (allReposForTextSearch.length > 0) {
-            eventCache.set([{ kinds: [KIND.REPO_ANNOUNCEMENT], limit: 1000 }], allReposForTextSearch);
-            logger.debug({ fetchedCount: allReposForTextSearch.length }, 'Fetched and cached repos from relays');
-          } else {
-            logger.warn({ relayCount: relays.length }, 'No repos fetched from relays - all relays may be throttled or unavailable');
-          }
-        } catch (err) {
-          logger.warn({ error: err, relayCount: relays.length }, 'Failed to fetch repos from relays');
-          allReposForTextSearch = []; // Empty array if fetch fails
-        }
-      }
-      
-      try {
-        // Try NIP-50 search for fresh results (bypass cache for NIP-50)
-        const searchFilter = {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          search: query.trim(), // NIP-50: Search field - use trimmed query
-          limit: limit * 2 // Get more results to account for different relay implementations
-        };
-        
-        // Fetch NIP-50 results in background (don't wait)
-        const nip50Promise = nostrClient.fetchEvents([searchFilter]).then(nip50Events => {
-          // Merge NIP-50 results with cached repos
-          const eventMap = new Map<string, NostrEvent>();
-          allReposForTextSearch.forEach(e => eventMap.set(e.id, e));
-          nip50Events.forEach(e => {
-            const existing = eventMap.get(e.id);
-            if (!existing || e.created_at > existing.created_at) {
-              eventMap.set(e.id, e);
-            }
-          });
-          return Array.from(eventMap.values());
-        });
-        
-        // Filter cached repos immediately for fast results
-        const searchLower = searchQuery;
-        events = allReposForTextSearch.filter(event => {
-          const name = event.tags.find(t => t[0] === 'name')?.[1] || '';
-          const description = event.tags.find(t => t[0] === 'description')?.[1] || '';
-          const repoId = event.tags.find(t => t[0] === 'd')?.[1] || '';
-          const content = event.content || '';
-
-          return name.toLowerCase().includes(searchLower) ||
-                 description.toLowerCase().includes(searchLower) ||
-                 repoId.toLowerCase().includes(searchLower) ||
-                 content.toLowerCase().includes(searchLower);
-        });
-        
-        // Merge NIP-50 results when available (in background)
-        nip50Promise.then(mergedEvents => {
-          // Update events with NIP-50 results if they're better
-          const eventMap = new Map<string, NostrEvent>();
-          events.forEach(e => eventMap.set(e.id, e));
-          mergedEvents.forEach(e => {
-            const existing = eventMap.get(e.id);
-            if (!existing || e.created_at > existing.created_at) {
-              eventMap.set(e.id, e);
-            }
-          });
-          // Note: We can't update the events array here since it's already being processed
-          // The next search will benefit from the updated cache
-        }).catch(err => {
-          logger.debug({ error: err }, 'NIP-50 search failed, using cached results');
-        });
-        
-        // If NIP-50 returned results, verify they actually match the query
-        // Some relays might not properly implement NIP-50 search
-        if (events.length > 0) {
-          const searchLower = searchQuery;
-          events = events.filter(event => {
-            const name = event.tags.find(t => t[0] === 'name')?.[1] || '';
-            const description = event.tags.find(t => t[0] === 'description')?.[1] || '';
-            const repoId = event.tags.find(t => t[0] === 'd')?.[1] || '';
-            const content = event.content || '';
-
-            return name.toLowerCase().includes(searchLower) ||
-                   description.toLowerCase().includes(searchLower) ||
-                   repoId.toLowerCase().includes(searchLower) ||
-                   content.toLowerCase().includes(searchLower);
-          });
-        }
-        
-        // NIP-50 search succeeded
-      } catch (nip50Error) {
-        // Fallback to manual filtering if NIP-50 fails or isn't supported
-        
-        const allEvents = await nostrClient.fetchEvents([
-          {
-            kinds: [KIND.REPO_ANNOUNCEMENT],
-            limit: 500 // Get more events for manual filtering
-          }
-        ]);
-        
-        const searchLower = searchQuery;
-        events = allEvents.filter(event => {
-          const name = event.tags.find(t => t[0] === 'name')?.[1] || '';
-          const description = event.tags.find(t => t[0] === 'description')?.[1] || '';
-          const repoId = event.tags.find(t => t[0] === 'd')?.[1] || '';
-          const content = event.content || '';
-
-          return name.toLowerCase().includes(searchLower) ||
-                 description.toLowerCase().includes(searchLower) ||
-                 repoId.toLowerCase().includes(searchLower) ||
-                 content.toLowerCase().includes(searchLower);
-        });
-      }
+    // Try to decode as naddr, nevent, note1
+    decodedAddress = decodeNostrAddress(queryTrimmed);
+    if (decodedAddress) {
+      logger.debug({ query: queryTrimmed.substring(0, 50), decodedType: decodedAddress.type }, 'Decoded query as address');
     }
     
-    // Process events into results with privacy filtering
-    const searchLower = query.trim().toLowerCase();
+    // Filter cached repos based on query
+    const cachedResults = filterRepos(cachedRepos, queryTrimmed, queryLower, resolvedPubkey, decodedAddress);
+    logger.debug({ cachedResultsCount: cachedResults.length, cachedReposCount: cachedRepos.length }, 'Cached results filtered');
     
-    // Check if this is a pubkey search and if the resolved pubkey matches the logged-in user
-    const isSearchingOwnPubkey = resolvedPubkey && userPubkey && 
-      resolvedPubkey.toLowerCase() === userPubkey.toLowerCase();
+    // Step 2 & 3: Fetch from relays in parallel (normal filters + NIP-50) with 10s timeout
+    // Start relay fetch in background - don't wait for it, return cached results immediately
+    logger.debug({ query: queryTrimmed.substring(0, 50), relayCount: relays.length }, 'Starting relay fetch in background');
+    const relayFetchPromise = Promise.race([
+      fetchFromRelays(nostrClient, queryTrimmed, queryLower, resolvedPubkey, decodedAddress, limit).then(result => {
+        logger.debug({ 
+          query: queryTrimmed.substring(0, 50),
+          filteredCount: result.filtered.length,
+          allReposCount: result.allRepos.length
+        }, 'Relay fetch completed');
+        return result;
+      }),
+      new Promise<{ filtered: NostrEvent[]; allRepos: NostrEvent[] }>((resolve) => {
+        setTimeout(() => {
+          logger.debug({ query: queryTrimmed.substring(0, 50) }, 'Relay fetch timeout (10s)');
+          resolve({ filtered: [], allRepos: [] });
+        }, 10000); // Increased to 10s to allow querySync to complete
+      })
+    ]).catch(err => {
+      logger.debug({ error: err, query: queryTrimmed.substring(0, 50) }, 'Relay fetch error');
+      return { filtered: [], allRepos: [] };
+    });
     
-    // Map to track repo relationships for sorting
-    const repoRelationships = new Map<string, {
-      isOwned: boolean;
-      isMaintained: boolean;
-      isBookmarked: boolean;
+    // Wait for relay results (already has timeout built in)
+    let relayResults: NostrEvent[] = [];
+    let allRelayRepos: NostrEvent[] = [];
+    
+    try {
+      const relayResult = await relayFetchPromise;
+      relayResults = relayResult.filtered;
+      allRelayRepos = relayResult.allRepos;
+    } catch (err) {
+      logger.debug({ error: err }, 'Failed to get relay results');
+    }
+    
+    // Step 4 & 5: Deduplicate results (cached + relay)
+    const allResults = new Map<string, NostrEvent>();
+    
+    // Add cached results first
+    cachedResults.forEach(r => allResults.set(r.id, r));
+    
+    // Add relay results (prefer newer events)
+    relayResults.forEach(r => {
+      const existing = allResults.get(r.id);
+      if (!existing || r.created_at > existing.created_at) {
+        allResults.set(r.id, r);
+      }
+    });
+    
+    // Step 6: Update cache with ALL repos found from relays (not just filtered ones)
+    // This ensures everything discovered during the search is cached for future use
+    if (allRelayRepos.length > 0) {
+      const repoMap = new Map<string, NostrEvent>();
+      // Start with cached repos
+      cachedRepos.forEach(r => repoMap.set(r.id, r));
+      // Add ALL repos found from relays (prefer newer events)
+      allRelayRepos.forEach(r => {
+        const existing = repoMap.get(r.id);
+        if (!existing || r.created_at > existing.created_at) {
+          repoMap.set(r.id, r);
+        }
+      });
+      // Update cache with merged results
+      eventCache.set(cacheKey, Array.from(repoMap.values()));
+      logger.debug({ 
+        cachedCount: cachedRepos.length,
+        relayReposCount: allRelayRepos.length,
+        filteredCount: relayResults.length,
+        finalCacheCount: repoMap.size
+      }, 'Cache updated with all repos found from relays');
+    } else if (relayResults.length > 0) {
+      // Fallback: if we only have filtered results, cache those
+      const repoMap = new Map<string, NostrEvent>();
+      cachedRepos.forEach(r => repoMap.set(r.id, r));
+      relayResults.forEach(r => {
+        const existing = repoMap.get(r.id);
+        if (!existing || r.created_at > existing.created_at) {
+          repoMap.set(r.id, r);
+        }
+      });
+      eventCache.set(cacheKey, Array.from(repoMap.values()));
+      logger.debug({ 
+        cachedCount: cachedRepos.length,
+        filteredCount: relayResults.length,
+        finalCacheCount: repoMap.size
+      }, 'Cache updated with filtered relay results (no unfiltered repos available)');
+    }
+    
+    const mergedResults = Array.from(allResults.values());
+    
+    logger.debug({ 
+      cachedCount: cachedResults.length,
+      relayCount: relayResults.length,
+      mergedCount: mergedResults.length
+    }, 'Search results merged');
+    
+    // Step 6: Process results with privacy filtering
+    const results: Array<{
+      id: string;
+      name: string;
+      description: string;
+      owner: string;
+      npub: string;
+      repoId?: string;
       maintainers?: Array<{ pubkey: string; isOwner: boolean }>;
-    }>();
+      announcement?: NostrEvent;
+    }> = [];
     
-    // Pre-fetch maintainers and bookmarks for all repos (batch processing)
-    const bookmarkChecks = new Map<string, Promise<boolean>>();
-    if (userPubkey) {
-      const { BookmarksService } = await import('$lib/services/nostr/bookmarks-service.js');
-      const bookmarksService = new BookmarksService(relays);
+    for (const event of mergedResults.slice(0, limit * 2)) { // Get more to filter by privacy
+      const repoId = event.tags.find(t => t[0] === 'd')?.[1];
+      if (!repoId) continue;
       
-      for (const event of events) {
-        const repoId = event.tags.find(t => t[0] === 'd')?.[1];
-        if (!repoId) continue;
+      // Check privacy
+      const isPrivate = event.tags.some(t => 
+        (t[0] === 'private' && t[1] === 'true') || 
+        (t[0] === 't' && t[1] === 'private')
+      );
+      
+      // Check if user can view
+      let canView = !isPrivate; // Public repos are viewable by anyone
+      
+      if (isPrivate && userPubkey) {
+        try {
+          canView = await maintainerService.canView(userPubkey, event.pubkey, repoId);
+        } catch (err) {
+          logger.debug({ error: err }, 'Failed to check repo access');
+          canView = false;
+        }
+      }
+      
+      if (!canView) continue;
+      
+      const name = event.tags.find(t => t[0] === 'name')?.[1] || repoId;
+      const description = event.tags.find(t => t[0] === 'description')?.[1] || '';
+      
+      try {
+        const npub = nip19.npubEncode(event.pubkey);
         
-        const repoAddress = `${KIND.REPO_ANNOUNCEMENT}:${event.pubkey}:${repoId}`;
-        bookmarkChecks.set(event.id, bookmarksService.isBookmarked(userPubkey, repoAddress));
+        // Get maintainers
+        let allMaintainers: Array<{ pubkey: string; isOwner: boolean }> = [];
+        try {
+          const { maintainers, owner } = await maintainerService.getMaintainers(event.pubkey, repoId);
+          const ownerLower = owner.toLowerCase();
+          const seenPubkeys = new Set<string>();
+          
+          for (const maintainer of maintainers) {
+            const maintainerLower = maintainer.toLowerCase();
+            if (seenPubkeys.has(maintainerLower)) continue;
+            seenPubkeys.add(maintainerLower);
+            allMaintainers.push({
+              pubkey: maintainer,
+              isOwner: maintainerLower === ownerLower
+            });
+          }
+          
+          allMaintainers.sort((a, b) => {
+            if (a.isOwner && !b.isOwner) return -1;
+            if (!a.isOwner && b.isOwner) return 1;
+            return 0;
+          });
+        } catch (err) {
+          logger.debug({ error: err }, 'Failed to fetch maintainers');
+          allMaintainers = [{ pubkey: event.pubkey, isOwner: true }];
+        }
+        
+        results.push({
+          id: event.id,
+          name,
+          description,
+          owner: event.pubkey,
+          npub,
+          repoId,
+          maintainers: allMaintainers,
+          announcement: event
+        });
+      } catch {
+        // Skip if npub encoding fails
       }
     }
     
-    for (const event of events) {
-        const repoId = event.tags.find(t => t[0] === 'd')?.[1];
-        if (!repoId) continue;
-        
-        // Check privacy
-        const isPrivate = event.tags.some(t => 
-          (t[0] === 'private' && t[1] === 'true') || 
-          (t[0] === 't' && t[1] === 'private')
-        );
-        
-        // Check if user can view this repo
-        let canView = false;
-        if (!isPrivate) {
-          canView = true; // Public repos are viewable by anyone
-        } else {
-          // Private repos require authentication
-          
-          // Special case: if searching by pubkey and the resolved pubkey matches the logged-in user,
-          // show all their repos (public and private) regardless of who owns them
-          if (isSearchingOwnPubkey && resolvedPubkey) {
-            // Check if the logged-in user is the owner or maintainer of this repo
-            try {
-              // Check if user is owner (event.pubkey matches resolvedPubkey)
-              if (event.pubkey.toLowerCase() === resolvedPubkey.toLowerCase()) {
-                canView = true; // User owns this repo
-              } else {
-                // Check if user is a maintainer
-                const { maintainers } = await maintainerService.getMaintainers(event.pubkey, repoId);
-                if (maintainers.some(m => m.toLowerCase() === resolvedPubkey.toLowerCase())) {
-                  canView = true; // User is a maintainer
-                }
-              }
-            } catch (err) {
-              logger.warn({ error: err, pubkey: event.pubkey, repo: repoId }, 'Failed to check maintainer status in pubkey search');
-              canView = false;
-            }
-          } else if (userPubkey) {
-            // Regular privacy check: check if logged-in user owns, maintains, or has bookmarked
-            try {
-              // Check if user is owner or maintainer
-              canView = await maintainerService.canView(userPubkey, event.pubkey, repoId);
-              
-              // If not owner/maintainer, check if user has bookmarked it
-              if (!canView) {
-                const { BookmarksService } = await import('$lib/services/nostr/bookmarks-service.js');
-                const bookmarksService = new BookmarksService(relays);
-                const repoAddress = `${KIND.REPO_ANNOUNCEMENT}:${event.pubkey}:${repoId}`;
-                canView = await bookmarksService.isBookmarked(userPubkey, repoAddress);
-              }
-            } catch (err) {
-              logger.warn({ error: err, pubkey: event.pubkey, repo: repoId }, 'Failed to check repo access in search');
-              canView = false;
-            }
-          }
-          // If no userPubkey and repo is private, canView remains false
-        }
-        
-        // Only include repos the user can view
-        if (!canView) continue;
-        
-        const name = event.tags.find(t => t[0] === 'name')?.[1] || '';
-        const description = event.tags.find(t => t[0] === 'description')?.[1] || '';
-
-        try {
-          const npub = nip19.npubEncode(event.pubkey);
-          
-          // Determine relationship to user
-          const isOwned = !!(userPubkey && event.pubkey.toLowerCase() === userPubkey.toLowerCase());
-          let isMaintained = false;
-          let allMaintainers: Array<{ pubkey: string; isOwner: boolean }> = [];
-          
-          // Fetch maintainers for this repo
-          try {
-            const { maintainers, owner } = await maintainerService.getMaintainers(event.pubkey, repoId);
-            
-            // Build maintainers list with owner flag, owner first
-            // The maintainers array from getMaintainers always includes the owner as the first element
-            // Use a Set to track which pubkeys we've already added (case-insensitive)
-            const seenPubkeys = new Set<string>();
-            const ownerLower = owner.toLowerCase();
-            
-            // Build the list: owner first, then other maintainers
-            allMaintainers = [];
-            
-            // Process all maintainers, marking owner and deduplicating
-            for (const maintainer of maintainers) {
-              const maintainerLower = maintainer.toLowerCase();
-              
-              // Skip if we've already added this pubkey (case-insensitive check)
-              if (seenPubkeys.has(maintainerLower)) {
-                continue;
-              }
-              
-              // Mark as seen
-              seenPubkeys.add(maintainerLower);
-              
-              // Determine if this is the owner
-              const isOwner = maintainerLower === ownerLower;
-              
-              // Add to list
-              allMaintainers.push({ 
-                pubkey: maintainer, 
-                isOwner 
-              });
-            }
-            
-            // Sort: owner first, then other maintainers
-            allMaintainers.sort((a, b) => {
-              if (a.isOwner && !b.isOwner) return -1;
-              if (!a.isOwner && b.isOwner) return 1;
-              return 0;
-            });
-            
-            // Ensure owner is always included (in case they weren't in maintainers list)
-            const hasOwner = allMaintainers.some(m => m.pubkey.toLowerCase() === ownerLower);
-            if (!hasOwner) {
-              allMaintainers.unshift({ pubkey: owner, isOwner: true });
-            }
-            
-            // Check if user is a maintainer (but not owner, since we already checked that)
-            if (userPubkey && !isOwned) {
-              isMaintained = maintainers.some(m => m.toLowerCase() === userPubkey.toLowerCase());
-            }
-          } catch (err) {
-            logger.warn({ error: err, pubkey: event.pubkey, repo: repoId }, 'Failed to fetch maintainers for search result');
-            // Fallback: just use owner
-            allMaintainers = [{ pubkey: event.pubkey, isOwner: true }];
-          }
-          
-          // Check if bookmarked
-          let isBookmarked = false;
-          if (userPubkey && bookmarkChecks.has(event.id)) {
-            const bookmarkCheck = bookmarkChecks.get(event.id);
-            if (bookmarkCheck) {
-              isBookmarked = await bookmarkCheck;
-            }
-          }
-          
-          // Store relationship for sorting
-          repoRelationships.set(event.id, {
-            isOwned,
-            isMaintained,
-            isBookmarked,
-            maintainers: allMaintainers
-          });
-          
-          results.repos.push({
-            id: event.id,
-            name: name || repoId,
-            description: description || '',
-            owner: event.pubkey,
-            npub,
-            repoId, // Include the actual repo ID (d-tag) for proper matching
-            maintainers: allMaintainers,
-            announcement: event // Include the full announcement event
-          });
-        } catch {
-          // Skip if npub encoding fails
-        }
-      }
-
-      // Sort by user relationship priority, then by relevance
-      // Priority: owned > maintained > bookmarked > others
-      // Within each group, sort by relevance (name matches first, then description)
-      results.repos.sort((a, b) => {
-        const aRel = repoRelationships.get(a.id) || { isOwned: false, isMaintained: false, isBookmarked: false };
-        const bRel = repoRelationships.get(b.id) || { isOwned: false, isMaintained: false, isBookmarked: false };
-        
-        // Priority 1: Owned repos first
-        if (aRel.isOwned && !bRel.isOwned) return -1;
-        if (!aRel.isOwned && bRel.isOwned) return 1;
-        
-        // Priority 2: Maintained repos (but not owned)
-        if (!aRel.isOwned && !bRel.isOwned) {
-          if (aRel.isMaintained && !bRel.isMaintained) return -1;
-          if (!aRel.isMaintained && bRel.isMaintained) return 1;
-        }
-        
-        // Priority 3: Bookmarked repos (but not owned or maintained)
-        if (!aRel.isOwned && !aRel.isMaintained && !bRel.isOwned && !bRel.isMaintained) {
-          if (aRel.isBookmarked && !bRel.isBookmarked) return -1;
-          if (!aRel.isBookmarked && bRel.isBookmarked) return 1;
-        }
-        
-        // Priority 4: Relevance (name matches first, then description)
-        const aNameMatch = a.name.toLowerCase().includes(searchLower);
-        const bNameMatch = b.name.toLowerCase().includes(searchLower);
-        if (aNameMatch && !bNameMatch) return -1;
-        if (!aNameMatch && bNameMatch) return 1;
-        
-        const aDescMatch = a.description.toLowerCase().includes(searchLower);
-        const bDescMatch = b.description.toLowerCase().includes(searchLower);
-        if (aDescMatch && !bDescMatch) return -1;
-        if (!aDescMatch && bDescMatch) return 1;
-        
-        return 0;
-      });
-
-    results.repos = results.repos.slice(0, limit);
-
+    // Limit results
+    const limitedResults = results.slice(0, limit);
+    
+    // Determine if we're showing cached results (relays still being checked)
+    const fromCache = cachedResults.length > 0 && relayResults.length === 0;
+    
     logger.info({ 
-      query: query.trim().substring(0, 50),
-      resultCount: results.repos.length,
-      total: results.repos.length,
-      relayCount: relays.length
+      query: queryTrimmed.substring(0, 50),
+      resultCount: limitedResults.length,
+      totalMatches: mergedResults.length,
+      fromCache
     }, 'Search completed');
-
+    
     return json({
-      query,
-      results,
-      total: results.repos.length
+      query: queryTrimmed,
+      results: {
+        repos: limitedResults
+      },
+      total: limitedResults.length,
+      fromCache: fromCache // Indicate if results are from cache (relays may still be checking)
     });
   } catch (err) {
     return handleApiError(err, { operation: 'search', query }, 'Failed to search');
   }
 };
+
+/**
+ * Fetch from relays using normal filters and NIP-50 search in parallel
+ * Returns both filtered results and all unfiltered repos for caching
+ */
+async function fetchFromRelays(
+  nostrClient: NostrClient,
+  queryTrimmed: string,
+  queryLower: string,
+  resolvedPubkey: string | null,
+  decodedAddress: ReturnType<typeof decodeNostrAddress> | null,
+  limit: number
+): Promise<{ filtered: NostrEvent[]; allRepos: NostrEvent[] }> {
+  const filters: NostrFilter[] = [];
+  
+  // Build normal filters based on query type
+  if (resolvedPubkey) {
+    // Search by owner pubkey
+    filters.push({
+      kinds: [KIND.REPO_ANNOUNCEMENT],
+      authors: [resolvedPubkey],
+      limit: limit * 2
+    });
+  }
+  
+  if (decodedAddress?.type === 'naddr') {
+    // Search by naddr (repo address)
+    const naddrPubkey = decodedAddress.pubkey;
+    const naddrIdentifier = decodedAddress.identifier;
+    if (naddrPubkey && naddrIdentifier) {
+      filters.push({
+        kinds: [KIND.REPO_ANNOUNCEMENT],
+        authors: [naddrPubkey],
+        '#d': [naddrIdentifier],
+        limit: limit * 2
+      });
+    }
+  }
+  
+  if (decodedAddress?.type === 'note' || decodedAddress?.type === 'nevent') {
+    // Search by event ID
+    const eventId = decodedAddress.id;
+    if (eventId) {
+      filters.push({
+        kinds: [KIND.REPO_ANNOUNCEMENT],
+        ids: [eventId],
+        limit: 1
+      });
+    }
+  }
+  
+  // Check if it's a hex event ID
+  if (/^[a-f0-9]{64}$/i.test(queryTrimmed)) {
+    filters.push({
+      kinds: [KIND.REPO_ANNOUNCEMENT],
+      ids: [queryTrimmed.toLowerCase()],
+      limit: 1
+    });
+  }
+  
+  // Check if query looks like a d-tag (repo name)
+  if (/^[a-zA-Z0-9_-]+$/.test(queryTrimmed)) {
+    filters.push({
+      kinds: [KIND.REPO_ANNOUNCEMENT],
+      '#d': [queryTrimmed],
+      limit: limit * 2
+    });
+  }
+  
+  // Always fetch all repos for text-based filtering (if not a specific identifier)
+  const isSpecificIdentifier = resolvedPubkey !== null || decodedAddress !== null || /^[a-f0-9]{64}$/i.test(queryTrimmed);
+  if (!isSpecificIdentifier) {
+    // Fetch all repos for client-side filtering
+    filters.push({
+      kinds: [KIND.REPO_ANNOUNCEMENT],
+      limit: 1000
+    });
+  }
+  
+  // Add NIP-50 search filter (for text queries)
+  if (!isSpecificIdentifier) {
+    filters.push({
+      kinds: [KIND.REPO_ANNOUNCEMENT],
+      search: queryTrimmed,
+      limit: limit * 2
+    });
+  }
+  
+  // Fetch from all filters in parallel (with error handling)
+  logger.debug({ filterCount: filters.length, query: queryTrimmed.substring(0, 50) }, 'Fetching from relays with filters');
+  const fetchPromises = filters.map((filter, index) => 
+    nostrClient.fetchEvents([filter])
+      .catch(err => {
+        logger.debug({ error: err, filterIndex: index, filter }, 'Failed to fetch events for filter');
+        return [] as NostrEvent[]; // Return empty array on error
+      })
+  );
+  const resultsArrays = await Promise.allSettled(fetchPromises);
+  
+  // Merge and deduplicate by event ID (all repos fetched)
+  const allReposMap = new Map<string, NostrEvent>();
+  for (const result of resultsArrays) {
+    if (result.status === 'fulfilled') {
+      const results = result.value;
+      for (const event of results) {
+        const existing = allReposMap.get(event.id);
+        if (!existing || event.created_at > existing.created_at) {
+          allReposMap.set(event.id, event);
+        }
+      }
+    } else {
+      logger.debug({ error: result.reason }, 'Filter fetch rejected');
+    }
+  }
+  
+  const allRepos = Array.from(allReposMap.values());
+  
+  // Filter results based on query (for text-based searches)
+  let filteredResults = allRepos;
+  
+  if (!isSpecificIdentifier) {
+    // Apply client-side filtering for text queries
+    filteredResults = filterRepos(allRepos, queryTrimmed, queryLower, resolvedPubkey, decodedAddress);
+  }
+  
+  return { filtered: filteredResults, allRepos };
+}
+
+/**
+ * Filter repos based on query
+ */
+function filterRepos(
+  repos: NostrEvent[],
+  queryTrimmed: string,
+  queryLower: string,
+  resolvedPubkey: string | null,
+  decodedAddress: ReturnType<typeof decodeNostrAddress> | null
+): NostrEvent[] {
+  return repos.filter(event => {
+    // Extract repo fields
+    const repoId = event.tags.find(t => t[0] === 'd')?.[1] || '';
+    const name = event.tags.find(t => t[0] === 'name')?.[1] || '';
+    const title = event.tags.find(t => t[0] === 'title')?.[1] || '';
+    const description = event.tags.find(t => t[0] === 'description')?.[1] || '';
+    const summary = event.tags.find(t => t[0] === 'summary')?.[1] || '';
+    const content = event.content || '';
+    
+    // Check if query matches event ID (hex or note1)
+    if (decodedAddress?.type === 'note' || decodedAddress?.type === 'nevent') {
+      const eventId = decodedAddress.id;
+      if (eventId && event.id.toLowerCase() === eventId.toLowerCase()) {
+        return true;
+      }
+    }
+    
+    // Check if query matches hex event ID
+    if (/^[a-f0-9]{64}$/i.test(queryTrimmed) && event.id.toLowerCase() === queryTrimmed.toLowerCase()) {
+      return true;
+    }
+    
+    // Check if query matches naddr (repo address)
+    if (decodedAddress?.type === 'naddr') {
+      const naddrPubkey = decodedAddress.pubkey;
+      const naddrIdentifier = decodedAddress.identifier;
+      if (naddrPubkey && naddrIdentifier &&
+          event.pubkey.toLowerCase() === naddrPubkey.toLowerCase() && 
+          repoId.toLowerCase() === naddrIdentifier.toLowerCase()) {
+        return true;
+      }
+    }
+    
+    // Check if query matches owner pubkey
+    if (resolvedPubkey && event.pubkey.toLowerCase() === resolvedPubkey.toLowerCase()) {
+      return true;
+    }
+    
+    // Check if query matches maintainer
+    if (resolvedPubkey) {
+      for (const tag of event.tags) {
+        if (tag[0] === 'maintainers') {
+          for (let i = 1; i < tag.length; i++) {
+            const maintainer = tag[i];
+            if (!maintainer || typeof maintainer !== 'string') continue;
+            
+            let maintainerPubkey = maintainer;
+            try {
+              const decoded = nip19.decode(maintainer);
+              if (decoded.type === 'npub') {
+                maintainerPubkey = decoded.data as string;
+              }
+            } catch {
+              // Assume hex
+            }
+            
+            if (maintainerPubkey.toLowerCase() === resolvedPubkey.toLowerCase()) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+    
+    // Check d-tag (repo ID) - exact match first, then partial
+    if (repoId) {
+      if (repoId.toLowerCase() === queryLower) {
+        return true; // Exact d-tag match
+      }
+      if (repoId.toLowerCase().includes(queryLower)) {
+        return true; // Partial d-tag match
+      }
+    }
+    
+    // Check text fields: name, title, description, summary, content
+    if (name.toLowerCase().includes(queryLower) ||
+        title.toLowerCase().includes(queryLower) ||
+        description.toLowerCase().includes(queryLower) ||
+        summary.toLowerCase().includes(queryLower) ||
+        content.toLowerCase().includes(queryLower)) {
+      return true;
+    }
+    
+    // Check t-tags (topics) - exact match first, then partial
+    for (const tag of event.tags) {
+      if (tag[0] === 't' && tag[1]) {
+        const topic = tag[1].toLowerCase();
+        if (topic === queryLower) {
+          return true; // Exact t-tag match
+        }
+        if (topic.includes(queryLower)) {
+          return true; // Partial t-tag match
+        }
+      }
+    }
+    
+    // Check other common tags
+    // Check 'r' tags (references, including earliest unique commit)
+    for (const tag of event.tags) {
+      if (tag[0] === 'r' && tag[1] && tag[1].toLowerCase().includes(queryLower)) {
+        return true;
+      }
+    }
+    
+    // Check 'web' tags (website URLs)
+    for (const tag of event.tags) {
+      if (tag[0] === 'web' && tag[1] && tag[1].toLowerCase().includes(queryLower)) {
+        return true;
+      }
+    }
+    
+    // Check clone URLs
+    for (const tag of event.tags) {
+      if (tag[0] === 'clone') {
+        for (let i = 1; i < tag.length; i++) {
+          const cloneUrl = tag[i];
+          if (cloneUrl && typeof cloneUrl === 'string' && cloneUrl.toLowerCase().includes(queryLower)) {
+            return true;
+          }
+        }
+      }
+    }
+    
+    return false;
+  });
+}
