@@ -1439,17 +1439,32 @@ span.clone-more {
   flex-shrink: 0;
 }
 
+.issues-content,
+.prs-content,
 .patches-content,
-.discussions-content {
+.discussions-content,
+.tags-content,
+.docs-content,
+.commits-content {
   padding: 1rem;
   flex: 1;
   overflow-y: auto;
 }
 
+.patch-header,
+.issue-header {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
 .patch-subject,
+.issue-subject,
 .discussion-title {
   font-weight: 600;
   color: var(--text-primary);
+  width: 100%;
+  word-wrap: break-word;
 }
 
 .patch-meta,
@@ -1481,12 +1496,105 @@ span.clone-more {
 }
 
 .patch-meta-detail,
-.discussion-meta-detail {
+.discussion-meta-detail,
+.commit-meta-detail {
   display: flex;
   gap: 1rem;
   align-items: center;
   font-size: 0.875rem;
   color: var(--text-secondary);
+}
+
+.commit-detail {
+  margin-bottom: 1rem;
+}
+
+.commit-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+}
+
+.commit-detail-header h3 {
+  margin: 0;
+  flex: 1;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.diff-view {
+  margin-top: 1.5rem;
+}
+
+.diff-file {
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.375rem;
+  overflow: hidden;
+}
+
+.diff-file-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.diff-file-name {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.diff-stats {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.diff-stats .additions {
+  color: #22c55e;
+}
+
+.diff-stats .deletions {
+  color: #ef4444;
+}
+
+.diff-content {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  background: var(--bg-primary);
+  overflow-x: auto;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.close-button {
+  padding: 0.25rem 0.5rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 0.25rem;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 1.25rem;
+  line-height: 1;
+  transition: background 0.2s ease;
+}
+
+.close-button:hover {
+  background: var(--bg-hover);
+}
+
+.patch-description {
+  font-style: italic;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-color);
 }
 
 .patch-body {
@@ -1531,7 +1639,8 @@ span.clone-more {
 }
 
 .patch-item-button,
-.discussion-item-button {
+.discussion-item-button,
+.issue-item-button {
   width: 100%;
   padding: 0.75rem 1rem;
   text-align: left;
@@ -1540,15 +1649,21 @@ span.clone-more {
   cursor: pointer;
   color: inherit;
   transition: background 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
 }
 
 .patch-item:not(.selected) .patch-item-button:hover,
-.discussion-item:not(.selected) .discussion-item-button:hover {
+.discussion-item:not(.selected) .discussion-item-button:hover,
+.issue-item:not(.selected) .issue-item-button:hover {
   background: var(--bg-tertiary);
 }
 
 .patch-item.selected .patch-item-button,
-.discussion-item.selected .discussion-item-button {
+.discussion-item.selected .discussion-item-button,
+.issue-item.selected .issue-item-button {
   background: var(--accent);
   color: var(--text-on-accent);
 }

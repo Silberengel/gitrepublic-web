@@ -314,13 +314,16 @@
   let announcementEventId = $state<string | null>(null);
 
   // Issues
-  let issues = $state<Array<{ id: string; subject: string; content: string; status: string; author: string; created_at: number; kind: number }>>([]);
+  let issues = $state<Array<{ id: string; subject: string; content: string; status: string; author: string; created_at: number; kind: number; tags?: string[][] }>>([]);
   let loadingIssues = $state(false);
   let showCreateIssueDialog = $state(false);
   let newIssueSubject = $state('');
   let newIssueContent = $state('');
   let newIssueLabels = $state<string[]>(['']);
   let updatingIssueStatus = $state<Record<string, boolean>>({});
+  let selectedIssue = $state<string | null>(null);
+  let issueReplies = $state<Array<{ id: string; content: string; author: string; created_at: number; tags: string[][] }>>([]);
+  let loadingIssueReplies = $state(false);
 
   // Pull Requests
   let prs = $state<Array<{ id: string; subject: string; content: string; status: string; author: string; created_at: number; commitId?: string; kind: number }>>([]);
@@ -370,7 +373,7 @@
   });
 
   // Patches
-  let patches = $state<Array<{ id: string; subject: string; content: string; author: string; created_at: number; kind: number }>>([]);
+  let patches = $state<Array<{ id: string; subject: string; content: string; author: string; created_at: number; kind: number; description?: string; tags?: string[][] }>>([]);
   let loadingPatches = $state(false);
   let selectedPatch = $state<string | null>(null);
   let showCreatePatchDialog = $state(false);
@@ -3907,6 +3910,9 @@
   }
 
   async function viewDiff(commitHash: string) {
+    // Set selected commit immediately so it shows in the right panel
+    selectedCommit = commitHash;
+    showDiff = false; // Start with false, will be set to true when diff loads
     loadingCommits = true;
     error = null;
     try {
@@ -3922,7 +3928,6 @@
       });
       if (response.ok) {
         diffData = await response.json();
-        selectedCommit = commitHash;
         showDiff = true;
       }
     } catch (err) {
@@ -4008,8 +4013,14 @@
           status: issue.status || 'open',
           author: issue.pubkey,
           created_at: issue.created_at,
-          kind: issue.kind || KIND.ISSUE
+          kind: issue.kind || KIND.ISSUE,
+          tags: issue.tags || []
         }));
+        // Auto-select first issue if none selected
+        if (issues.length > 0 && !selectedIssue) {
+          selectedIssue = issues[0].id;
+          loadIssueReplies(issues[0].id);
+        }
       } else {
         // Handle non-OK responses
         const errorText = await response.text().catch(() => response.statusText);
@@ -4036,6 +4047,32 @@
       error = errorMessage;
     } finally {
       loadingIssues = false;
+    }
+  }
+
+  async function loadIssueReplies(issueId: string) {
+    loadingIssueReplies = true;
+    try {
+      const replies = await nostrClient.fetchEvents([
+        {
+          kinds: [KIND.COMMENT],
+          '#e': [issueId],
+          limit: 100
+        }
+      ]) as NostrEvent[];
+      
+      issueReplies = replies.map(reply => ({
+        id: reply.id,
+        content: reply.content,
+        author: reply.pubkey,
+        created_at: reply.created_at,
+        tags: reply.tags || []
+      })).sort((a, b) => a.created_at - b.created_at);
+    } catch (err) {
+      console.error('[Issues] Error loading replies:', err);
+      issueReplies = [];
+    } finally {
+      loadingIssueReplies = false;
     }
   }
 
@@ -4296,14 +4333,45 @@
       });
       if (response.ok) {
         const data = await response.json();
-        patches = data.map((patch: { id: string; tags: string[][]; content: string; pubkey: string; created_at: number; kind?: number }) => ({
-          id: patch.id,
-          subject: patch.tags.find((t: string[]) => t[0] === 'subject')?.[1] || 'Untitled',
-          content: patch.content,
-          author: patch.pubkey,
-          created_at: patch.created_at,
-          kind: patch.kind || KIND.PATCH
-        }));
+        patches = data.map((patch: { id: string; tags: string[][]; content: string; pubkey: string; created_at: number; kind?: number }) => {
+          // Extract subject/title from various sources
+          let subject = patch.tags.find((t: string[]) => t[0] === 'subject')?.[1];
+          const description = patch.tags.find((t: string[]) => t[0] === 'description')?.[1];
+          const alt = patch.tags.find((t: string[]) => t[0] === 'alt')?.[1];
+          
+          // If no subject tag, try description or alt
+          if (!subject) {
+            if (description) {
+              subject = description.trim();
+            } else if (alt) {
+              // Remove "git patch: " prefix if present
+              subject = alt.replace(/^git patch:\s*/i, '').trim();
+            } else {
+              // Try to extract from patch content (git patch format)
+              const subjectMatch = patch.content.match(/^Subject:\s*\[PATCH[^\]]*\]\s*(.+)$/m);
+              if (subjectMatch) {
+                subject = subjectMatch[1].trim();
+              } else {
+                // Try simpler Subject: line
+                const simpleSubjectMatch = patch.content.match(/^Subject:\s*(.+)$/m);
+                if (simpleSubjectMatch) {
+                  subject = simpleSubjectMatch[1].trim();
+                }
+              }
+            }
+          }
+          
+          return {
+            id: patch.id,
+            subject: subject || 'Untitled',
+            content: patch.content,
+            author: patch.pubkey,
+            created_at: patch.created_at,
+            kind: patch.kind || KIND.PATCH,
+            description: description?.trim(),
+            tags: patch.tags || []
+          };
+        });
       }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load patches';
@@ -4835,22 +4903,6 @@
             <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
           </button>
         </div>
-        {#if tags.length > 0}
-          <ul class="tag-list">
-            {#each tags as tag}
-              {@const tagHash = tag.hash || ''}
-              {#if tagHash}
-                <li class="tag-item">
-                  <div class="tag-name">{tag.name}</div>
-                  <div class="tag-hash">{tagHash.slice(0, 7)}</div>
-                  {#if tag.message}
-                    <div class="tag-message">{tag.message}</div>
-                  {/if}
-                </li>
-              {/if}
-            {/each}
-          </ul>
-        {/if}
       </aside>
       {/if}
 
@@ -4885,34 +4937,21 @@
         {:else if issues.length > 0}
           <ul class="issue-list">
             {#each issues as issue}
-              <li class="issue-item">
-                <div class="issue-header">
-                  <span class="issue-status" class:open={issue.status === 'open'} class:closed={issue.status === 'closed'} class:resolved={issue.status === 'resolved'}>
-                    {issue.status}
-                  </span>
-                  <span class="issue-subject">{issue.subject}</span>
-                </div>
-                <div class="issue-meta">
-                  <span>#{issue.id.slice(0, 7)}</span>
-                  <span>{new Date(issue.created_at * 1000).toLocaleDateString()}</span>
-                  <EventCopyButton eventId={issue.id} kind={issue.kind} pubkey={issue.author} />
-                </div>
-                {#if userPubkeyHex && (isMaintainer || userPubkeyHex === issue.author)}
-                  <div class="issue-actions">
-                    {#if issue.status === 'open'}
-                      <button onclick={() => updateIssueStatus(issue.id, issue.author, 'closed')} disabled={updatingIssueStatus[issue.id]} class="issue-action-btn close-btn">
-                        {updatingIssueStatus[issue.id] ? 'Closing...' : 'Close'}
-                      </button>
-                      <button onclick={() => updateIssueStatus(issue.id, issue.author, 'resolved')} disabled={updatingIssueStatus[issue.id]} class="issue-action-btn resolve-btn">
-                        {updatingIssueStatus[issue.id] ? 'Resolving...' : 'Resolve'}
-                      </button>
-                    {:else if issue.status === 'closed' || issue.status === 'resolved'}
-                      <button onclick={() => updateIssueStatus(issue.id, issue.author, 'open')} disabled={updatingIssueStatus[issue.id]} class="issue-action-btn reopen-btn">
-                        {updatingIssueStatus[issue.id] ? 'Reopening...' : 'Reopen'}
-                      </button>
-                    {/if}
+              <li class="issue-item" class:selected={selectedIssue === issue.id}>
+                <button 
+                  onclick={() => {
+                    selectedIssue = issue.id;
+                    loadIssueReplies(issue.id);
+                  }}
+                  class="issue-item-button"
+                >
+                  <div class="issue-header">
+                    <span class="issue-status" class:open={issue.status === 'open'} class:closed={issue.status === 'closed'} class:resolved={issue.status === 'resolved'}>
+                      {issue.status}
+                    </span>
                   </div>
-                {/if}
+                  <div class="issue-subject">{issue.subject}</div>
+                </button>
               </li>
             {/each}
           </ul>
@@ -5286,61 +5325,97 @@
           </div>
         {/if}
 
-        {#if activeTab === 'history' && showDiff}
-          <div class="content-header-mobile">
-            <button 
-              onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-              class="mobile-toggle-button"
-              title="Show list"
-            >
-              <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
-            </button>
-          </div>
-          <div class="diff-view">
-            <div class="diff-header">
-              <h3>Diff for commit {selectedCommit?.slice(0, 7)}</h3>
-              <button onclick={() => { showDiff = false; selectedCommit = null; }} class="close-button">×</button>
+        {#if activeTab === 'history'}
+          <div class="commits-content" class:hide-on-mobile={showLeftPanelOnMobile && activeTab === 'history'}>
+            <div class="content-header-mobile">
+              <button 
+                onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+                class="mobile-toggle-button"
+                title="Show list"
+              >
+                <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
+              </button>
             </div>
-            {#each diffData as diff}
-              <div class="diff-file">
-                <div class="diff-file-header">
-                  <span class="diff-file-name">{diff.file}</span>
-                  <span class="diff-stats">
-                    <span class="additions">+{diff.additions}</span>
-                    <span class="deletions">-{diff.deletions}</span>
-                  </span>
+            {#if selectedCommit}
+              {@const commit = commits.find(c => (c.hash || (c as any).sha) === selectedCommit)}
+              {#if commit}
+                <div class="commit-detail">
+                  <div class="commit-detail-header">
+                    <h3>{commit.message || 'No message'}</h3>
+                    <button onclick={() => { showDiff = false; selectedCommit = null; }} class="close-button">×</button>
+                  </div>
+                  <div class="commit-meta-detail">
+                    <span>#{selectedCommit.slice(0, 7)}</span>
+                    <span>{commit.author || 'Unknown'}</span>
+                    <span>{commit.date ? new Date(commit.date).toLocaleString() : 'Unknown date'}</span>
+                  </div>
+                  {#if loadingCommits}
+                    <div class="loading">Loading diff...</div>
+                  {:else if showDiff && diffData.length > 0}
+                    <div class="diff-view">
+                      {#each diffData as diff}
+                        <div class="diff-file">
+                          <div class="diff-file-header">
+                            <span class="diff-file-name">{diff.file}</span>
+                            <span class="diff-stats">
+                              <span class="additions">+{diff.additions}</span>
+                              <span class="deletions">-{diff.deletions}</span>
+                            </span>
+                          </div>
+                          <pre class="diff-content"><code>{diff.diff}</code></pre>
+                        </div>
+                      {/each}
+                    </div>
+                  {:else if showDiff}
+                    <div class="empty-state">
+                      <p>No diff data available</p>
+                    </div>
+                  {:else}
+                    <div class="empty-state">
+                      <p>Loading diff...</p>
+                    </div>
+                  {/if}
                 </div>
-                <pre class="diff-content"><code>{diff.diff}</code></pre>
+              {/if}
+            {:else}
+              <div class="empty-state">
+                <p>Select a commit from the sidebar to view details</p>
               </div>
-            {/each}
-          </div>
-        {:else if activeTab === 'history'}
-          <div class="content-header-mobile">
-            <button 
-              onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-              class="mobile-toggle-button"
-              title="Show list"
-            >
-              <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
-            </button>
-          </div>
-          <div class="empty-state">
-            <p>Select a commit to view its diff</p>
+            {/if}
           </div>
         {/if}
 
         {#if activeTab === 'tags'}
-          <div class="content-header-mobile">
-            <button 
-              onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-              class="mobile-toggle-button"
-              title="Show list"
-            >
-              <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
-            </button>
-          </div>
-          <div class="empty-state">
-            <p>Tags are displayed in the sidebar</p>
+          <div class="tags-content" class:hide-on-mobile={showLeftPanelOnMobile && activeTab === 'tags'}>
+            <div class="content-header-mobile">
+              <button 
+                onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+                class="mobile-toggle-button"
+                title="Show list"
+              >
+                <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
+              </button>
+            </div>
+            {#if tags.length > 0}
+              <ul class="tag-list">
+                {#each tags as tag}
+                  {@const tagHash = tag.hash || ''}
+                  {#if tagHash}
+                    <li class="tag-item">
+                      <div class="tag-name">{tag.name}</div>
+                      <div class="tag-hash">{tagHash.slice(0, 7)}</div>
+                      {#if tag.message}
+                        <div class="tag-message">{tag.message}</div>
+                      {/if}
+                    </li>
+                  {/if}
+                {/each}
+              </ul>
+            {:else}
+              <div class="empty-state">
+                <p>No tags found</p>
+              </div>
+            {/if}
           </div>
         {/if}
 
@@ -5368,21 +5443,69 @@
               <div class="empty-state">
                 <p>No issues found. Create one to get started!</p>
               </div>
-            {:else}
-              {#each issues as issue}
+            {:else if selectedIssue}
+              {@const issue = issues.find(i => i.id === selectedIssue)}
+              {#if issue}
                 <div class="issue-detail">
                   <h3>{issue.subject}</h3>
                   <div class="issue-meta-detail">
                     <span class="issue-status" class:open={issue.status === 'open'} class:closed={issue.status === 'closed'} class:resolved={issue.status === 'resolved'}>
                       {issue.status}
                     </span>
+                    <span>#{issue.id.slice(0, 7)}</span>
                     <span>Created {new Date(issue.created_at * 1000).toLocaleString()}</span>
+                    <EventCopyButton eventId={issue.id} kind={issue.kind} pubkey={issue.author} />
                   </div>
                   <div class="issue-body">
                     {@html issue.content.replace(/\n/g, '<br>')}
                   </div>
+                  
+                  {#if userPubkeyHex && (isMaintainer || userPubkeyHex === issue.author)}
+                    <div class="issue-actions">
+                      {#if issue.status === 'open'}
+                        <button onclick={() => updateIssueStatus(issue.id, issue.author, 'closed')} disabled={updatingIssueStatus[issue.id]} class="issue-action-btn close-btn">
+                          {updatingIssueStatus[issue.id] ? 'Closing...' : 'Close'}
+                        </button>
+                        <button onclick={() => updateIssueStatus(issue.id, issue.author, 'resolved')} disabled={updatingIssueStatus[issue.id]} class="issue-action-btn resolve-btn">
+                          {updatingIssueStatus[issue.id] ? 'Resolving...' : 'Resolve'}
+                        </button>
+                      {:else if issue.status === 'closed' || issue.status === 'resolved'}
+                        <button onclick={() => updateIssueStatus(issue.id, issue.author, 'open')} disabled={updatingIssueStatus[issue.id]} class="issue-action-btn reopen-btn">
+                          {updatingIssueStatus[issue.id] ? 'Reopening...' : 'Reopen'}
+                        </button>
+                      {/if}
+                    </div>
+                  {/if}
+                  
+                  <div class="issue-replies">
+                    <h4>Replies ({issueReplies.length})</h4>
+                    {#if loadingIssueReplies}
+                      <div class="loading">Loading replies...</div>
+                    {:else if issueReplies.length === 0}
+                      <div class="empty-state">
+                        <p>No replies yet.</p>
+                      </div>
+                    {:else}
+                      {#each issueReplies as reply}
+                        <div class="issue-reply">
+                          <div class="reply-header">
+                            <UserBadge pubkey={reply.author} />
+                            <span class="reply-date">{new Date(reply.created_at * 1000).toLocaleString()}</span>
+                            <EventCopyButton eventId={reply.id} kind={KIND.COMMENT} pubkey={reply.author} />
+                          </div>
+                          <div class="reply-body">
+                            {@html reply.content.replace(/\n/g, '<br>')}
+                          </div>
+                        </div>
+                      {/each}
+                    {/if}
+                  </div>
                 </div>
-              {/each}
+              {/if}
+            {:else}
+              <div class="empty-state">
+                <p>Select an issue to view details</p>
+              </div>
             {/if}
           </div>
         {/if}
@@ -5476,6 +5599,9 @@
                     <span>Created {new Date(patch.created_at * 1000).toLocaleString()}</span>
                     <EventCopyButton eventId={patch.id} kind={patch.kind} pubkey={patch.author} />
                   </div>
+                  {#if patch.description && patch.description !== patch.subject}
+                    <div class="patch-description">{patch.description}</div>
+                  {/if}
                   <div class="patch-body">
                     <pre class="patch-content">{patch.content}</pre>
                   </div>
