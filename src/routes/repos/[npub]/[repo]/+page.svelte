@@ -4010,9 +4010,30 @@
           created_at: issue.created_at,
           kind: issue.kind || KIND.ISSUE
         }));
+      } else {
+        // Handle non-OK responses
+        const errorText = await response.text().catch(() => response.statusText);
+        let errorMessage = `Failed to load issues: ${response.status} ${response.statusText}`;
+        try {
+          const errorData = JSON.parse(errorText);
+          if (errorData.message) {
+            errorMessage = errorData.message;
+          }
+        } catch {
+          // If parsing fails, use the text as-is
+          if (errorText) {
+            errorMessage = errorText;
+          }
+        }
+        console.error('[Issues] Failed to load:', errorMessage);
+        error = errorMessage;
+        // Don't clear issues array - keep existing issues if any
+        // issues = []; // Only clear if you want to show empty state on error
       }
     } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to load issues';
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load issues';
+      console.error('[Issues] Error loading issues:', err);
+      error = errorMessage;
     } finally {
       loadingIssues = false;
     }
@@ -5334,7 +5355,16 @@
                 <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
               </button>
             </div>
-            {#if issues.length === 0}
+            {#if loadingIssues}
+              <div class="empty-state">
+                <p>Loading issues...</p>
+              </div>
+            {:else if error}
+              <div class="empty-state error-state">
+                <p>Error loading issues: {error}</p>
+                <button onclick={loadIssues} class="retry-button">Retry</button>
+              </div>
+            {:else if issues.length === 0}
               <div class="empty-state">
                 <p>No issues found. Create one to get started!</p>
               </div>

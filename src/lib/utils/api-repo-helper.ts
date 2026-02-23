@@ -142,7 +142,11 @@ export async function tryApiFetch(
           total: sortedUrls.length
         }, `[${i + 1}/${sortedUrls.length}] API fetch threw error for URL, trying next`);
         // Continue to next URL
-        continue;
+      }
+      
+      // Add a small delay between attempts to avoid hammering APIs (except after the last attempt)
+      if (i < sortedUrls.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay
       }
     }
     

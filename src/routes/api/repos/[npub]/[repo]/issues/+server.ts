@@ -15,10 +15,26 @@ import { maintainerService } from '$lib/services/service-registry.js';
 import { KIND, type NostrEvent } from '$lib/types/nostr.js';
 import { verifyEvent } from 'nostr-tools';
 import { validatePubkey } from '$lib/utils/input-validation.js';
+import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
 
 export const GET: RequestHandler = createRepoGetHandler(
   async (context: RepoRequestContext) => {
-    const issues = await issuesService.getIssues(context.repoOwnerPubkey, context.repo);
+    // Fetch the announcement to get the actual repo name (case-sensitive from d tag)
+    // This ensures we match issues that use the exact repo name from the announcement
+    const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, context.repoOwnerPubkey, eventCache);
+    const announcement = findRepoAnnouncement(allEvents, context.repo);
+    
+    // Use the repo name from the announcement's d tag if found, otherwise fall back to URL parameter
+    let actualRepoName = context.repo;
+    if (announcement) {
+      const dTag = announcement.tags.find(t => t[0] === 'd')?.[1];
+      if (dTag) {
+        actualRepoName = dTag;
+      }
+    }
+    
+    const issues = await issuesService.getIssues(context.repoOwnerPubkey, actualRepoName);
     return json(issues);
   },
   { operation: 'getIssues', requireRepoExists: false, requireRepoAccess: false } // Issues are stored in Nostr, don't require local repo

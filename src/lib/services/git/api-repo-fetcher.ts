@@ -187,25 +187,99 @@ async function fetchFromGitHub(owner: string, repo: string): Promise<Partial<Api
     
     if (githubToken) {
       headers['Authorization'] = `Bearer ${githubToken}`;
+      logger.debug({ owner, repo, hasToken: true }, 'Using GitHub token for API request');
+    } else {
+      logger.debug({ owner, repo, hasToken: false }, 'No GitHub token found - using unauthenticated requests (rate limited)');
     }
 
     const repoResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers });
+    
+    // Check rate limit headers
+    const rateLimitRemaining = repoResponse.headers.get('X-RateLimit-Remaining');
+    const rateLimitReset = repoResponse.headers.get('X-RateLimit-Reset');
+    
     if (!repoResponse.ok) {
       if (repoResponse.status === 404) {
+        logger.debug({ owner, repo }, 'GitHub repository not found (404)');
         return null;
       }
-      logger.warn({ status: repoResponse.status, owner, repo }, 'GitHub API error');
+      
+      // Handle rate limiting (403 or 429)
+      if (repoResponse.status === 403 || repoResponse.status === 429) {
+        const rateLimitInfo = {
+          remaining: rateLimitRemaining ? parseInt(rateLimitRemaining, 10) : null,
+          reset: rateLimitReset ? new Date(parseInt(rateLimitReset, 10) * 1000).toISOString() : null,
+          hasToken: !!githubToken
+        };
+        
+        // Try to get error message from response
+        let errorMessage = 'Rate limit exceeded or forbidden';
+        try {
+          const errorData = await repoResponse.json().catch(() => ({}));
+          if (errorData.message) {
+            errorMessage = errorData.message;
+          }
+        } catch {
+          // Ignore JSON parse errors
+        }
+        
+        logger.warn({ 
+          status: repoResponse.status, 
+          owner, 
+          repo, 
+          rateLimitInfo,
+          errorMessage 
+        }, 'GitHub API rate limit or forbidden error');
+        
+        // If we have a token but still got 403, it might be an auth issue
+        if (repoResponse.status === 403 && githubToken) {
+          logger.warn({ owner, repo }, 'GitHub API returned 403 with token - token may be invalid or lack permissions');
+        }
+        
+        return null;
+      }
+      
+      logger.warn({ 
+        status: repoResponse.status, 
+        owner, 
+        repo,
+        rateLimitRemaining,
+        hasToken: !!githubToken
+      }, 'GitHub API error');
       return null;
     }
 
     const repoData = await repoResponse.json();
     const defaultBranch = repoData.default_branch || 'main';
+    
+    // Get the default branch SHA for tree API (tree endpoint needs SHA, not branch name)
+    let defaultBranchSha: string | null = null;
+    try {
+      const branchResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/branches/${defaultBranch}`, { headers });
+      if (branchResponse.ok) {
+        const branchData = await branchResponse.json();
+        defaultBranchSha = branchData.commit?.sha || null;
+      }
+    } catch (err) {
+      logger.debug({ error: err, owner, repo, branch: defaultBranch }, 'Failed to get default branch SHA, will try branch name');
+    }
 
     // Fetch branches, commits, and tree in parallel
+    // Use SHA if available, otherwise fall back to branch name
+    const treeRef = defaultBranchSha || defaultBranch;
     const [branchesResponse, commitsResponse, treeResponse] = await Promise.all([
-      fetch(`https://api.github.com/repos/${owner}/${repo}/branches`, { headers }).catch(() => null),
-      fetch(`https://api.github.com/repos/${owner}/${repo}/commits?per_page=10`, { headers }).catch(() => null),
-      fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${defaultBranch}?recursive=1`, { headers }).catch(() => null)
+      fetch(`https://api.github.com/repos/${owner}/${repo}/branches`, { headers }).catch((err) => {
+        logger.debug({ error: err, owner, repo }, 'Failed to fetch branches from GitHub');
+        return null;
+      }),
+      fetch(`https://api.github.com/repos/${owner}/${repo}/commits?per_page=10`, { headers }).catch((err) => {
+        logger.debug({ error: err, owner, repo }, 'Failed to fetch commits from GitHub');
+        return null;
+      }),
+      fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${treeRef}?recursive=1`, { headers }).catch((err) => {
+        logger.debug({ error: err, owner, repo, treeRef }, 'Failed to fetch tree from GitHub');
+        return null;
+      })
     ]);
 
     const branches: ApiBranch[] = branchesResponse?.ok 
@@ -231,20 +305,29 @@ async function fetchFromGitHub(owner: string, repo: string): Promise<Partial<Api
 
     let files: ApiFile[] = [];
     if (treeResponse?.ok) {
-      const treeData = await treeResponse.json();
-      // Check if the tree was truncated (GitHub API limitation)
-      if (treeData.truncated) {
-        logger.warn({ owner, repo }, 'GitHub tree response was truncated, some files may be missing');
-        // For truncated trees, we could make additional requests, but for now just log a warning
+      try {
+        const treeData = await treeResponse.json();
+        // Check if the tree was truncated (GitHub API limitation)
+        if (treeData.truncated) {
+          logger.warn({ owner, repo }, 'GitHub tree response was truncated, some files may be missing');
+          // For truncated trees, we could make additional requests, but for now just log a warning
+        }
+        files = treeData.tree
+          ?.filter((item: any) => item.type === 'blob' || item.type === 'tree')
+          .map((item: any) => ({
+            name: item.path.split('/').pop(),
+            path: item.path,
+            type: item.type === 'tree' ? 'dir' : 'file',
+            size: item.size
+          })) || [];
+      } catch (err) {
+        logger.warn({ error: err, owner, repo, treeRef }, 'Failed to parse GitHub tree response');
+        files = [];
       }
-      files = treeData.tree
-        ?.filter((item: any) => item.type === 'blob' || item.type === 'tree')
-        .map((item: any) => ({
-          name: item.path.split('/').pop(),
-          path: item.path,
-          type: item.type === 'tree' ? 'dir' : 'file',
-          size: item.size
-        })) || [];
+    } else if (treeResponse) {
+      // Tree response exists but not OK - log the error
+      const status = treeResponse.status;
+      logger.debug({ status, owner, repo, treeRef }, 'GitHub tree API returned non-OK status');
     }
 
     // Try to fetch README
