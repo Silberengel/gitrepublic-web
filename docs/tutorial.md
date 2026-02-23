@@ -177,6 +177,8 @@ This automatically configures the credential helper and commit signing hook. See
 
 If a repository has multiple clone URLs configured, GitRepublic will automatically sync changes to all remotes when you push. You can see all clone URLs on the repository page.
 
+For information about GRASP (Git Repository Announcement and Synchronization Protocol) support, including how to work with GRASP servers, see [GRASP.md](./GRASP.md).
+
 ---
 
 ## Making Changes and Pushing
@@ -824,47 +826,44 @@ See the [NIP-34 documentation](/docs/nip34) for full details.
 
 ### GRASP Protocol Support
 
-GitRepublic supports the [GRASP (Git Repository Announcement and Synchronization Protocol)](https://gitworkshop.dev/npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr/grasp) for interoperability with other git hosting services built on Nostr.
+GitRepublic provides **minimal GRASP (Git Repository Announcement and Synchronization Protocol) interoperability** for seamless compatibility with GRASP servers.
 
 **What is GRASP?**
 
-GRASP is a protocol that extends NIP-34 to provide a standardized way for git repositories to be announced, synchronized, and managed across different hosting providers. GRASP servers implement additional NIP-34 event kinds (such as patches, pull request updates, repository state tracking, and user grasp lists) that enable more advanced collaboration features.
+GRASP is a protocol specification for decentralized git hosting that combines git smart HTTP with Nostr relays. GRASP servers provide git repository hosting with Nostr-based announcements and state management.
 
-**How GitRepublic Supports GRASP:**
+**What GitRepublic Supports:**
 
-While GitRepublic is directly git-based and doesn't require all NIP-34 features to function, we fully support repositories hosted on GRASP servers:
+1. **GRASP Server Detection**: Automatically identifies GRASP servers from repository announcements using GRASP-01 identification (clone URL pattern + matching `relays` tag)
 
-1. **Multi-Remote Synchronization**: When you create a repository announcement with multiple `clone` URLs (including GRASP server URLs), GitRepublic automatically:
-   - Syncs from GRASP servers when provisioning new repositories
-   - Pushes changes to all configured remotes (including GRASP servers) after each push
-   - Keeps your repository synchronized across all hosting providers
+2. **Clone URL Reachability**: Tests and displays reachability status for all clone URLs, showing which remotes (including GRASP servers) are accessible
 
-2. **On-Demand Repository Fetching**: If a repository is announced on Nostr but not yet provisioned locally, GitRepublic can:
-   - Automatically fetch the repository from any configured clone URL (including GRASP servers)
-   - Display and serve repositories hosted entirely on GRASP servers
-   - Clone repositories from GRASP servers when users access them
+3. **Multi-Remote Synchronization**: When you push, automatically syncs to all remotes listed in your announcement, including GRASP servers
 
-3. **Interoperability**: You can:
-   - Use GitRepublic as your primary git host while syncing to GRASP servers
-   - Host repositories on GRASP servers and have them accessible through GitRepublic
-   - Migrate repositories between GRASP servers and GitRepublic seamlessly
+4. **Local Pull Command**: Use `gitrep pull-all --merge` to fetch and merge from all remotes (including GRASP servers)
+   - Checks reachability first, only pulls from accessible remotes
+   - Detects conflicts before merging (aborts unless `--allow-conflicts`)
 
-**Example: Using GRASP Servers**
+5. **Standard Git Operations**: Full compatibility with GRASP servers for clone, push, pull using standard git smart HTTP protocol
 
-When creating a repository, you can add GRASP server URLs as clone URLs:
+**What We Don't Support (By Design):**
 
+- Full GRASP-01 server compliance (we're not a full GRASP server)
+- GRASP-02 proactive sync (no server-side hourly pulls - user-controlled via CLI)
+- GRASP-05 archive mode
+
+**Example: Working with GRASP Servers**
+
+```bash
+# Clone from a GRASP server (works just like any git server)
+gitrep clone https://grasp.example.com/npub1.../repo.git
+
+# Push to your repo (automatically syncs to all remotes including GRASP)
+gitrep push origin main
+
+# Pull from all remotes including GRASP servers
+gitrep pull-all --merge
 ```
-https://grasp.example.com/user/repo.git
-```
-
-GitRepublic will automatically:
-- Clone from the GRASP server if the repo doesn't exist locally
-- Push all changes to the GRASP server after each push
-- Keep both repositories in sync
-
-This means you can use GitRepublic's direct git-based workflow while maintaining compatibility with GRASP-based services that use patches, PR updates, and other advanced NIP-34 features.
-
-For more information about the GRASP protocol, see the [GRASP Protocol Documentation](https://gitworkshop.dev/npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr/grasp).
 
 ### NIP-98 HTTP Authentication
 

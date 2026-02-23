@@ -794,9 +794,55 @@
   // Show all clone URLs (beyond the first 3)
   let showAllCloneUrls = $state(false);
   
+  // Clone URL reachability
+  let cloneUrlReachability = $state<Map<string, { reachable: boolean; error?: string; checkedAt: number; serverType: 'git' | 'grasp' | 'unknown' }>>(new Map());
+  let loadingReachability = $state(false);
+  let checkingReachability = $state<Set<string>>(new Set());
+  
   // Guard to prevent README auto-load loop
   let readmeAutoLoadAttempted = $state(false);
   let readmeAutoLoadTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  // Load clone URL reachability status
+  async function loadCloneUrlReachability(forceRefresh: boolean = false) {
+    if (!pageData.repoCloneUrls || pageData.repoCloneUrls.length === 0) {
+      return;
+    }
+    
+    if (loadingReachability) return;
+    
+    loadingReachability = true;
+    try {
+      const response = await fetch(
+        `/api/repos/${npub}/${repo}/clone-urls/reachability${forceRefresh ? '?forceRefresh=true' : ''}`,
+        {
+          headers: buildApiHeaders()
+        }
+      );
+      
+      if (response.ok) {
+        const data = await response.json();
+        const newMap = new Map<string, { reachable: boolean; error?: string; checkedAt: number }>();
+        
+        if (data.results && Array.isArray(data.results)) {
+          for (const result of data.results) {
+            newMap.set(result.url, {
+              reachable: result.reachable,
+              error: result.error,
+              checkedAt: result.checkedAt
+            });
+          }
+        }
+        
+        cloneUrlReachability = newMap;
+      }
+    } catch (err) {
+      console.warn('Failed to load clone URL reachability:', err);
+    } finally {
+      loadingReachability = false;
+      checkingReachability.clear();
+    }
+  }
 
   async function loadReadme() {
     if (repoNotFound) return;
@@ -2084,6 +2130,9 @@
     // Initialize bookmarks service
     bookmarksService = new BookmarksService(DEFAULT_NOSTR_SEARCH_RELAYS);
     
+    // Load clone URL reachability status
+    loadCloneUrlReachability().catch(err => console.warn('Failed to load clone URL reachability:', err));
+    
     // Decode npub to get repo owner pubkey for bookmark address
     try {
       const decoded = nip19.decode(npub);
@@ -2125,6 +2174,9 @@
     await loadReadme();
     await loadForkInfo();
     await loadRepoImages();
+    
+    // Load clone URL reachability status
+    loadCloneUrlReachability().catch(err => console.warn('Failed to load clone URL reachability:', err));
     
     // Set up auto-save if enabled
     setupAutoSave().catch(err => console.warn('Failed to setup auto-save:', err));
@@ -4334,16 +4386,27 @@
       {/if}
       {#if pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0}
         <div class="repo-clone-urls">
-          <button 
-            class="clone-label-button"
-            onclick={() => cloneUrlsExpanded = !cloneUrlsExpanded}
-            aria-expanded={cloneUrlsExpanded}
-          >
-            <span class="clone-label">Clone URLs:</span>
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <button 
+              class="clone-label-button"
+              onclick={() => cloneUrlsExpanded = !cloneUrlsExpanded}
+              aria-expanded={cloneUrlsExpanded}
+            >
+              <span class="clone-label">Clone URLs:</span>
             <svg class="clone-toggle-icon" class:expanded={cloneUrlsExpanded} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M6 9l6 6 6-6"/>
             </svg>
           </button>
+          <button
+            class="reachability-refresh-button"
+            onclick={() => loadCloneUrlReachability(true)}
+            disabled={loadingReachability}
+            title="Refresh reachability status"
+            style="padding: 0.25rem 0.5rem; font-size: 0.875rem; background: var(--bg-secondary, #e8e8e8); border: 1px solid var(--border-color, #ccc); border-radius: 4px; cursor: pointer;"
+          >
+            {loadingReachability ? 'Checking...' : '🔄 Check Reachability'}
+          </button>
+          </div>
           <div class="clone-url-list" class:collapsed={!cloneUrlsExpanded}>
             {#if isRepoCloned === true}
               <button 
@@ -4365,6 +4428,8 @@
                      normalizedCv.includes(normalizedClone) || 
                      normalizedClone.includes(normalizedCv);
             })}
+            {@const reachability = cloneUrlReachability.get(cloneUrl)}
+            {@const isChecking = checkingReachability.has(cloneUrl)}
             <div class="clone-url-wrapper">
               <code class="clone-url">{cloneUrl}</code>
               {#if loadingVerification}
@@ -4392,6 +4457,35 @@
                 <span class="verification-badge unverified" title="Verification not checked">
                   <img src="/icons/alert-triangle.svg" alt="Not checked" class="icon-inline" />
                 </span>
+              {/if}
+              {#if isChecking || loadingReachability}
+                <span class="reachability-badge loading" title="Checking reachability...">
+                  <span style="opacity: 0.5;">⋯</span>
+                </span>
+              {:else if reachability !== undefined}
+                <span 
+                  class="reachability-badge" 
+                  class:reachable={reachability.reachable} 
+                  class:unreachable={!reachability.reachable}
+                  title={reachability.reachable 
+                    ? `Reachable${reachability.serverType === 'grasp' ? ' (GRASP server)' : reachability.serverType === 'git' ? ' (Git server)' : ''}` 
+                    : (reachability.error || 'Unreachable')}
+                >
+                  {#if reachability.reachable}
+                    <img src="/icons/check-circle.svg" alt="Reachable" class="icon-inline" style="color: green;" />
+                  {:else}
+                    <img src="/icons/x-circle.svg" alt="Unreachable" class="icon-inline" style="color: red;" />
+                  {/if}
+                </span>
+                {#if reachability.serverType === 'grasp'}
+                  <span class="server-type-badge grasp-badge" title="GRASP server (git server with Nostr relay and GRASP features)">
+                    GRASP
+                  </span>
+                {:else if reachability.serverType === 'git'}
+                  <span class="server-type-badge git-badge" title="Git server (standard git smart HTTP)">
+                    Git
+                  </span>
+                {/if}
               {/if}
             </div>
             {/each}

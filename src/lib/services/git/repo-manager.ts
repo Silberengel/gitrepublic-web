@@ -739,10 +739,9 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
 
     try {
       
-      // Filter and convert URLs:
-      // 1. Skip SSH URLs (git@... or ssh://) - convert to HTTPS when possible
-      // 2. Filter out localhost and our own domain
-      // 3. Prioritize HTTPS non-GRASP URLs, then GRASP URLs
+      // Filter and convert URLs while respecting the repo owner's order in the clone list.
+      // The owner knows their infrastructure best and has ordered URLs by preference.
+      // We only filter out localhost/our domain and convert SSH to HTTPS when possible.
       const httpsUrls: string[] = [];
       const sshUrls: string[] = [];
       
@@ -759,23 +758,20 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         // Check if it's an SSH URL
         if (url.startsWith('git@') || url.startsWith('ssh://')) {
           sshUrls.push(url);
-          // Try to convert to HTTPS
+          // Try to convert to HTTPS (preserve original order by appending)
           const httpsUrl = this.convertSshToHttps(url);
           if (httpsUrl) {
             httpsUrls.push(httpsUrl);
           }
         } else {
-          // It's already HTTPS/HTTP
+          // It's already HTTPS/HTTP - preserve original order
           httpsUrls.push(url);
         }
       }
       
-      // Separate HTTPS URLs into non-GRASP and GRASP
-      const nonGraspHttpsUrls = httpsUrls.filter(url => !isGraspUrl(url));
-      const graspHttpsUrls = httpsUrls.filter(url => isGraspUrl(url));
-      
-      // Prioritize: non-GRASP HTTPS, then GRASP HTTPS, then converted SSH->HTTPS, finally SSH (if no HTTPS available)
-      remoteUrls = [...nonGraspHttpsUrls, ...graspHttpsUrls];
+      // Respect the repo owner's order: use HTTPS URLs in the order they appeared in clone list
+      // This assumes the owner has ordered them by preference (best first)
+      remoteUrls = httpsUrls;
       
       // If no HTTPS URLs, try SSH URLs (but log a warning)
       if (remoteUrls.length === 0 && sshUrls.length > 0) {
@@ -783,7 +779,7 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         remoteUrls = sshUrls;
       }
 
-      // If no external URLs, try any URL that's not our domain
+      // If no external URLs, try any URL that's not our domain (preserve order)
       if (remoteUrls.length === 0) {
         remoteUrls = cloneUrls.filter(url => !url.includes(this.domain));
       }

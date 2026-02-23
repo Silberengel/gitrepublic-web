@@ -62,6 +62,7 @@ All three interfaces use the same underlying Nostr-based authentication and repo
 - **NIP-98 HTTP Authentication**: Git operations (clone, push, pull) authenticated using ephemeral Nostr events
 - **Auto-provisioning**: Automatically creates git repositories from NIP-34 announcements
 - **Multi-remote Sync**: Automatically syncs repositories to multiple remotes listed in announcements
+- **GRASP Interoperability**: Minimal GRASP support for seamless compatibility with GRASP servers
 - **Repository Size Limits**: Enforces 2 GB maximum repository size
 - **Relay Write Proof**: Verifies users can write to at least one default Nostr relay before allowing operations
 
@@ -415,11 +416,14 @@ The credential helper will automatically generate NIP-98 authentication tokens f
 # List repositories
 gitrep repos list
 
-# Get repository details
+# Get repository details (includes clone URL reachability)
 gitrep repos get <npub> <repo>
 
 # Push to all remotes
 gitrep push-all main
+
+# Pull from all remotes and merge
+gitrep pull-all --merge
 
 # Publish repository announcement
 gitrep publish repo-announcement <repo-name>
@@ -522,6 +526,21 @@ src/
 │           └── verify/+server.ts         # Ownership verification API
 └── hooks.server.ts                       # Server initialization (starts polling)
 ```
+
+## GRASP Support
+
+GitRepublic provides **minimal GRASP (Git Repository Announcement and Synchronization Protocol) interoperability**:
+
+- ✅ **GRASP Server Detection**: Automatically identifies GRASP servers from repository announcements
+- ✅ **Clone URL Reachability**: Tests and displays reachability status for all clone URLs
+- ✅ **Multi-Remote Sync**: Syncs to all remotes (including GRASP servers) when you push
+- ✅ **Local Pull Command**: `gitrep pull-all --merge` to fetch and merge from all remotes
+- ✅ **Standard Git Operations**: Full compatibility with GRASP servers (clone, push, pull)
+
+**What we don't support** (by design):
+- ❌ Full GRASP-01 server compliance (we're not a full GRASP server)
+- ❌ GRASP-02 proactive sync (no server-side hourly pulls - user-controlled via CLI)
+- ❌ GRASP-05 archive mode
 
 ## Additional Documentation
 
