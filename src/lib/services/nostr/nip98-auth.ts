@@ -7,6 +7,7 @@ import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '../../types/nostr.js';
 import { KIND } from '../../types/nostr.js';
 import { createHash } from 'crypto';
+import { NIP98_AUTH_WINDOW_SECONDS } from '../../config.js';
 
 export interface NIP98AuthResult {
   valid: boolean;
@@ -69,13 +70,13 @@ export function verifyNIP98Auth(
       };
     }
 
-    // Check created_at timestamp (within 60 seconds per spec)
+    // Check created_at timestamp (within configured window, default 60 seconds per spec)
     const now = Math.floor(Date.now() / 1000);
     const eventAge = now - nostrEvent.created_at;
-    if (eventAge > 60) {
+    if (eventAge > NIP98_AUTH_WINDOW_SECONDS) {
       return {
         valid: false,
-        error: 'Authentication event is too old (must be within 60 seconds)'
+        error: `Authentication event is too old (must be within ${NIP98_AUTH_WINDOW_SECONDS} seconds)`
       };
     }
     if (eventAge < 0) {

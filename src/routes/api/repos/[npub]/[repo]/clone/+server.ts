@@ -5,12 +5,9 @@
 
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { RepoManager } from '$lib/services/git/repo-manager.js';
 import { requireNpubHex } from '$lib/utils/npub-utils.js';
 import { existsSync } from 'fs';
-import { join } from 'path';
-import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
-import { NostrClient } from '$lib/services/nostr/nostr-client.js';
+import { join, resolve } from 'path';
 import { KIND } from '$lib/types/nostr.js';
 import { extractRequestContext } from '$lib/utils/api-context.js';
 import { getCachedUserLevel, cacheUserLevel } from '$lib/services/security/user-level-cache.js';
@@ -20,15 +17,14 @@ import { handleApiError, handleValidationError } from '$lib/utils/error-handler.
 import { verifyRelayWriteProofFromAuth, verifyRelayWriteProof } from '$lib/services/nostr/relay-write-proof.js';
 import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '$lib/types/nostr.js';
-import { resolve } from 'path';
 import { eventCache } from '$lib/services/nostr/event-cache.js';
 import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
+import { repoManager, nostrClient } from '$lib/services/service-registry.js';
+import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 
 // Resolve GIT_REPO_ROOT to absolute path (handles both relative and absolute paths)
 const repoRootEnv = process.env.GIT_REPO_ROOT || '/repos';
 const repoRoot = resolve(repoRootEnv);
-const repoManager = new RepoManager(repoRoot);
-const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 
 export const POST: RequestHandler = async (event) => {
   const { npub, repo } = event.params;
@@ -54,49 +50,49 @@ export const POST: RequestHandler = async (event) => {
     hasUnlimitedAccess: userLevel ? hasUnlimitedAccess(userLevel.level) : false
   }, 'Checking user access level for clone operation');
   
-  // If cache is empty, try to verify from proof event in body, NIP-98 auth header, or return helpful error
+  // If cache is empty, try to verify from NIP-98 auth header first (doesn't consume body), then proof event in body
   if (!userLevel || !hasUnlimitedAccess(userLevel.level)) {
     let verification: { valid: boolean; error?: string; relay?: string; relayDown?: boolean } | null = null;
     
-    // Try to get proof event from request body first (if content-type is JSON)
-    const contentType = event.request.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
-      try {
-        // Clone the request to read body without consuming it (if possible)
-        // Note: Request body can only be read once, so we need to be careful
-        const bodyText = await event.request.text().catch(() => '');
-        if (bodyText) {
-          try {
-            const body = JSON.parse(bodyText);
-            if (body.proofEvent && typeof body.proofEvent === 'object') {
-              const proofEvent = body.proofEvent as NostrEvent;
-              
-              // Validate proof event signature and pubkey
-              if (verifyEvent(proofEvent) && proofEvent.pubkey === userPubkeyHex) {
-                logger.debug({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'Cache empty or expired, attempting to verify from proof event in request body');
-                verification = await verifyRelayWriteProof(proofEvent, userPubkeyHex, DEFAULT_NOSTR_RELAYS);
-              } else {
-                logger.warn({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'Invalid proof event in request body');
-              }
-            }
-          } catch (parseErr) {
-            // Not valid JSON or missing proofEvent - continue to check auth header
-            logger.debug({ error: parseErr }, 'Request body is not valid JSON or missing proofEvent');
-          }
-        }
-      } catch (err) {
-        // Body reading failed - continue to check auth header
-        logger.debug({ error: err }, 'Failed to read request body, checking auth header');
-      }
+    // Try NIP-98 auth header first (doesn't consume request body)
+    const authHeader = event.request.headers.get('authorization') || event.request.headers.get('Authorization');
+    
+    if (authHeader) {
+      logger.debug({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'Cache empty or expired, attempting to verify from NIP-98 auth header');
+      verification = await verifyRelayWriteProofFromAuth(authHeader, userPubkeyHex, DEFAULT_NOSTR_RELAYS);
     }
     
-    // If no proof event in body, try NIP-98 auth header
+    // If auth header didn't work, try to get proof event from request body (if content-type is JSON)
+    // Note: This consumes the body, but only if auth header is not present
     if (!verification) {
-      const authHeader = event.request.headers.get('authorization') || event.request.headers.get('Authorization');
-      
-      if (authHeader) {
-        logger.debug({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'Cache empty or expired, attempting to verify from NIP-98 auth header');
-        verification = await verifyRelayWriteProofFromAuth(authHeader, userPubkeyHex, DEFAULT_NOSTR_RELAYS);
+      const contentType = event.request.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        try {
+          // Read body only if auth header verification failed
+          const bodyText = await event.request.text().catch(() => '');
+          if (bodyText) {
+            try {
+              const body = JSON.parse(bodyText);
+              if (body.proofEvent && typeof body.proofEvent === 'object') {
+                const proofEvent = body.proofEvent as NostrEvent;
+                
+                // Validate proof event signature and pubkey
+                if (verifyEvent(proofEvent) && proofEvent.pubkey === userPubkeyHex) {
+                  logger.debug({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'Cache empty or expired, attempting to verify from proof event in request body');
+                  verification = await verifyRelayWriteProof(proofEvent, userPubkeyHex, DEFAULT_NOSTR_RELAYS);
+                } else {
+                  logger.warn({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'Invalid proof event in request body');
+                }
+              }
+            } catch (parseErr) {
+              // Not valid JSON or missing proofEvent - continue
+              logger.debug({ error: parseErr }, 'Request body is not valid JSON or missing proofEvent');
+            }
+          }
+        } catch (err) {
+          // Body reading failed - continue
+          logger.debug({ error: err }, 'Failed to read request body');
+        }
       }
     }
     

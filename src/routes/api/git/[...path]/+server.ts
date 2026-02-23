@@ -5,33 +5,24 @@
 
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { RepoManager } from '$lib/services/git/repo-manager.js';
 import { requireNpubHex } from '$lib/utils/npub-utils.js';
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { join, resolve } from 'path';
-import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
-import { NostrClient } from '$lib/services/nostr/nostr-client.js';
+import { DEFAULT_NOSTR_RELAYS, GIT_OPERATION_TIMEOUT_MS } from '$lib/config.js';
 import { KIND } from '$lib/types/nostr.js';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import { verifyNIP98Auth } from '$lib/services/nostr/nip98-auth.js';
-import { OwnershipTransferService } from '$lib/services/nostr/ownership-transfer-service.js';
-import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
-import { BranchProtectionService } from '$lib/services/nostr/branch-protection-service.js';
 import logger from '$lib/services/logger.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
-import { isValidBranchName, sanitizeError } from '$lib/utils/security.js';
+import { isValidBranchName, sanitizeError, validateRepoPath } from '$lib/utils/security.js';
 import { extractCloneUrls, fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 import { eventCache } from '$lib/services/nostr/event-cache.js';
+import { repoManager, maintainerService, ownershipTransferService, branchProtectionService, nostrClient } from '$lib/services/service-registry.js';
 
 // Resolve GIT_REPO_ROOT to absolute path (handles both relative and absolute paths)
 const repoRootEnv = process.env.GIT_REPO_ROOT || '/repos';
 const repoRoot = resolve(repoRootEnv);
-const repoManager = new RepoManager(repoRoot);
-const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
-const ownershipTransferService = new OwnershipTransferService(DEFAULT_NOSTR_RELAYS);
-const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
-const branchProtectionService = new BranchProtectionService(DEFAULT_NOSTR_RELAYS);
 
 // Path to git-http-backend (common locations)
 // Alpine Linux: /usr/lib/git-core/git-http-backend
@@ -205,15 +196,13 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   // Get repository path with security validation
   const repoPath = join(repoRoot, npub, `${repoName}.git`);
   // Security: Ensure the resolved path is within repoRoot to prevent path traversal
-  // Normalize paths to handle Windows/Unix differences
-  const resolvedPath = resolve(repoPath).replace(/\\/g, '/');
-  const resolvedRoot = resolve(repoRoot).replace(/\\/g, '/');
-  // Must be a subdirectory of repoRoot, not equal to it
-  if (!resolvedPath.startsWith(resolvedRoot + '/')) {
-    return error(403, 'Invalid repository path');
+  const pathValidation = validateRepoPath(repoPath, repoRoot);
+  if (!pathValidation.valid) {
+    return error(403, pathValidation.error || 'Invalid repository path');
   }
+  const resolvedPath = pathValidation.resolvedPath!;
   if (!repoManager.repoExists(repoPath)) {
-    logger.warn({ repoPath, resolvedPath, repoRoot, resolvedRoot }, 'Repository not found at expected path');
+    logger.warn({ repoPath, resolvedPath, repoRoot }, 'Repository not found at expected path');
     return error(404, `Repository not found at ${resolvedPath}. Please check GIT_REPO_ROOT environment variable (currently: ${repoRoot})`);
   }
   
@@ -361,8 +350,8 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
   const operation = service === 'git-upload-pack' || gitPath === 'git-upload-pack' ? 'fetch' : 'clone';
 
   return new Promise((resolve) => {
-    // Security: Set timeout for git operations (5 minutes max)
-    const timeoutMs = 5 * 60 * 1000;
+    // Security: Set timeout for git operations
+    const timeoutMs = GIT_OPERATION_TIMEOUT_MS;
     let timeoutId: NodeJS.Timeout;
     
     const gitProcess = spawn(gitHttpBackend, [], {
@@ -593,15 +582,13 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
   // Get repository path with security validation
   const repoPath = join(repoRoot, npub, `${repoName}.git`);
   // Security: Ensure the resolved path is within repoRoot to prevent path traversal
-  // Normalize paths to handle Windows/Unix differences
-  const resolvedPath = resolve(repoPath).replace(/\\/g, '/');
-  const resolvedRoot = resolve(repoRoot).replace(/\\/g, '/');
-  // Must be a subdirectory of repoRoot, not equal to it
-  if (!resolvedPath.startsWith(resolvedRoot + '/')) {
-    return error(403, 'Invalid repository path');
+  const pathValidation = validateRepoPath(repoPath, repoRoot);
+  if (!pathValidation.valid) {
+    return error(403, pathValidation.error || 'Invalid repository path');
   }
+  const resolvedPath = pathValidation.resolvedPath!;
   if (!repoManager.repoExists(repoPath)) {
-    logger.warn({ repoPath, resolvedPath, repoRoot, resolvedRoot }, 'Repository not found at expected path');
+    logger.warn({ repoPath, resolvedPath, repoRoot }, 'Repository not found at expected path');
     return error(404, `Repository not found at ${resolvedPath}. Please check GIT_REPO_ROOT environment variable (currently: ${repoRoot})`);
   }
   
@@ -902,8 +889,8 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
   const operation = gitPath === 'git-receive-pack' || path.includes('git-receive-pack') ? 'push' : 'fetch';
 
   return new Promise((resolve) => {
-    // Security: Set timeout for git operations (5 minutes max)
-    const timeoutMs = 5 * 60 * 1000;
+    // Security: Set timeout for git operations
+    const timeoutMs = GIT_OPERATION_TIMEOUT_MS;
     let timeoutId: NodeJS.Timeout;
     
     const gitProcess = spawn(gitHttpBackend, [], {

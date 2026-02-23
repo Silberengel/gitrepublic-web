@@ -8,28 +8,50 @@ import type { RequestHandler } from './$types';
 import { withRepoValidation } from '$lib/utils/api-handlers.js';
 import type { RepoRequestContext } from '$lib/utils/api-context.js';
 import { handleValidationError, handleApiError } from '$lib/utils/error-handler.js';
-import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
-import { RepoManager } from '$lib/services/git/repo-manager.js';
-import { FileManager } from '$lib/services/git/file-manager.js';
-import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
-import { prsService } from '$lib/services/service-registry.js';
+import { prsService, repoManager, fileManager, maintainerService } from '$lib/services/service-registry.js';
 import { simpleGit } from 'simple-git';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import { existsSync } from 'fs';
 import logger from '$lib/services/logger.js';
+import { isValidBranchName } from '$lib/utils/security.js';
+import { validatePubkey } from '$lib/utils/input-validation.js';
 
-const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
-const repoManager = new RepoManager(repoRoot);
-const fileManager = new FileManager(repoRoot);
-const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
+const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
+  ? process.env.GIT_REPO_ROOT
+  : '/repos';
 
 export const POST: RequestHandler = withRepoValidation(
   async ({ repoContext, requestContext, event }) => {
     const body = await event.request.json();
     const { prId, prAuthor, prCommitId, targetBranch = 'main', mergeMessage } = body;
 
-    if (!prId || !prAuthor || !prCommitId) {
-      throw handleValidationError('Missing required fields: prId, prAuthor, prCommitId', { operation: 'mergePR', npub: repoContext.npub, repo: repoContext.repo });
+    // Validate required fields
+    if (!prId || typeof prId !== 'string' || prId.length !== 64) {
+      throw handleValidationError('Invalid prId: must be a 64-character hex string', { operation: 'mergePR', npub: repoContext.npub, repo: repoContext.repo });
+    }
+
+    if (!prAuthor || typeof prAuthor !== 'string') {
+      throw handleValidationError('Invalid prAuthor: must be a string', { operation: 'mergePR', npub: repoContext.npub, repo: repoContext.repo });
+    }
+
+    // Validate pubkey format
+    const pubkeyValidation = validatePubkey(prAuthor);
+    if (!pubkeyValidation.valid) {
+      throw handleValidationError(`Invalid prAuthor: ${pubkeyValidation.error}`, { operation: 'mergePR', npub: repoContext.npub, repo: repoContext.repo });
+    }
+
+    if (!prCommitId || typeof prCommitId !== 'string' || prCommitId.length !== 40) {
+      throw handleValidationError('Invalid prCommitId: must be a 40-character commit hash', { operation: 'mergePR', npub: repoContext.npub, repo: repoContext.repo });
+    }
+
+    // Validate branch name
+    if (!isValidBranchName(targetBranch)) {
+      throw handleValidationError(`Invalid branch name: ${targetBranch}`, { operation: 'mergePR', npub: repoContext.npub, repo: repoContext.repo });
+    }
+
+    // Validate merge message if provided
+    if (mergeMessage && (typeof mergeMessage !== 'string' || mergeMessage.length > 10000)) {
+      throw handleValidationError('Invalid mergeMessage: must be a string with max 10000 characters', { operation: 'mergePR', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Check if user is maintainer

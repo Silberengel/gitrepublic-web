@@ -9,11 +9,12 @@ import { createRepoGetHandler, withRepoValidation } from '$lib/utils/api-handler
 import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
 import { handleValidationError, handleApiError } from '$lib/utils/error-handler.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
-import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
 import { forwardEventIfEnabled } from '$lib/services/messaging/event-forwarder.js';
 import logger from '$lib/services/logger.js';
-
-const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
+import { maintainerService } from '$lib/services/service-registry.js';
+import { KIND, type NostrEvent } from '$lib/types/nostr.js';
+import { verifyEvent } from 'nostr-tools';
+import { validatePubkey } from '$lib/utils/input-validation.js';
 
 export const GET: RequestHandler = createRepoGetHandler(
   async (context: RepoRequestContext) => {
@@ -22,6 +23,59 @@ export const GET: RequestHandler = createRepoGetHandler(
   },
   { operation: 'getIssues', requireRepoExists: false, requireRepoAccess: false } // Issues are stored in Nostr, don't require local repo
 );
+
+/**
+ * Validate issue event structure
+ */
+function validateIssueEvent(event: any, repoOwnerPubkey: string, repoName: string): event is NostrEvent {
+  if (!event || typeof event !== 'object') {
+    return false;
+  }
+
+  // Check required fields
+  if (!event.kind || event.kind !== KIND.ISSUE) {
+    return false;
+  }
+
+  if (!event.pubkey || typeof event.pubkey !== 'string') {
+    return false;
+  }
+
+  // Validate pubkey format
+  const pubkeyValidation = validatePubkey(event.pubkey);
+  if (!pubkeyValidation.valid) {
+    return false;
+  }
+
+  if (!event.id || typeof event.id !== 'string' || event.id.length !== 64) {
+    return false;
+  }
+
+  if (!event.sig || typeof event.sig !== 'string' || event.sig.length !== 128) {
+    return false;
+  }
+
+  if (typeof event.created_at !== 'number' || event.created_at <= 0) {
+    return false;
+  }
+
+  // Validate tags structure
+  if (!Array.isArray(event.tags)) {
+    return false;
+  }
+
+  // Validate content is a string
+  if (typeof event.content !== 'string') {
+    return false;
+  }
+
+  // Verify event signature
+  if (!verifyEvent(event as NostrEvent)) {
+    return false;
+  }
+
+  return true;
+}
 
 export const POST: RequestHandler = withRepoValidation(
   async ({ repoContext, requestContext, event }) => {
@@ -32,9 +86,9 @@ export const POST: RequestHandler = withRepoValidation(
       throw handleValidationError('Missing event in request body', { operation: 'createIssue', npub: repoContext.npub, repo: repoContext.repo });
     }
 
-    // Verify the event is properly signed (basic check)
-    if (!issueEvent.sig || !issueEvent.id) {
-      throw handleValidationError('Invalid event: missing signature or ID', { operation: 'createIssue', npub: repoContext.npub, repo: repoContext.repo });
+    // Validate event structure and signature
+    if (!validateIssueEvent(issueEvent, repoContext.repoOwnerPubkey, repoContext.repo)) {
+      throw handleValidationError('Invalid event: missing required fields, invalid format, or invalid signature', { operation: 'createIssue', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Publish the event to relays
@@ -58,18 +112,61 @@ export const POST: RequestHandler = withRepoValidation(
   { operation: 'createIssue', requireRepoAccess: false } // Issues can be created by anyone with access
 );
 
+/**
+ * Validate issue status update request
+ */
+type StatusUpdateValidation =
+  | { valid: true; issueId: string; issueAuthor: string; status: 'open' | 'closed' | 'resolved' | 'draft' }
+  | { valid: false; error: string };
+
+function validateStatusUpdate(body: any): StatusUpdateValidation {
+  if (!body || typeof body !== 'object') {
+    return { valid: false, error: 'Invalid request body' };
+  }
+
+  const { issueId, issueAuthor, status } = body;
+
+  if (!issueId || typeof issueId !== 'string' || issueId.length !== 64) {
+    return { valid: false, error: 'Invalid issueId: must be a 64-character hex string' };
+  }
+
+  if (!issueAuthor || typeof issueAuthor !== 'string') {
+    return { valid: false, error: 'Invalid issueAuthor: must be a string' };
+  }
+
+  // Validate pubkey format
+  const pubkeyValidation = validatePubkey(issueAuthor);
+  if (!pubkeyValidation.valid) {
+    return { valid: false, error: `Invalid issueAuthor: ${pubkeyValidation.error}` };
+  }
+
+  if (!status || typeof status !== 'string') {
+    return { valid: false, error: 'Invalid status: must be a string' };
+  }
+
+  // Validate status value - must match the service's expected types
+  const validStatuses: ('open' | 'closed' | 'resolved' | 'draft')[] = ['open', 'closed', 'resolved', 'draft'];
+  const normalizedStatus = status.toLowerCase() as 'open' | 'closed' | 'resolved' | 'draft';
+  if (!validStatuses.includes(normalizedStatus)) {
+    return { valid: false, error: `Invalid status: must be one of ${validStatuses.join(', ')}` };
+  }
+
+  return { valid: true, issueId, issueAuthor, status: normalizedStatus };
+}
+
 export const PATCH: RequestHandler = withRepoValidation(
   async ({ repoContext, requestContext, event }) => {
     const body = await event.request.json();
-    const { issueId, issueAuthor, status } = body;
-
-    if (!issueId || !issueAuthor || !status) {
-      throw handleValidationError('Missing required fields: issueId, issueAuthor, status', { operation: 'updateIssueStatus', npub: repoContext.npub, repo: repoContext.repo });
+    
+    // Validate request body
+    const validation = validateStatusUpdate(body);
+    if (!validation.valid) {
+      throw handleValidationError(validation.error || 'Invalid request', { operation: 'updateIssueStatus', npub: repoContext.npub, repo: repoContext.repo });
     }
 
+    const { issueId, issueAuthor, status } = validation;
+
     // Check if user is maintainer or issue author
-    const { IssuesService } = await import('$lib/services/nostr/issues-service.js');
-    const issuesService = new IssuesService(DEFAULT_NOSTR_RELAYS);
     const isMaintainer = await maintainerService.isMaintainer(requestContext.userPubkeyHex || '', repoContext.repoOwnerPubkey, repoContext.repo);
     const isAuthor = requestContext.userPubkeyHex === issueAuthor;
     

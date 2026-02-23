@@ -108,6 +108,36 @@ export const ENTERPRISE_MODE =
 export const SECURITY_MODE = ENTERPRISE_MODE ? 'enterprise' : 'lightweight';
 
 /**
+ * Git operation timeout in milliseconds
+ * Default: 5 minutes (300000ms)
+ * Can be overridden by GIT_OPERATION_TIMEOUT_MS env var
+ */
+export const GIT_OPERATION_TIMEOUT_MS = 
+  typeof process !== 'undefined' && process.env?.GIT_OPERATION_TIMEOUT_MS
+    ? parseInt(process.env.GIT_OPERATION_TIMEOUT_MS, 10)
+    : 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Git clone operation timeout in milliseconds
+ * Default: 5 minutes (300000ms)
+ * Can be overridden by GIT_CLONE_TIMEOUT_MS env var
+ */
+export const GIT_CLONE_TIMEOUT_MS = 
+  typeof process !== 'undefined' && process.env?.GIT_CLONE_TIMEOUT_MS
+    ? parseInt(process.env.GIT_CLONE_TIMEOUT_MS, 10)
+    : 5 * 60 * 1000; // 5 minutes
+
+/**
+ * NIP-98 authentication window in seconds
+ * Default: 60 seconds (per NIP-98 spec)
+ * Can be overridden by NIP98_AUTH_WINDOW_SECONDS env var
+ */
+export const NIP98_AUTH_WINDOW_SECONDS = 
+  typeof process !== 'undefined' && process.env?.NIP98_AUTH_WINDOW_SECONDS
+    ? parseInt(process.env.NIP98_AUTH_WINDOW_SECONDS, 10)
+    : 60; // 60 seconds per NIP-98 spec
+
+/**
  * Combine default relays with user's relays (from kind 10002)
  * Returns a deduplicated list with user relays first, then defaults
  */

@@ -103,3 +103,86 @@ export function redactSensitiveData(obj: Record<string, any>): Record<string, an
   
   return redacted;
 }
+
+/**
+ * Get path resolve function (server-side only)
+ * Uses a function factory to avoid bundling path module in browser builds
+ */
+function getPathResolve(): ((path: string) => string) | null {
+  // Browser check - path module not available
+  if (typeof window !== 'undefined') {
+    return null;
+  }
+  
+  // Server-side: dynamically access path module
+  // This pattern prevents Vite from trying to bundle path for the browser
+  try {
+    // Access path through a function to avoid static analysis
+    const path = (globalThis as any).require?.('path') || 
+                 (typeof process !== 'undefined' && process.versions?.node 
+                   ? (() => {
+                       // This will only work in Node.js environment
+                       // Vite will externalize this for browser builds
+                       try {
+                         // @ts-ignore - path is a Node.js built-in
+                         return require('path');
+                       } catch {
+                         return null;
+                       }
+                     })()
+                   : null);
+    
+    return path?.resolve || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate repository path to prevent path traversal attacks
+ * Ensures the resolved path is within the repository root directory
+ * 
+ * NOTE: This function is server-only and uses Node.js path module
+ * In browser environments, it performs basic validation only
+ * 
+ * @param repoPath - The repository path to validate
+ * @param repoRoot - The root directory for repositories
+ * @returns Object with validation result and error message if invalid
+ */
+export function validateRepoPath(repoPath: string, repoRoot: string): { valid: boolean; error?: string; resolvedPath?: string } {
+  if (!repoPath || typeof repoPath !== 'string') {
+    return { valid: false, error: 'Repository path is required' };
+  }
+
+  if (!repoRoot || typeof repoRoot !== 'string') {
+    return { valid: false, error: 'Repository root is required' };
+  }
+
+  // Try to get path.resolve function (only available on server)
+  const pathResolve = getPathResolve();
+  
+  if (!pathResolve) {
+    // Browser environment - use simple string validation
+    // This is a fallback, but server-side code should always be used for path validation
+    if (repoPath.includes('..') || repoPath.includes('//')) {
+      return { valid: false, error: 'Invalid repository path: path traversal detected' };
+    }
+    return { valid: true, resolvedPath: repoPath };
+  }
+
+  // Server-side: use Node.js path module
+  try {
+    // Normalize paths to handle Windows/Unix differences
+    const resolvedPath = pathResolve(repoPath).replace(/\\/g, '/');
+    const resolvedRoot = pathResolve(repoRoot).replace(/\\/g, '/');
+    
+    // Must be a subdirectory of repoRoot, not equal to it
+    if (!resolvedPath.startsWith(resolvedRoot + '/')) {
+      return { valid: false, error: 'Invalid repository path: path traversal detected' };
+    }
+
+    return { valid: true, resolvedPath };
+  } catch (err) {
+    return { valid: false, error: `Failed to validate path: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}

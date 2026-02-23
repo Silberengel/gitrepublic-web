@@ -23,6 +23,7 @@ import { RepoUrlParser, type RepoPath } from './repo-url-parser.js';
 import { GitRemoteSync } from './git-remote-sync.js';
 import { AnnouncementManager } from './announcement-manager.js';
 import { RepoSizeChecker } from './repo-size-checker.js';
+import { shouldUseTor, getTorProxy } from '../../utils/tor.js';
 
 /**
  * Check if a URL is a GRASP (Git Repository Access via Secure Protocol) URL
@@ -418,10 +419,10 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
       }
 
       // Get git environment for URL (handles Tor proxy, etc.)
-      const gitEnv = this.remoteSync.getGitEnvForUrl(remoteUrls[0]);
+      const gitEnv = this.getGitEnvForUrl(remoteUrls[0]);
       
       // Inject authentication token if available
-      const authenticatedUrl = this.remoteSync.injectAuthToken(remoteUrls[0]);
+      const authenticatedUrl = this.injectAuthToken(remoteUrls[0]);
       
       // Log if we're using authentication (but don't log the token)
       const isAuthenticated = authenticatedUrl !== remoteUrls[0];
@@ -433,30 +434,12 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         authenticated: isAuthenticated
       }, 'Fetching repository on-demand from remote');
       
-      // Clone as bare repository with timeout
-      const { GIT_CLONE_TIMEOUT_MS } = await import('../../config.js');
-      
+      // Clone as bare repository
       await new Promise<void>((resolve, reject) => {
         const cloneProcess = spawn('git', ['clone', '--bare', authenticatedUrl, repoPath], {
           env: gitEnv,
           stdio: ['ignore', 'pipe', 'pipe']
         });
-
-        // Set timeout for clone operation
-        const timeoutId = setTimeout(() => {
-          cloneProcess.kill('SIGTERM');
-          const forceKillTimeout = setTimeout(() => {
-            if (!cloneProcess.killed) {
-              cloneProcess.kill('SIGKILL');
-            }
-          }, 5000); // 5 second grace period
-          
-          cloneProcess.on('close', () => {
-            clearTimeout(forceKillTimeout);
-          });
-          
-          reject(new Error(`Git clone operation timed out after ${GIT_CLONE_TIMEOUT_MS}ms`));
-        }, GIT_CLONE_TIMEOUT_MS);
 
         let stderr = '';
         let stdout = '';
@@ -468,7 +451,6 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         });
 
         cloneProcess.on('close', (code) => {
-          clearTimeout(timeoutId);
           if (code === 0) {
             logger.info({ npub, repoName, sourceUrl: remoteUrls[0] }, 'Successfully cloned repository');
             resolve();
@@ -488,7 +470,6 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         });
 
         cloneProcess.on('error', (err) => {
-          clearTimeout(timeoutId);
           logger.error({ 
             npub, 
             repoName, 
@@ -552,4 +533,81 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
     return this.sizeChecker.checkRepoSizeLimit(repoPath, maxSizeBytes);
   }
 
+  /**
+   * Get git environment variables with Tor proxy if needed for .onion addresses
+   * Security: Only whitelist necessary environment variables
+   */
+  private getGitEnvForUrl(url: string): Record<string, string> {
+    // Whitelist only necessary environment variables for security
+    const env: Record<string, string> = {
+      PATH: process.env.PATH || '/usr/bin:/bin',
+      HOME: process.env.HOME || '/tmp',
+      USER: process.env.USER || 'git',
+      LANG: process.env.LANG || 'C.UTF-8',
+      LC_ALL: process.env.LC_ALL || 'C.UTF-8',
+    };
+    
+    // Add TZ if set (for consistent timestamps)
+    if (process.env.TZ) {
+      env.TZ = process.env.TZ;
+    }
+    
+    if (shouldUseTor(url)) {
+      const proxy = getTorProxy();
+      if (proxy) {
+        // Git uses GIT_PROXY_COMMAND for proxy support
+        const proxyCommand = `sh -c 'exec socat - SOCKS5:${proxy.host}:${proxy.port}:\\$1:\\$2' || sh -c 'exec nc -X 5 -x ${proxy.host}:${proxy.port} \\$1 \\$2'`;
+        env.GIT_PROXY_COMMAND = proxyCommand;
+        env.ALL_PROXY = `socks5://${proxy.host}:${proxy.port}`;
+        
+        // For HTTP/HTTPS URLs, also set http_proxy and https_proxy
+        try {
+          const urlObj = new URL(url);
+          if (urlObj.protocol === 'http:' || urlObj.protocol === 'https:') {
+            env.http_proxy = `socks5://${proxy.host}:${proxy.port}`;
+            env.https_proxy = `socks5://${proxy.host}:${proxy.port}`;
+          }
+        } catch {
+          // URL parsing failed, skip proxy env vars
+        }
+      }
+    }
+    
+    return env;
+  }
+
+  /**
+   * Inject authentication token into a git URL if needed
+   * Supports GitHub tokens via GITHUB_TOKEN environment variable
+   * Returns the original URL if no token is needed or available
+   */
+  private injectAuthToken(url: string): string {
+    try {
+      const urlObj = new URL(url);
+      
+      // If URL already has credentials, don't modify it
+      if (urlObj.username) {
+        return url;
+      }
+      
+      // Check for GitHub token
+      if (urlObj.hostname === 'github.com' || urlObj.hostname.endsWith('.github.com')) {
+        const githubToken = process.env.GITHUB_TOKEN;
+        if (githubToken) {
+          // Inject token into URL: https://token@github.com/user/repo.git
+          urlObj.username = githubToken;
+          urlObj.password = ''; // GitHub uses token as username, password is empty
+          return urlObj.toString();
+        }
+      }
+      
+      // Add support for other git hosting services here if needed
+      // e.g., GitLab: GITLAB_TOKEN, Gitea: GITEA_TOKEN, etc.
+      
+      return url;
+    } catch {
+      // URL parsing failed, return original URL
+      return url;
+    }
+  }
 }

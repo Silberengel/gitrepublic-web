@@ -4,7 +4,6 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { RepoManager } from '$lib/services/git/repo-manager.js';
 import { DEFAULT_NOSTR_RELAYS, combineRelays, getGitUrl } from '$lib/config.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
@@ -17,7 +16,7 @@ import { existsSync } from 'fs';
 import { rm } from 'fs/promises';
 import { join, resolve } from 'path';
 import simpleGit from 'simple-git';
-import { isValidBranchName } from '$lib/utils/security.js';
+import { isValidBranchName, validateRepoPath } from '$lib/utils/security.js';
 import { ResourceLimits } from '$lib/services/security/resource-limits.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
 import { ForkCountService } from '$lib/services/nostr/fork-count-service.js';
@@ -28,13 +27,12 @@ import { handleApiError, handleValidationError, handleNotFoundError, handleAutho
 import { eventCache } from '$lib/services/nostr/event-cache.js';
 import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 
+import { repoManager, nostrClient, forkCountService } from '$lib/services/service-registry.js';
+
 // Resolve GIT_REPO_ROOT to absolute path (handles both relative and absolute paths)
 const repoRootEnv = process.env.GIT_REPO_ROOT || '/repos';
 const repoRoot = resolve(repoRootEnv);
-const repoManager = new RepoManager(repoRoot);
-const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 const resourceLimits = new ResourceLimits(repoRoot);
-const forkCountService = new ForkCountService(DEFAULT_NOSTR_RELAYS);
 
 /**
  * Retry publishing an event with exponential backoff
@@ -145,10 +143,9 @@ export const POST: RequestHandler = async ({ params, request }) => {
     // Check if original repo exists
     const originalRepoPath = join(repoRoot, npub, `${repo}.git`);
     // Security: Ensure resolved path is within repoRoot
-    const resolvedOriginalPath = resolve(originalRepoPath).replace(/\\/g, '/');
-    const resolvedRoot = resolve(repoRoot).replace(/\\/g, '/');
-    if (!resolvedOriginalPath.startsWith(resolvedRoot + '/')) {
-      return error(403, 'Invalid repository path');
+    const originalPathValidation = validateRepoPath(originalRepoPath, repoRoot);
+    if (!originalPathValidation.valid) {
+      return error(403, originalPathValidation.error || 'Invalid repository path');
     }
     if (!existsSync(originalRepoPath)) {
       return error(404, 'Original repository not found');
@@ -165,9 +162,9 @@ export const POST: RequestHandler = async ({ params, request }) => {
     // Check if fork already exists
     const forkRepoPath = join(repoRoot, userNpub, `${forkRepoName}.git`);
     // Security: Ensure resolved path is within repoRoot
-    const resolvedForkPath = resolve(forkRepoPath).replace(/\\/g, '/');
-    if (!resolvedForkPath.startsWith(resolvedRoot + '/')) {
-      return error(403, 'Invalid fork repository path');
+    const forkPathValidation = validateRepoPath(forkRepoPath, repoRoot);
+    if (!forkPathValidation.valid) {
+      return error(403, forkPathValidation.error || 'Invalid fork repository path');
     }
     if (existsSync(forkRepoPath)) {
       return error(409, 'Fork already exists');
