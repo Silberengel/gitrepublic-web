@@ -3,7 +3,8 @@
  * Used by endpoints to fetch repo metadata without cloning
  */
 
-import { fetchRepoMetadata, extractGitUrls, parseGitUrl } from '../services/git/api-repo-fetcher.js';
+import { fetchRepoMetadata, parseGitUrl } from '../services/git/api-repo-fetcher.js';
+import { extractCloneUrls } from './nostr-utils.js';
 import type { NostrEvent } from '../types/nostr.js';
 import logger from '../services/logger.js';
 
@@ -50,31 +51,102 @@ export async function tryApiFetch(
   commits?: Array<{ sha: string; message: string; author: string; date: string }>;
 } | null> {
   try {
-    const cloneUrls = extractGitUrls(announcementEvent);
+    const cloneUrls = extractCloneUrls(announcementEvent);
     
     if (cloneUrls.length === 0) {
       logger.debug({ npub, repoName }, 'No clone URLs found for API fetch');
       return null;
     }
 
-    // Try each clone URL until one works
-    for (const url of cloneUrls) {
+    // Convert SSH URLs to HTTPS URLs for API fetching
+    const convertedUrls = cloneUrls.map(url => {
+      if (url.startsWith('git@')) {
+        // Convert SSH URL to HTTPS: git@host.com:owner/repo.git -> https://host.com/owner/repo.git
+        const sshMatch = url.match(/^git@([^:]+):(.+)$/);
+        if (sshMatch) {
+          const [, host, path] = sshMatch;
+          const httpsUrl = `https://${host}/${path}`;
+          logger.debug({ sshUrl: url, httpsUrl }, 'Converted SSH URL to HTTPS for API fetch');
+          return httpsUrl;
+        }
+        logger.warn({ url }, 'Unable to convert SSH URL to HTTPS, skipping');
+        return null;
+      }
+      return url;
+    }).filter((url): url is string => url !== null && (url.startsWith('http://') || url.startsWith('https://')));
+    
+    if (convertedUrls.length === 0) {
+      logger.debug({ npub, repoName, totalUrls: cloneUrls.length, sshUrls: cloneUrls.filter(url => url.startsWith('git@')).length }, 'No usable clone URLs found for API fetch after conversion');
+      return null;
+    }
+
+    logger.debug({ npub, repoName, totalUrls: cloneUrls.length, convertedUrls: convertedUrls.length, originalHttpUrls: cloneUrls.filter(url => url.startsWith('http')).length, sshUrls: cloneUrls.filter(url => url.startsWith('git@')).length }, 'Converted clone URLs for API fetch');
+
+    // Prioritize GRASP servers (they use Gitea-compatible API)
+    // Sort URLs: GRASP URLs first, then others
+    const { isGraspUrl } = await import('../services/git/api-repo-fetcher.js');
+    const sortedUrls = [...convertedUrls].sort((a, b) => {
+      const aIsGrasp = isGraspUrl(a);
+      const bIsGrasp = isGraspUrl(b);
+      if (aIsGrasp && !bIsGrasp) return -1;
+      if (!aIsGrasp && bIsGrasp) return 1;
+      return 0;
+    });
+    
+    logger.info({ 
+      npub, 
+      repoName, 
+      totalUrls: sortedUrls.length,
+      graspUrls: sortedUrls.filter(url => isGraspUrl(url)).length,
+      urls: sortedUrls.map((url, idx) => ({ index: idx + 1, url, isGrasp: isGraspUrl(url) }))
+    }, 'Starting API fetch attempts - will try each URL until one succeeds');
+
+    // Try each clone URL until one works (GRASP URLs first)
+    for (let i = 0; i < sortedUrls.length; i++) {
+      const url = sortedUrls[i];
       try {
+        logger.info({ url, npub, repoName, isGrasp: isGraspUrl(url), attempt: i + 1, total: sortedUrls.length }, `[${i + 1}/${sortedUrls.length}] Attempting to fetch repo metadata from URL`);
         const metadata = await fetchRepoMetadata(url, npub, repoName);
         
         if (metadata) {
+          logger.info({ 
+            url, 
+            npub, 
+            repoName, 
+            platform: metadata.platform,
+            branchCount: metadata.branches?.length || 0,
+            fileCount: metadata.files?.length || 0,
+            hasDefaultBranch: !!metadata.defaultBranch,
+            attempt: i + 1,
+            total: sortedUrls.length
+          }, 'Successfully fetched repo metadata via API');
+          
+          // Return data even if some fields are empty (at least we got something)
           return {
-            branches: metadata.branches,
-            defaultBranch: metadata.defaultBranch,
-            files: metadata.files,
-            commits: metadata.commits
+            branches: metadata.branches || [],
+            defaultBranch: metadata.defaultBranch || 'main',
+            files: metadata.files || [],
+            commits: metadata.commits || []
           };
+        } else {
+          logger.warn({ url, npub, repoName, attempt: i + 1, total: sortedUrls.length }, `[${i + 1}/${sortedUrls.length}] fetchRepoMetadata returned null, trying next URL`);
         }
       } catch (err) {
-        logger.debug({ error: err, url, npub, repoName }, 'API fetch failed for URL, trying next');
+        logger.warn({ 
+          error: err instanceof Error ? err.message : String(err), 
+          errorStack: err instanceof Error ? err.stack : undefined,
+          url, 
+          npub, 
+          repoName,
+          attempt: i + 1,
+          total: sortedUrls.length
+        }, `[${i + 1}/${sortedUrls.length}] API fetch threw error for URL, trying next`);
+        // Continue to next URL
         continue;
       }
     }
+    
+    logger.warn({ npub, repoName, totalUrls: sortedUrls.length, urls: sortedUrls }, 'All API fetch attempts failed for all clone URLs');
 
     return null;
   } catch (err) {
@@ -95,7 +167,7 @@ export async function tryApiFetchFile(
   ref: string = 'main'
 ): Promise<{ content: string; encoding: string } | null> {
   try {
-    const cloneUrls = extractGitUrls(announcementEvent);
+    const cloneUrls = extractCloneUrls(announcementEvent);
     
     if (cloneUrls.length === 0) {
       logger.debug({ npub, repoName, filePath }, 'No clone URLs found for API file fetch');

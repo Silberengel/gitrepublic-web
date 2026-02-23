@@ -244,7 +244,12 @@
                     }
                   }}
                   style="cursor: pointer;">
-                  <h4>{repo.name}</h4>
+                  <div class="repo-title-row">
+                    <h4>{repo.name}</h4>
+                    {#if repo.repoId}
+                      <span class="repo-d-tag">{repo.repoId}</span>
+                    {/if}
+                  </div>
                   {#if repo.description}
                     <p class="repo-description">{repo.description}</p>
                   {/if}
@@ -404,5 +409,29 @@
     background: var(--success-bg);
     color: var(--success-text);
     border-color: var(--border-color);
+  }
+
+  .repo-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.25rem;
+  }
+
+  .repo-title-row h4 {
+    margin: 0;
+  }
+
+  .repo-d-tag {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    background: var(--bg-secondary, #f0f0f0);
+    color: var(--text-secondary, #666);
+    border: 1px solid var(--border-color, #ddd);
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-family: monospace;
+    font-weight: 500;
   }
 </style>

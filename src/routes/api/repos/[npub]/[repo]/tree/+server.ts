@@ -34,9 +34,14 @@ export const GET: RequestHandler = createRepoGetHandler(
         if (announcement) {
           // Try API-based fetching first (no cloning)
           const { tryApiFetch } = await import('$lib/utils/api-repo-helper.js');
+          const { extractCloneUrls: extractCloneUrlsHelper } = await import('$lib/utils/nostr-utils.js');
+          const cloneUrlsForLogging = extractCloneUrlsHelper(announcement);
+          
+          logger.debug({ npub: context.npub, repo: context.repo, cloneUrlCount: cloneUrlsForLogging.length, cloneUrls: cloneUrlsForLogging, path: context.path }, 'Attempting API fallback for tree');
+          
           const apiData = await tryApiFetch(announcement, context.npub, context.repo);
           
-          if (apiData && apiData.files) {
+          if (apiData && apiData.files && apiData.files.length > 0) {
             logger.debug({ npub: context.npub, repo: context.repo, fileCount: apiData.files.length }, 'Successfully fetched files via API fallback');
             // Return API data directly without cloning
             const path = context.path || '';

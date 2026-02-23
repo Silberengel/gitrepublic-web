@@ -94,7 +94,7 @@
   let moreMenuElement = $state<HTMLDivElement | null>(null);
   let menuButtonElement = $state<HTMLButtonElement | null>(null);
   
-  // Adjust menu position to prevent overflow on the right side
+  // Adjust menu position to prevent overflow on the left side (menu opens to the left)
   $effect(() => {
     if (showMoreMenu && moreMenuElement && menuButtonElement) {
       // Use double requestAnimationFrame to ensure DOM is fully rendered
@@ -107,25 +107,25 @@
           const viewportWidth = window.innerWidth;
           const padding = 16; // Padding from viewport edges
           
-          // Menu is positioned with left: 0, so its left edge aligns with button's left edge
-          // Calculate where the menu's right edge currently is
+          // Menu is positioned with right: 0, so its right edge aligns with button's right edge
+          // Calculate where the menu's left edge currently is
           const menuWidth = menuRect.width || 280; // Fallback to min-width
-          const currentLeft = buttonRect.left;
-          const currentRight = currentLeft + menuWidth;
+          const currentRight = buttonRect.right;
+          const currentLeft = currentRight - menuWidth;
           
           let transformX = 0;
           
-          // Check if menu overflows on the right
-          if (currentRight > viewportWidth - padding) {
-            // Menu would overflow on the right, shift it left
-            const rightOverflow = currentRight - (viewportWidth - padding);
-            transformX = -rightOverflow;
+          // Check if menu overflows on the left
+          if (currentLeft < padding) {
+            // Menu would overflow on the left, shift it right
+            const leftOverflow = padding - currentLeft;
+            transformX = leftOverflow;
             
-            // Re-check left after adjustment - ensure we don't go off left
-            const finalLeft = currentLeft + transformX;
-            if (finalLeft < padding) {
-              // If we'd go off left, position it at the left edge with padding
-              transformX = padding - currentLeft;
+            // Re-check right after adjustment - ensure we don't go off right
+            const finalRight = currentRight + transformX;
+            if (finalRight > viewportWidth - padding) {
+              // If we'd go off right, position it at the right edge with padding
+              transformX = (viewportWidth - padding) - currentRight;
             }
           }
           

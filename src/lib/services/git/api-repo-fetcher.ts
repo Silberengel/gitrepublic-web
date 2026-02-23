@@ -93,17 +93,23 @@ export function isGraspUrl(url: string): boolean {
  */
 export function parseGitUrl(url: string): { platform: GitPlatform; owner: string; repo: string; baseUrl: string } | null {
   // Handle GRASP URLs - they use Gitea-compatible API but with npub as owner
-  if (isGraspUrl(url)) {
+  const isGrasp = isGraspUrl(url);
+  logger.info({ url, isGrasp }, 'Checking if URL is GRASP URL');
+  
+  if (isGrasp) {
     const graspMatch = url.match(/(https?:\/\/[^/]+)\/(npub1[a-z0-9]+)\/([^/]+?)(?:\.git)?\/?$/i);
     if (graspMatch) {
       const [, baseHost, npub, repo] = graspMatch;
-      return {
-        platform: 'grasp',
+      const parsed = {
+        platform: 'grasp' as const,
         owner: npub,
         repo: repo.replace(/\.git$/, ''),
         baseUrl: `${baseHost}/api/v1`
       };
+      logger.debug({ url, parsed }, 'Successfully parsed GRASP URL');
+      return parsed;
     }
+    logger.warn({ url }, 'URL detected as GRASP but regex did not match');
     return null;
   }
 
@@ -442,12 +448,15 @@ async function fetchFromGitea(owner: string, repo: string, baseUrl: string): Pro
       baseUrl,
       new URLSearchParams()
     );
+    logger.info({ repoUrl, owner, repo, baseUrl }, 'Fetching from Gitea API');
     const repoResponse = await fetch(repoUrl);
     if (!repoResponse.ok) {
       if (repoResponse.status === 404) {
+        logger.warn({ status: repoResponse.status, repoUrl, owner, repo, baseUrl }, 'Gitea API returned 404 - repository not found');
         return null;
       }
-      logger.warn({ status: repoResponse.status, owner, repo }, 'Gitea API error');
+      const errorText = await repoResponse.text().catch(() => repoResponse.statusText);
+      logger.warn({ status: repoResponse.status, repoUrl, owner, repo, baseUrl, errorText }, 'Gitea API error');
       return null;
     }
     const repoData = await repoResponse.json();
@@ -652,23 +661,25 @@ async function fetchFromGitea(owner: string, repo: string, baseUrl: string): Pro
 
 /**
  * Fetch repository metadata from GRASP
- * GRASP repos use git protocol, so we can't easily fetch metadata via API
- * For now, return minimal info indicating it's a GRASP repo
+ * GRASP servers use Gitea-compatible API, so we can use the same fetching logic as Gitea
  */
 async function fetchFromGrasp(npub: string, repo: string, baseUrl: string, originalUrl: string): Promise<Partial<ApiRepoInfo> | null> {
-  // GRASP repos typically don't have REST APIs
-  // Full implementation would use git protocol (info/refs, git-upload-pack)
-  // For now, return basic structure
-  return {
-    name: repo,
-    description: undefined,
-    url: originalUrl,
-    defaultBranch: 'main',
-    branches: [],
-    commits: [],
-    files: [],
-    platform: 'grasp'
-  };
+  // GRASP servers use Gitea-compatible API endpoints
+  // The npub is the owner, and the repo name is the repo
+  // Use the same fetching logic as Gitea
+  logger.debug({ npub, repo, baseUrl, originalUrl }, 'Fetching from GRASP server using Gitea-compatible API');
+  try {
+    const result = await fetchFromGitea(npub, repo, baseUrl);
+    if (result) {
+      logger.info({ npub, repo, baseUrl, branchCount: result.branches?.length || 0, fileCount: result.files?.length || 0 }, 'Successfully fetched from GRASP server');
+    } else {
+      logger.warn({ npub, repo, baseUrl }, 'GRASP server returned null/empty metadata');
+    }
+    return result;
+  } catch (err) {
+    logger.error({ error: err instanceof Error ? err.message : String(err), errorStack: err instanceof Error ? err.stack : undefined, npub, repo, baseUrl }, 'Error fetching from GRASP server');
+    throw err;
+  }
 }
 
 /**
@@ -680,39 +691,53 @@ export async function fetchRepoMetadata(
   npub: string,
   repoName: string
 ): Promise<ApiRepoInfo | null> {
+  logger.info({ url, npub, repoName }, 'Parsing git URL for API fetch');
   const parsed = parseGitUrl(url);
   if (!parsed) {
-    logger.warn({ url }, 'Unable to parse git URL');
+    logger.warn({ url, npub, repoName, isGrasp: isGraspUrl(url) }, 'Unable to parse git URL - URL format not recognized');
     return null;
   }
 
   const { platform, owner, repo, baseUrl } = parsed;
+  logger.info({ url, platform, owner, repo, baseUrl, npub, repoName }, 'Parsed git URL successfully');
+  
   const isCloned = await checkLocalRepo(npub, repoName);
 
   let metadata: Partial<ApiRepoInfo> | null = null;
 
-  switch (platform) {
-    case 'github':
-      metadata = await fetchFromGitHub(owner, repo);
-      break;
-    case 'gitlab':
-      metadata = await fetchFromGitLab(owner, repo, baseUrl);
-      break;
-    case 'gitea':
-      metadata = await fetchFromGitea(owner, repo, baseUrl);
-      break;
-    case 'grasp':
-      metadata = await fetchFromGrasp(owner, repo, baseUrl, url);
-      break;
-    default:
-      logger.warn({ platform, url }, 'Unsupported platform');
-      return null;
-  }
-
-  if (!metadata) {
+  try {
+    switch (platform) {
+      case 'github':
+        logger.debug({ url, owner, repo }, 'Fetching from GitHub API');
+        metadata = await fetchFromGitHub(owner, repo);
+        break;
+      case 'gitlab':
+        logger.debug({ url, owner, repo, baseUrl }, 'Fetching from GitLab API');
+        metadata = await fetchFromGitLab(owner, repo, baseUrl);
+        break;
+      case 'gitea':
+        logger.debug({ url, owner, repo, baseUrl }, 'Fetching from Gitea API');
+        metadata = await fetchFromGitea(owner, repo, baseUrl);
+        break;
+      case 'grasp':
+        logger.info({ url, owner, repo, baseUrl }, 'Fetching from GRASP server (Gitea-compatible API)');
+        metadata = await fetchFromGrasp(owner, repo, baseUrl, url);
+        break;
+      default:
+        logger.warn({ platform, url }, 'Unsupported platform');
+        return null;
+    }
+  } catch (err) {
+    logger.error({ error: err instanceof Error ? err.message : String(err), errorStack: err instanceof Error ? err.stack : undefined, url, platform, owner, repo }, 'Error fetching metadata from platform API');
     return null;
   }
 
+  if (!metadata) {
+    logger.warn({ url, platform, owner, repo }, 'Platform API returned null/empty metadata');
+    return null;
+  }
+
+  logger.debug({ url, platform, branchCount: metadata.branches?.length || 0, fileCount: metadata.files?.length || 0 }, 'Successfully fetched metadata from platform API');
   return {
     ...metadata,
     isCloned,

@@ -4602,12 +4602,18 @@
   {/if}
 
   <main class="repo-view">
-    {#if isRepoCloned === false && canUseApiFallback}
+    {#if isRepoCloned === false && (canUseApiFallback || apiFallbackAvailable === null)}
       <div class="read-only-banner">
         <div class="banner-content">
           <img src="/icons/alert-circle.svg" alt="Info" class="banner-icon" />
-          <span>This repository is displayed in <strong>read-only mode</strong> using data from external clone URLs. To enable editing and full features, clone this repository to the server.</span>
-          {#if hasUnlimitedAccess($userStore.userLevel)}
+          <span>
+            {#if apiFallbackAvailable === null}
+              Checking external clone URLs for read-only access...
+            {:else}
+              This repository is displayed in <strong>read-only mode</strong> using data from external clone URLs. To enable editing and full features, clone this repository to the server.
+            {/if}
+          </span>
+          {#if hasUnlimitedAccess($userStore.userLevel) && apiFallbackAvailable !== null}
             <button 
               class="clone-button-banner"
               onclick={cloneRepository}

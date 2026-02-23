@@ -19,6 +19,53 @@ import { eventCache } from '$lib/services/nostr/event-cache.js';
 import { decodeNostrAddress } from '$lib/services/nostr/nip19-utils.js';
 import logger from '$lib/services/logger.js';
 
+// Replaceable event kinds (only latest per pubkey matters)
+const REPLACEABLE_KINDS = [0, 3, 10002]; // Profile, Contacts, Relay List
+
+/**
+ * Check if an event is a parameterized replaceable event (NIP-33)
+ * Parameterized replaceable events have:
+ * - kind >= 10000 && kind < 20000 (replaceable range) with a 'd' tag, OR
+ * - kind >= 30000 && kind < 40000 (addressable range) with a 'd' tag
+ */
+function isParameterizedReplaceable(event: NostrEvent): boolean {
+  const hasDTag = event.tags.some(t => t[0] === 'd' && t[1]);
+  if (!hasDTag) return false;
+  
+  // Replaceable range (NIP-33)
+  if (event.kind >= 10000 && event.kind < 20000) {
+    return true;
+  }
+  
+  // Addressable range (NIP-34) - also parameterized replaceable
+  if (event.kind >= 30000 && event.kind < 40000) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Get the deduplication key for an event
+ * For replaceable events: kind:pubkey
+ * For parameterized replaceable events: kind:pubkey:d-tag
+ * For regular events: event.id
+ */
+function getDeduplicationKey(event: NostrEvent): string {
+  if (REPLACEABLE_KINDS.includes(event.kind)) {
+    return `${event.kind}:${event.pubkey}`;
+  }
+  if (isParameterizedReplaceable(event)) {
+    const dTag = event.tags.find(t => t[0] === 'd')?.[1] || '';
+    return `${event.kind}:${event.pubkey}:${dTag}`;
+  }
+  // Special handling for gitrepublic-write-proof kind 24 events - treat as replaceable
+  if (event.kind === KIND.PUBLIC_MESSAGE && event.content && event.content.includes('gitrepublic-write-proof')) {
+    return `24:${event.pubkey}:write-proof`;
+  }
+  return event.id;
+}
+
 export const GET: RequestHandler = async (event) => {
   const query = event.url.searchParams.get('q');
   const limit = parseInt(event.url.searchParams.get('limit') || '20', 10);
@@ -136,31 +183,48 @@ export const GET: RequestHandler = async (event) => {
       logger.debug({ error: err }, 'Failed to get relay results');
     }
     
-    // Step 4 & 5: Deduplicate results (cached + relay)
+    // Step 4 & 5: Deduplicate results (cached + relay) using deduplication keys
+    // For replaceable/parameterized replaceable events, use kind:pubkey:d-tag as key
+    // For regular events, use event.id as key
     const allResults = new Map<string, NostrEvent>();
     
-    // Add cached results first
-    cachedResults.forEach(r => allResults.set(r.id, r));
-    
-    // Add relay results (prefer newer events)
-    relayResults.forEach(r => {
-      const existing = allResults.get(r.id);
+    // Add cached results first, using deduplication keys
+    cachedResults.forEach(r => {
+      const key = getDeduplicationKey(r);
+      const existing = allResults.get(key);
       if (!existing || r.created_at > existing.created_at) {
-        allResults.set(r.id, r);
+        allResults.set(key, r);
+      }
+    });
+    
+    // Add relay results (prefer newer events), using deduplication keys
+    relayResults.forEach(r => {
+      const key = getDeduplicationKey(r);
+      const existing = allResults.get(key);
+      if (!existing || r.created_at > existing.created_at) {
+        allResults.set(key, r);
       }
     });
     
     // Step 6: Update cache with ALL repos found from relays (not just filtered ones)
     // This ensures everything discovered during the search is cached for future use
+    // Use deduplication keys to ensure only the newest event per kind:pubkey:d-tag is cached
     if (allRelayRepos.length > 0) {
       const repoMap = new Map<string, NostrEvent>();
-      // Start with cached repos
-      cachedRepos.forEach(r => repoMap.set(r.id, r));
-      // Add ALL repos found from relays (prefer newer events)
-      allRelayRepos.forEach(r => {
-        const existing = repoMap.get(r.id);
+      // Start with cached repos, using deduplication keys
+      cachedRepos.forEach(r => {
+        const key = getDeduplicationKey(r);
+        const existing = repoMap.get(key);
         if (!existing || r.created_at > existing.created_at) {
-          repoMap.set(r.id, r);
+          repoMap.set(key, r);
+        }
+      });
+      // Add ALL repos found from relays (prefer newer events), using deduplication keys
+      allRelayRepos.forEach(r => {
+        const key = getDeduplicationKey(r);
+        const existing = repoMap.get(key);
+        if (!existing || r.created_at > existing.created_at) {
+          repoMap.set(key, r);
         }
       });
       // Update cache with merged results
@@ -174,11 +238,18 @@ export const GET: RequestHandler = async (event) => {
     } else if (relayResults.length > 0) {
       // Fallback: if we only have filtered results, cache those
       const repoMap = new Map<string, NostrEvent>();
-      cachedRepos.forEach(r => repoMap.set(r.id, r));
-      relayResults.forEach(r => {
-        const existing = repoMap.get(r.id);
+      cachedRepos.forEach(r => {
+        const key = getDeduplicationKey(r);
+        const existing = repoMap.get(key);
         if (!existing || r.created_at > existing.created_at) {
-          repoMap.set(r.id, r);
+          repoMap.set(key, r);
+        }
+      });
+      relayResults.forEach(r => {
+        const key = getDeduplicationKey(r);
+        const existing = repoMap.get(key);
+        if (!existing || r.created_at > existing.created_at) {
+          repoMap.set(key, r);
         }
       });
       eventCache.set(cacheKey, Array.from(repoMap.values()));
@@ -209,9 +280,17 @@ export const GET: RequestHandler = async (event) => {
       announcement?: NostrEvent;
     }> = [];
     
+    logger.debug({ 
+      mergedResultsCount: mergedResults.length,
+      processingCount: Math.min(mergedResults.length, limit * 2)
+    }, 'Processing merged results for privacy filtering');
+    
     for (const event of mergedResults.slice(0, limit * 2)) { // Get more to filter by privacy
       const repoId = event.tags.find(t => t[0] === 'd')?.[1];
-      if (!repoId) continue;
+      if (!repoId) {
+        logger.debug({ eventId: event.id }, 'Skipping event without d-tag');
+        continue;
+      }
       
       // Check privacy
       const isPrivate = event.tags.some(t => 
@@ -231,7 +310,10 @@ export const GET: RequestHandler = async (event) => {
         }
       }
       
-      if (!canView) continue;
+      if (!canView) {
+        logger.debug({ eventId: event.id, repoId, isPrivate, hasUserPubkey: !!userPubkey }, 'Skipping event - cannot view');
+        continue;
+      }
       
       const name = event.tags.find(t => t[0] === 'name')?.[1] || repoId;
       const description = event.tags.find(t => t[0] === 'description')?.[1] || '';
@@ -276,8 +358,10 @@ export const GET: RequestHandler = async (event) => {
           maintainers: allMaintainers,
           announcement: event
         });
-      } catch {
+        logger.debug({ eventId: event.id, repoId, name }, 'Added repo to results');
+      } catch (err) {
         // Skip if npub encoding fails
+        logger.debug({ error: err, eventId: event.id, repoId }, 'Skipping event - npub encoding failed');
       }
     }
     
@@ -405,15 +489,17 @@ async function fetchFromRelays(
   );
   const resultsArrays = await Promise.allSettled(fetchPromises);
   
-  // Merge and deduplicate by event ID (all repos fetched)
+  // Merge and deduplicate using deduplication keys (all repos fetched)
+  // For replaceable/parameterized replaceable events, use kind:pubkey:d-tag as key
   const allReposMap = new Map<string, NostrEvent>();
   for (const result of resultsArrays) {
     if (result.status === 'fulfilled') {
       const results = result.value;
       for (const event of results) {
-        const existing = allReposMap.get(event.id);
+        const key = getDeduplicationKey(event);
+        const existing = allReposMap.get(key);
         if (!existing || event.created_at > existing.created_at) {
-          allReposMap.set(event.id, event);
+          allReposMap.set(key, event);
         }
       }
     } else {

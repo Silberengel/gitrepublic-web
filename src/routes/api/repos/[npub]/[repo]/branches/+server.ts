@@ -74,17 +74,28 @@ export const GET: RequestHandler = createRepoGetHandler(
         if (events.length > 0) {
           // Try API-based fetching first (no cloning)
           const { tryApiFetch } = await import('$lib/utils/api-repo-helper.js');
+          const { extractCloneUrls } = await import('$lib/utils/nostr-utils.js');
+          const cloneUrls = extractCloneUrls(events[0]);
+          
+          logger.debug({ npub: context.npub, repo: context.repo, cloneUrlCount: cloneUrls.length, cloneUrls }, 'Attempting API fallback for branches');
+          
           const apiData = await tryApiFetch(events[0], context.npub, context.repo);
           
-          if (apiData) {
+          if (apiData && apiData.branches && apiData.branches.length > 0) {
+            logger.debug({ npub: context.npub, repo: context.repo, branchCount: apiData.branches.length }, 'Successfully fetched branches via API fallback');
             // Return API data directly without cloning
             return json(apiData.branches);
           }
           
           // API fetch failed - repo is not cloned and API fetch didn't work
-          // Return 404 with helpful message suggesting to clone
+          // Check if we have clone URLs to provide better error message
+          const hasCloneUrls = cloneUrls.length > 0;
+          logger.warn({ npub: context.npub, repo: context.repo, hasCloneUrls, cloneUrlCount: cloneUrls.length }, 'API fallback failed for branches');
+          
           throw handleNotFoundError(
-            'Repository is not cloned locally and could not be fetched via API. Privileged users can clone this repository using the "Clone to Server" button.',
+            hasCloneUrls
+              ? 'Repository is not cloned locally and could not be fetched via API from external clone URLs. Privileged users can clone this repository using the "Clone to Server" button.'
+              : 'Repository is not cloned locally and has no external clone URLs for API fallback. Privileged users can clone this repository using the "Clone to Server" button.',
             { operation: 'getBranches', npub: context.npub, repo: context.repo }
           );
         } else {
