@@ -248,9 +248,14 @@
     }
   }
   let copyingCloneUrl = $state(false);
+  let apiFallbackAvailable = $state<boolean | null>(null); // null = unknown, true = API fallback works, false = doesn't work
   
   // Helper: Check if repo needs to be cloned for write operations
   const needsClone = $derived(isRepoCloned === false);
+  // Helper: Check if we can use API fallback for read-only operations
+  const canUseApiFallback = $derived(apiFallbackAvailable === true);
+  // Helper: Check if we have any way to view the repo (cloned or API fallback)
+  const canViewRepo = $derived(isRepoCloned === true || canUseApiFallback);
   const cloneTooltip = 'Please clone this repo to use this feature.';
   
   // Copy clone URL to clipboard
@@ -330,16 +335,39 @@
   
   // Tabs menu - defined after issues and prs
   // Order: Files, Issues, PRs, Patches, Discussion, History, Tags, Docs
-  const tabs = $derived([
-    { id: 'files', label: 'Files', icon: '/icons/file-text.svg' },
-    { id: 'issues', label: 'Issues', icon: '/icons/alert-circle.svg' },
-    { id: 'prs', label: 'Pull Requests', icon: '/icons/git-pull-request.svg' },
-    { id: 'patches', label: 'Patches', icon: '/icons/clipboard-list.svg' },
-    { id: 'discussions', label: 'Discussions', icon: '/icons/message-circle.svg' },
-    { id: 'history', label: 'Commit History', icon: '/icons/git-commit.svg' },
-    { id: 'tags', label: 'Tags', icon: '/icons/tag.svg' },
-    { id: 'docs', label: 'Docs', icon: '/icons/book.svg' }
-  ]);
+  // Show tabs that require cloned repo when repo is cloned OR API fallback is available
+  const tabs = $derived.by(() => {
+    const allTabs = [
+      { id: 'files', label: 'Files', icon: '/icons/file-text.svg', requiresClone: true },
+      { id: 'issues', label: 'Issues', icon: '/icons/alert-circle.svg', requiresClone: false },
+      { id: 'prs', label: 'Pull Requests', icon: '/icons/git-pull-request.svg', requiresClone: false },
+      { id: 'patches', label: 'Patches', icon: '/icons/clipboard-list.svg', requiresClone: false },
+      { id: 'discussions', label: 'Discussions', icon: '/icons/message-circle.svg', requiresClone: false },
+      { id: 'history', label: 'Commit History', icon: '/icons/git-commit.svg', requiresClone: true },
+      { id: 'tags', label: 'Tags', icon: '/icons/tag.svg', requiresClone: true },
+      { id: 'docs', label: 'Docs', icon: '/icons/book.svg', requiresClone: false }
+    ];
+    
+    // Show all tabs if repo is cloned OR API fallback is available
+    // Otherwise, only show tabs that don't require cloning
+    if (isRepoCloned === false && !canUseApiFallback) {
+      return allTabs.filter(tab => !tab.requiresClone).map(({ requiresClone, ...tab }) => tab);
+    }
+    
+    // Return all tabs when repo is cloned, API fallback is available, or status is unknown (remove requiresClone property)
+    return allTabs.map(({ requiresClone, ...tab }) => tab);
+  });
+  
+  // Redirect to a valid tab if current tab requires cloning but repo isn't cloned and API fallback isn't available
+  $effect(() => {
+    if (isRepoCloned === false && !canUseApiFallback && tabs.length > 0) {
+      const currentTab = tabs.find(t => t.id === activeTab);
+      if (!currentTab) {
+        // Current tab requires cloning, switch to first available tab
+        activeTab = tabs[0].id as typeof activeTab;
+      }
+    }
+  });
 
   // Patches
   let patches = $state<Array<{ id: string; subject: string; content: string; author: string; created_at: number; kind: number }>>([]);
@@ -822,14 +850,15 @@
       
       if (response.ok) {
         const data = await response.json();
-        const newMap = new Map<string, { reachable: boolean; error?: string; checkedAt: number }>();
+        const newMap = new Map<string, { reachable: boolean; error?: string; checkedAt: number; serverType: 'git' | 'grasp' | 'unknown' }>();
         
         if (data.results && Array.isArray(data.results)) {
           for (const result of data.results) {
             newMap.set(result.url, {
               reachable: result.reachable,
               error: result.error,
-              checkedAt: result.checkedAt
+              checkedAt: result.checkedAt,
+              serverType: result.serverType || 'unknown'
             });
           }
         }
@@ -1386,11 +1415,27 @@
       // If response is 200, repo exists and is accessible (cloned)
       const wasCloned = response.status !== 404;
       isRepoCloned = wasCloned;
-      console.log(`[Clone Status] Repo ${wasCloned ? 'is cloned' : 'is not cloned'} (status: ${response.status})`);
+      
+      // If repo is not cloned, check if API fallback is available
+      if (!wasCloned) {
+        // Try to detect API fallback by checking if we have clone URLs
+        if (pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0) {
+          // We have clone URLs, so API fallback might work - will be detected when loadBranches() runs
+          apiFallbackAvailable = null; // Will be set to true if a subsequent request succeeds
+        } else {
+          apiFallbackAvailable = false;
+        }
+      } else {
+        // Repo is cloned, API fallback not needed
+        apiFallbackAvailable = false;
+      }
+      
+      console.log(`[Clone Status] Repo ${wasCloned ? 'is cloned' : 'is not cloned'} (status: ${response.status}), API fallback: ${apiFallbackAvailable}`);
     } catch (err) {
       // On error, assume not cloned
       console.warn('[Clone Status] Error checking clone status:', err);
       isRepoCloned = false;
+      apiFallbackAvailable = false;
     } finally {
       checkingCloneStatus = false;
     }
@@ -1424,6 +1469,8 @@
         alert('Repository cloned successfully! The repository is now available on this server.');
         // Force refresh clone status
         await checkCloneStatus(true);
+        // Reset API fallback status since repo is now cloned
+        apiFallbackAvailable = false;
         // Reload data to use the cloned repo instead of API
         await Promise.all([
           loadBranches(),
@@ -1475,7 +1522,7 @@
         console.log(`[Fork UI]   - Announcement ID: ${data.fork.announcementId}`);
         console.log(`[Fork UI]   - Ownership Transfer ID: ${data.fork.ownershipTransferId}`);
         
-        alert(`✓ ${message}\n\nRedirecting to your fork...`);
+        alert(`${message}\n\nRedirecting to your fork...`);
         goto(`/repos/${data.fork.npub}/${data.fork.repo}`);
       } else {
         const errorMessage = data.error || 'Failed to fork repository';
@@ -1491,13 +1538,13 @@
         }
         
         error = fullError;
-        alert(`✗ Fork failed!\n\n${fullError}`);
+        alert(`Fork failed!\n\n${fullError}`);
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fork repository';
       console.error(`[Fork UI] ✗ Unexpected error: ${errorMessage}`, err);
       error = errorMessage;
-      alert(`✗ Fork failed!\n\n${errorMessage}`);
+      alert(`Fork failed!\n\n${errorMessage}`);
     } finally {
       forking = false;
     }
@@ -2610,12 +2657,12 @@
     }
 
     // First confirmation
-    if (!confirm('⚠️ WARNING: Are you sure you want to delete this repository announcement?\n\nThis will permanently delete the repository announcement from Nostr relays. This action CANNOT be undone.\n\nClick OK to continue, or Cancel to abort.')) {
+    if (!confirm('WARNING: Are you sure you want to delete this repository announcement?\n\nThis will permanently delete the repository announcement from Nostr relays. This action CANNOT be undone.\n\nClick OK to continue, or Cancel to abort.')) {
       return;
     }
 
     // Second confirmation for critical operation
-    if (!confirm('⚠️ FINAL CONFIRMATION: This will permanently delete the repository announcement.\n\nAre you absolutely certain you want to proceed?\n\nThis action CANNOT be undone.')) {
+    if (!confirm('FINAL CONFIRMATION: This will permanently delete the repository announcement.\n\nAre you absolutely certain you want to proceed?\n\nThis action CANNOT be undone.')) {
       return;
     }
 
@@ -2714,6 +2761,11 @@
       });
       if (response.ok) {
         branches = await response.json();
+        
+        // If repo is not cloned but we got branches, API fallback is available
+        if (isRepoCloned === false && branches.length > 0) {
+          apiFallbackAvailable = true;
+        }
         if (branches.length > 0) {
           // Branches can be an array of objects with .name property or array of strings
           const branchNames = branches.map((b: any) => typeof b === 'string' ? b : b.name);
@@ -2762,9 +2814,24 @@
           }
         }
       } else if (response.status === 404) {
-        // Repository not provisioned yet - set error message and flag
-        repoNotFound = true;
-        error = `Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`;
+        // Check if this is a "not cloned" error with API fallback suggestion
+        const errorText = await response.text().catch(() => '');
+        if (errorText.includes('not cloned locally') && errorText.includes('API')) {
+          // API fallback might be available, but this specific request failed
+          // Try to detect if API fallback works by checking if we have clone URLs
+          if (pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0) {
+            // We have clone URLs, so API fallback might work - mark as unknown for now
+            // It will be set to true if a subsequent request succeeds
+            apiFallbackAvailable = null;
+          } else {
+            apiFallbackAvailable = false;
+          }
+        } else {
+          // Repository not provisioned yet - set error message and flag
+          repoNotFound = true;
+          error = `Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`;
+          apiFallbackAvailable = false;
+        }
       } else if (response.status === 403) {
         // Access denied - don't set repoNotFound, allow retry after login
         const errorText = await response.text().catch(() => response.statusText);
@@ -2807,7 +2874,19 @@
       
       if (!response.ok) {
         if (response.status === 404) {
-          repoNotFound = true;
+          // Check if this is a "not cloned" error with API fallback suggestion
+          const errorText = await response.text().catch(() => '');
+          if (errorText.includes('not cloned locally') && errorText.includes('API')) {
+            // API fallback might be available, but this specific request failed
+            if (pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0) {
+              apiFallbackAvailable = null; // Unknown, will be set if a request succeeds
+            } else {
+              apiFallbackAvailable = false;
+            }
+          } else {
+            repoNotFound = true;
+            apiFallbackAvailable = false;
+          }
           throw new Error(`Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`);
         } else if (response.status === 403) {
           // 403 means access denied - don't set repoNotFound, just show error
@@ -2822,6 +2901,11 @@
 
       files = await response.json();
       currentPath = path;
+      
+      // If repo is not cloned but we got files, API fallback is available
+      if (isRepoCloned === false && files.length > 0) {
+        apiFallbackAvailable = true;
+      }
       
       // Auto-load README if we're in the root directory and no file is currently selected
       // Only attempt once per path to prevent loops
@@ -3613,7 +3697,7 @@
   }
 
   async function deleteFile(filePath: string) {
-    if (!confirm(`⚠️ Are you sure you want to delete "${filePath}"?\n\nThis will permanently delete the file from the repository. This action cannot be undone.\n\nClick OK to delete, or Cancel to abort.`)) {
+    if (!confirm(`Are you sure you want to delete "${filePath}"?\n\nThis will permanently delete the file from the repository. This action cannot be undone.\n\nClick OK to delete, or Cancel to abort.`)) {
       return;
     }
 
@@ -3741,7 +3825,7 @@
   }
 
   async function deleteBranch(branchName: string) {
-    if (!confirm(`⚠️ Are you sure you want to delete the branch "${branchName}"?\n\nThis will permanently delete the branch from the repository. This action CANNOT be undone.\n\nClick OK to delete, or Cancel to abort.`)) {
+    if (!confirm(`Are you sure you want to delete the branch "${branchName}"?\n\nThis will permanently delete the branch from the repository. This action CANNOT be undone.\n\nClick OK to delete, or Cancel to abort.`)) {
       return;
     }
 
@@ -4393,18 +4477,20 @@
               aria-expanded={cloneUrlsExpanded}
             >
               <span class="clone-label">Clone URLs:</span>
-            <svg class="clone-toggle-icon" class:expanded={cloneUrlsExpanded} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M6 9l6 6 6-6"/>
-            </svg>
+            <img src="/icons/chevron-down.svg" alt="" class="clone-toggle-icon icon-inline" class:expanded={cloneUrlsExpanded} />
           </button>
           <button
             class="reachability-refresh-button"
             onclick={() => loadCloneUrlReachability(true)}
             disabled={loadingReachability}
             title="Refresh reachability status"
-            style="padding: 0.25rem 0.5rem; font-size: 0.875rem; background: var(--bg-secondary, #e8e8e8); border: 1px solid var(--border-color, #ccc); border-radius: 4px; cursor: pointer;"
           >
-            {loadingReachability ? 'Checking...' : '🔄 Check Reachability'}
+            {#if loadingReachability}
+              Checking...
+            {:else}
+              <img src="/icons/refresh-cw.svg" alt="" class="refresh-icon icon-inline" />
+              <span>Check Reachability</span>
+            {/if}
           </button>
           </div>
           <div class="clone-url-list" class:collapsed={!cloneUrlsExpanded}>
@@ -4505,17 +4591,60 @@
   {/if}
 
   <main class="repo-view">
+    {#if isRepoCloned === false && canUseApiFallback}
+      <div class="read-only-banner">
+        <div class="banner-content">
+          <img src="/icons/alert-circle.svg" alt="Info" class="banner-icon" />
+          <span>This repository is displayed in <strong>read-only mode</strong> using data from external clone URLs. To enable editing and full features, clone this repository to the server.</span>
+          {#if hasUnlimitedAccess($userStore.userLevel)}
+            <button 
+              class="clone-button-banner"
+              onclick={cloneRepository}
+              disabled={cloning || checkingCloneStatus}
+            >
+              {cloning ? 'Cloning...' : (checkingCloneStatus ? 'Checking...' : 'Clone to Server')}
+            </button>
+          {/if}
+        </div>
+      </div>
+    {/if}
     {#if error}
       <div class="error">
-        Error: {error}
+        <div class="error-message">
+          <strong>Error:</strong> {error}
+        </div>
+        {#if error.includes('not cloned locally') && hasUnlimitedAccess($userStore.userLevel)}
+          <div class="error-actions">
+            <button 
+              class="clone-button-inline"
+              onclick={cloneRepository}
+              disabled={cloning || checkingCloneStatus}
+            >
+              {cloning ? 'Cloning...' : (checkingCloneStatus ? 'Checking...' : 'Clone to Server')}
+            </button>
+          </div>
+        {/if}
       </div>
     {/if}
 
     <!-- Tabs -->
-
+    
+    {#if isRepoCloned === false && !canUseApiFallback && tabs.length === 0}
+      <div class="repo-not-cloned-message">
+        <div class="message-content">
+          <h2>Repository Not Cloned</h2>
+          <p>This repository has not been cloned to the server yet, and read-only access via external clone URLs is not available.</p>
+          {#if hasUnlimitedAccess($userStore.userLevel)}
+            <p>Use the "Clone to Server" option in the repository menu to clone this repository.</p>
+          {:else}
+            <p>Contact a server administrator with unlimited access to clone this repository.</p>
+          {/if}
+        </div>
+      </div>
+    {:else}
     <div class="repo-layout">
       <!-- File Tree Sidebar -->
-      {#if activeTab === 'files'}
+      {#if activeTab === 'files' && canViewRepo}
       <aside class="file-tree" class:hide-on-mobile={!showFileListOnMobile && activeTab === 'files'}>
         <div class="file-tree-header">
           <TabsMenu 
@@ -4523,7 +4652,7 @@
             {tabs} 
             onTabChange={(tab) => activeTab = tab as typeof activeTab}
           />
-          <h2>Files</h2>
+          <h2>Files {#if isRepoCloned === false && canUseApiFallback}<span class="read-only-badge">Read-Only</span>{/if}</h2>
           <button 
             onclick={toggleWordWrap} 
             class="word-wrap-button"
@@ -4596,7 +4725,7 @@
       {/if}
 
       <!-- Commit History View -->
-      {#if activeTab === 'history'}
+      {#if activeTab === 'history' && canViewRepo}
       <aside class="history-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'history'}>
         <div class="history-header">
           <TabsMenu 
@@ -4604,7 +4733,7 @@
             {tabs} 
             onTabChange={(tab) => activeTab = tab as typeof activeTab}
           />
-          <h2>Commits</h2>
+          <h2>Commits {#if isRepoCloned === false && canUseApiFallback}<span class="read-only-badge">Read-Only</span>{/if}</h2>
           <button 
             onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
             class="mobile-toggle-button"
@@ -4638,7 +4767,7 @@
       {/if}
 
       <!-- Tags View -->
-      {#if activeTab === 'tags'}
+      {#if activeTab === 'tags' && canViewRepo}
       <aside class="tags-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'tags'}>
         <div class="tags-header">
           <TabsMenu 
@@ -4646,7 +4775,7 @@
             {tabs} 
             onTabChange={(tab) => activeTab = tab as typeof activeTab}
           />
-          <h2>Tags</h2>
+          <h2>Tags {#if isRepoCloned === false && canUseApiFallback}<span class="read-only-badge">Read-Only</span>{/if}</h2>
           {#if userPubkey && isMaintainer}
             <button 
               onclick={() => {
@@ -5079,7 +5208,7 @@
                   content={editedContent} 
                   language={fileLanguage}
                   onChange={handleContentChange}
-                  readOnly={needsClone}
+                  readOnly={needsClone || (isRepoCloned === false && canUseApiFallback)}
                 />
               {:else}
                 <div class="read-only-editor" class:word-wrap={wordWrap}>
@@ -5590,6 +5719,7 @@
         {/if}
       </div>
     </div>
+    {/if}
   </main>
 
   <!-- Create File Dialog -->

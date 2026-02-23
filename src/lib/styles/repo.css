@@ -7,6 +7,116 @@
   overflow: hidden;
 }
 
+.repo-not-cloned-message {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  padding: 2rem;
+}
+
+.repo-not-cloned-message .message-content {
+  max-width: 600px;
+  text-align: center;
+  padding: 2rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  box-shadow: 0 2px 8px var(--shadow-color-light);
+}
+
+.repo-not-cloned-message .message-content h2 {
+  margin: 0 0 1rem 0;
+  color: var(--text-primary);
+  font-size: 1.5rem;
+}
+
+.repo-not-cloned-message .message-content p {
+  margin: 0.75rem 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.repo-not-cloned-message .message-content p:first-of-type {
+  margin-top: 0;
+}
+
+.repo-not-cloned-message .message-content p:last-of-type {
+  margin-bottom: 0;
+}
+
+.read-only-badge {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  margin-left: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 0.25rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  vertical-align: middle;
+}
+
+.read-only-banner {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  padding: 0.75rem 1rem;
+  margin: 0;
+}
+
+.read-only-banner .banner-content {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: 1400px;
+  margin: 0 auto;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.read-only-banner .banner-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.read-only-banner .banner-content span {
+  flex: 1;
+  line-height: 1.5;
+}
+
+.read-only-banner .banner-content strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.read-only-banner .clone-button-banner {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+  background: var(--accent);
+  color: var(--accent-text, #fff);
+  border: 1px solid var(--accent);
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: opacity 0.2s, background-color 0.2s;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.read-only-banner .clone-button-banner:hover:not(:disabled) {
+  opacity: 0.9;
+  background: var(--accent-hover, var(--accent));
+}
+
+.read-only-banner .clone-button-banner:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .repo-metadata-section {
   padding: 0.75rem 1rem;
   background: var(--card-bg, #ffffff);
@@ -337,6 +447,39 @@
   margin: 1rem;
   border-radius: 0.5rem;
   border: 1px solid var(--error-text);
+}
+
+.error .error-message {
+  margin-bottom: 0.75rem;
+}
+
+.error .error-actions {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--error-text);
+  opacity: 0.7;
+}
+
+.error .clone-button-inline {
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  background: var(--accent);
+  color: var(--accent-text, #fff);
+  border: 1px solid var(--accent);
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: opacity 0.2s, background-color 0.2s;
+  font-weight: 500;
+}
+
+.error .clone-button-inline:hover:not(:disabled) {
+  opacity: 0.9;
+  background: var(--accent-hover, var(--accent));
+}
+
+.error .clone-button-inline:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .readme-section {
@@ -1553,22 +1696,35 @@ span.clone-more {
 }
 
 .reachability-refresh-button {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
   padding: 0.25rem 0.5rem;
   font-size: 0.875rem;
-  background: var(--bg-secondary, #e8e8e8);
-  border: 1px solid var(--border-color, #ccc);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
   border-radius: 4px;
   cursor: pointer;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s, background-color 0.2s, border-color 0.2s;
+  color: var(--text-primary);
 }
 
 .reachability-refresh-button:hover:not(:disabled) {
   opacity: 0.8;
+  background: var(--bg-tertiary);
+  border-color: var(--accent);
 }
 
 .reachability-refresh-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.reachability-refresh-button .refresh-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--text-primary);
 }
 
 .server-type-badge {

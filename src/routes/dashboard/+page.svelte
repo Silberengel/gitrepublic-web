@@ -313,7 +313,7 @@
                 {item.state}
               </span>
               {#if isPR && 'merged_at' in item && item.merged_at}
-                <span class="merged-indicator">✓ Merged</span>
+                <span class="merged-indicator"><img src="/icons/check-circle.svg" alt="Merged" class="icon-inline" style="width: 16px; height: 16px; vertical-align: middle; margin-right: 4px;" /> Merged</span>
               {/if}
             </div>
             <div class="item-info">

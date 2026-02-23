@@ -207,11 +207,17 @@
                   Create Patch
                 </button>
               {/if}
-              {#if hasUnlimitedAccess && (isRepoCloned === false || isRepoCloned === null) && onCloneToServer}
+              {#if (isRepoCloned === false || isRepoCloned === null) && onCloneToServer}
                 <button 
                   class="menu-item" 
-                  onclick={() => { onCloneToServer(); showMoreMenu = false; }} 
-                  disabled={cloning || checkingCloneStatus}
+                  onclick={() => { 
+                    if (hasUnlimitedAccess) {
+                      onCloneToServer(); 
+                    }
+                    showMoreMenu = false; 
+                  }} 
+                  disabled={cloning || checkingCloneStatus || !hasUnlimitedAccess}
+                  title={!hasUnlimitedAccess ? 'Unlimited access required to clone repositories' : undefined}
                 >
                   {cloning ? 'Cloning...' : (checkingCloneStatus ? 'Checking...' : 'Clone to Server')}
                 </button>

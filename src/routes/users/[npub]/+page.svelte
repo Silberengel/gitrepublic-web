@@ -1664,7 +1664,7 @@ i   *
           <div class="access-level-indicator">
             {#if hasUnlimitedAccess(userLevel)}
               <span class="access-badge access-unlimited" title="You have unlimited access - you can clone repositories and create new ones">
-                ✓ Unlimited Access
+                <img src="/icons/check-circle.svg" alt="Unlimited Access" class="icon-inline" style="width: 16px; height: 16px; vertical-align: middle; margin-right: 4px;" /> Unlimited Access
               </span>
             {:else if userLevel === 'rate_limited'}
               <span class="access-badge access-limited" title="You have rate-limited access - you can view repositories but cannot clone or create new ones">

@@ -2221,10 +2221,7 @@
             {#if lookupLoading['repo-existingRepoRef']}
               <span class="loading-text">Loading...</span>
             {:else}
-              <svg class="icon-small" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="11" cy="11" r="8"/>
-                <path d="m21 21-4.35-4.35"/>
-              </svg>
+              <img src="/icons/search.svg" alt="Search" class="icon-small" />
             {/if}
           </button>
           <button
@@ -2455,10 +2452,7 @@
               {#if lookupLoading[`npub-maintainers-${index}`]}
                 <span class="loading-text">Loading...</span>
               {:else}
-                <svg class="icon-small" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="11" cy="11" r="8"/>
-                  <path d="m21 21-4.35-4.35"/>
-                </svg>
+                <img src="/icons/search.svg" alt="Search" class="icon-small" />
               {/if}
             </button>
             {#if maintainers.length > 1}
@@ -2733,7 +2727,7 @@
           {/if}
           {#if lookupResults[`doc-${index}`]}
             <div class="lookup-results">
-              <small>✓ Documentation address converted successfully</small>
+              <small><img src="/icons/check.svg" alt="Success" class="icon-inline" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 4px;" /> Documentation address converted successfully</small>
             </div>
           {/if}
         {/each}
@@ -2789,10 +2783,7 @@
               {#if lookupLoading['repo-forkOriginalRepo']}
                 <span class="loading-text">Loading...</span>
               {:else}
-                <svg class="icon-small" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="11" cy="11" r="8"/>
-                  <path d="m21 21-4.35-4.35"/>
-                </svg>
+                <img src="/icons/search.svg" alt="Search" class="icon-small" />
               {/if}
             </button>
           </div>
