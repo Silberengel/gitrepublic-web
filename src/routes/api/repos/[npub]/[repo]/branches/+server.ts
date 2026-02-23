@@ -11,13 +11,37 @@ import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js
 import { handleValidationError, handleApiError, handleNotFoundError } from '$lib/utils/error-handler.js';
 import { KIND } from '$lib/types/nostr.js';
 import { join, dirname } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, accessSync, constants } from 'fs';
 import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
 import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS } from '$lib/config.js';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { eventCache } from '$lib/services/nostr/event-cache.js';
 import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 import logger from '$lib/services/logger.js';
+
+/**
+ * Check if a directory exists and is writable
+ * Provides helpful error messages for container environments
+ */
+function checkDirectoryWritable(dirPath: string, description: string): void {
+  if (!existsSync(dirPath)) {
+    const isContainer = existsSync('/.dockerenv') || process.env.DOCKER_CONTAINER === 'true';
+    const errorMsg = isContainer
+      ? `${description} does not exist at ${dirPath}. In Docker, ensure the volume is mounted correctly and the directory exists on the host. Check docker-compose.yml volumes section.`
+      : `${description} does not exist at ${dirPath}`;
+    throw new Error(errorMsg);
+  }
+  
+  try {
+    accessSync(dirPath, constants.W_OK);
+  } catch (accessErr) {
+    const isContainer = existsSync('/.dockerenv') || process.env.DOCKER_CONTAINER === 'true';
+    const errorMsg = isContainer
+      ? `${description} at ${dirPath} is not writable. In Docker, check that the volume mount has correct permissions. The container runs as user 'gitrepublic' (UID 1001). Ensure the host directory is writable by this user or adjust ownership: chown -R 1001:1001 ./repos`
+      : `${description} at ${dirPath} is not writable`;
+    throw new Error(errorMsg);
+  }
+}
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
@@ -139,14 +163,74 @@ export const POST: RequestHandler = createRepoPostHandler(
     if (!repoExists) {
       logger.info({ npub: context.npub, repo: context.repo }, 'Creating new empty repository for branch creation');
       const { mkdir } = await import('fs/promises');
+      
+      // Check if repoRoot exists and is writable (with helpful container error messages)
+      if (!existsSync(repoRoot)) {
+        try {
+          await mkdir(repoRoot, { recursive: true });
+          logger.debug({ repoRoot }, 'Created repoRoot directory');
+        } catch (rootErr) {
+          logger.error({ error: rootErr, repoRoot }, 'Failed to create repoRoot directory');
+          // Check if parent directory is writable
+          const parentRoot = dirname(repoRoot);
+          if (existsSync(parentRoot)) {
+            try {
+              checkDirectoryWritable(parentRoot, 'Parent directory of GIT_REPO_ROOT');
+            } catch (checkErr) {
+              throw handleApiError(
+                checkErr,
+                { operation: 'createBranch', npub: context.npub, repo: context.repo },
+                checkErr instanceof Error ? checkErr.message : String(checkErr)
+              );
+            }
+          }
+          throw handleApiError(
+            rootErr,
+            { operation: 'createBranch', npub: context.npub, repo: context.repo },
+            `Failed to create repository root directory: ${rootErr instanceof Error ? rootErr.message : String(rootErr)}`
+          );
+        }
+      } else {
+        // Directory exists, check if it's writable
+        try {
+          checkDirectoryWritable(repoRoot, 'GIT_REPO_ROOT directory');
+        } catch (checkErr) {
+          throw handleApiError(
+            checkErr,
+            { operation: 'createBranch', npub: context.npub, repo: context.repo },
+            checkErr instanceof Error ? checkErr.message : String(checkErr)
+          );
+        }
+      }
+      
+      // Create repo directory
       const repoDir = dirname(repoPath);
-      await mkdir(repoDir, { recursive: true });
+      try {
+        await mkdir(repoDir, { recursive: true });
+        logger.debug({ repoDir }, 'Created repository directory');
+      } catch (dirErr) {
+        logger.error({ error: dirErr, repoDir, npub: context.npub, repo: context.repo }, 'Failed to create repository directory');
+        throw handleApiError(
+          dirErr,
+          { operation: 'createBranch', npub: context.npub, repo: context.repo },
+          `Failed to create repository directory: ${dirErr instanceof Error ? dirErr.message : String(dirErr)}`
+        );
+      }
       
       // Initialize bare repository
-      const simpleGit = (await import('simple-git')).default;
-      const git = simpleGit();
-      await git.init(['--bare', repoPath]);
-      logger.info({ npub: context.npub, repo: context.repo }, 'Empty repository created successfully');
+      try {
+        const simpleGit = (await import('simple-git')).default;
+        const git = simpleGit();
+        await git.init(['--bare', repoPath]);
+        logger.info({ npub: context.npub, repo: context.repo }, 'Empty repository created successfully');
+      } catch (initErr) {
+        logger.error({ error: initErr, repoPath, npub: context.npub, repo: context.repo }, 'Failed to initialize bare repository');
+        throw handleApiError(
+          initErr,
+          { operation: 'createBranch', npub: context.npub, repo: context.repo },
+          `Failed to initialize repository: ${initErr instanceof Error ? initErr.message : String(initErr)}`
+        );
+      }
     }
 
     // Get default branch if fromBranch not provided

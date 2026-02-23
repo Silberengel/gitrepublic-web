@@ -6,7 +6,6 @@
 import simpleGit, { type SimpleGit } from 'simple-git';
 import { readdir } from 'fs/promises';
 import { join, dirname, normalize, resolve } from 'path';
-import { existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { RepoManager } from './repo-manager.js';
 import { createGitCommitSignature } from './commit-signer.js';
@@ -52,10 +51,221 @@ export interface Tag {
 export class FileManager {
   private repoManager: RepoManager;
   private repoRoot: string;
+  // Cache for directory existence checks (5 minute TTL)
+  private dirExistenceCache: Map<string, { exists: boolean; timestamp: number }> = new Map();
+  private readonly DIR_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  // Lazy-loaded fs modules (cached after first import)
+  private fsPromises: typeof import('fs/promises') | null = null;
+  private fsSync: typeof import('fs') | null = null;
 
   constructor(repoRoot: string = '/repos') {
     this.repoRoot = repoRoot;
     this.repoManager = new RepoManager(repoRoot);
+  }
+
+  /**
+   * Lazy load fs/promises module (cached after first load)
+   */
+  private async getFsPromises(): Promise<typeof import('fs/promises')> {
+    if (!this.fsPromises) {
+      this.fsPromises = await import('fs/promises');
+    }
+    return this.fsPromises;
+  }
+
+  /**
+   * Lazy load fs module (cached after first load)
+   */
+  private async getFsSync(): Promise<typeof import('fs')> {
+    if (!this.fsSync) {
+      this.fsSync = await import('fs');
+    }
+    return this.fsSync;
+  }
+
+  /**
+   * Check if running in a container environment (async)
+   * Note: This is cached after first check since it won't change during runtime
+   */
+  private containerEnvCache: boolean | null = null;
+  private async isContainerEnvironment(): Promise<boolean> {
+    // Cache the result since it won't change during runtime
+    if (this.containerEnvCache !== null) {
+      return this.containerEnvCache;
+    }
+    
+    if (process.env.DOCKER_CONTAINER === 'true') {
+      this.containerEnvCache = true;
+      return true;
+    }
+    
+    // Check for /.dockerenv file (async)
+    this.containerEnvCache = await this.pathExists('/.dockerenv');
+    return this.containerEnvCache;
+  }
+
+  /**
+   * Check if a path exists (async, non-blocking)
+   * Uses fs.access() which is the recommended async way to check existence
+   */
+  private async pathExists(path: string): Promise<boolean> {
+    try {
+      const fs = await this.getFsPromises();
+      await fs.access(path);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Sanitize error messages to prevent leaking sensitive path information
+   * Only shows relative paths, not absolute paths
+   */
+  private sanitizePathForError(path: string): string {
+    // If path is within repoRoot, show relative path
+    const resolvedPath = resolve(path).replace(/\\/g, '/');
+    const resolvedRoot = resolve(this.repoRoot).replace(/\\/g, '/');
+    if (resolvedPath.startsWith(resolvedRoot + '/')) {
+      return resolvedPath.slice(resolvedRoot.length + 1);
+    }
+    // For paths outside repoRoot, only show last component for security
+    return path.split(/[/\\]/).pop() || path;
+  }
+
+  /**
+   * Generate container-specific error message for permission issues
+   */
+  private getContainerPermissionError(path: string, operation: string): string {
+    const sanitizedPath = this.sanitizePathForError(path);
+    return `Permission denied: ${operation} at ${sanitizedPath}. In Docker, check that the volume mount has correct permissions. The container runs as user 'gitrepublic' (UID 1001). Ensure the host directory is writable by this user or adjust ownership: chown -R 1001:1001 ./repos`;
+  }
+
+  /**
+   * Ensure directory exists with proper error handling and security
+   * @param dirPath - Directory path to ensure exists
+   * @param description - Description for error messages
+   * @param checkParent - Whether to check parent directory permissions first
+   */
+  private async ensureDirectoryExists(
+    dirPath: string,
+    description: string,
+    checkParent: boolean = false
+  ): Promise<void> {
+    // Check cache first (with TTL)
+    const cacheKey = `dir:${dirPath}`;
+    const cached = this.dirExistenceCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && (now - cached.timestamp) < this.DIR_CACHE_TTL) {
+      if (cached.exists) {
+        return; // Directory exists, skip
+      }
+    }
+
+    // Use async path existence check
+    const exists = await this.pathExists(dirPath);
+    if (exists) {
+      // Update cache
+      this.dirExistenceCache.set(cacheKey, { exists: true, timestamp: now });
+      return;
+    }
+
+    // Check parent directory if requested
+    if (checkParent) {
+      const parentDir = dirname(dirPath);
+      const parentExists = await this.pathExists(parentDir);
+      if (!parentExists) {
+        await this.ensureDirectoryExists(parentDir, `Parent of ${description}`, true);
+      } else {
+        // Verify parent is writable (async)
+        try {
+          const fs = await this.getFsPromises();
+          await fs.access(parentDir, fs.constants.W_OK);
+        } catch (accessErr) {
+          const isContainer = await this.isContainerEnvironment();
+          const errorMsg = isContainer
+            ? this.getContainerPermissionError(parentDir, `writing to parent directory of ${description}`)
+            : `Parent directory ${this.sanitizePathForError(parentDir)} is not writable`;
+          logger.error({ error: accessErr, parentDir, description }, errorMsg);
+          throw new Error(errorMsg);
+        }
+      }
+    }
+
+    // Create directory
+    try {
+      const { mkdir } = await this.getFsPromises();
+      await mkdir(dirPath, { recursive: true });
+      logger.debug({ dirPath: this.sanitizePathForError(dirPath), description }, 'Created directory');
+      // Update cache
+      this.dirExistenceCache.set(cacheKey, { exists: true, timestamp: now });
+    } catch (mkdirErr) {
+      // Clear cache on error
+      this.dirExistenceCache.delete(cacheKey);
+      const isContainer = await this.isContainerEnvironment();
+      const errorMsg = isContainer
+        ? this.getContainerPermissionError(dirPath, `creating ${description}`)
+        : `Failed to create ${description}: ${mkdirErr instanceof Error ? mkdirErr.message : String(mkdirErr)}`;
+      logger.error({ error: mkdirErr, dirPath: this.sanitizePathForError(dirPath), description }, errorMsg);
+      throw new Error(errorMsg);
+    }
+  }
+
+  /**
+   * Verify directory is writable (for security checks) - async
+   */
+  private async verifyDirectoryWritable(dirPath: string, description: string): Promise<void> {
+    const exists = await this.pathExists(dirPath);
+    if (!exists) {
+      throw new Error(`${description} does not exist at ${this.sanitizePathForError(dirPath)}`);
+    }
+
+    try {
+      const fs = await this.getFsPromises();
+      await fs.access(dirPath, fs.constants.W_OK);
+    } catch (accessErr) {
+      const isContainer = await this.isContainerEnvironment();
+      const errorMsg = isContainer
+        ? this.getContainerPermissionError(dirPath, `writing to ${description}`)
+        : `${description} at ${this.sanitizePathForError(dirPath)} is not writable`;
+      logger.error({ error: accessErr, dirPath: this.sanitizePathForError(dirPath), description }, errorMsg);
+      throw new Error(errorMsg);
+    }
+  }
+
+  /**
+   * Clear directory existence cache (useful after operations that create directories)
+   */
+  private clearDirCache(dirPath?: string): void {
+    if (dirPath) {
+      const cacheKey = `dir:${dirPath}`;
+      this.dirExistenceCache.delete(cacheKey);
+    } else {
+      // Clear all cache
+      this.dirExistenceCache.clear();
+    }
+  }
+
+  /**
+   * Sanitize error messages to prevent information leakage
+   * Uses sanitizeError from security utils and adds path sanitization
+   */
+  private sanitizeErrorMessage(error: unknown, context?: { npub?: string; repoName?: string; filePath?: string }): string {
+    let message = sanitizeError(error);
+    
+    // Remove sensitive context if present
+    if (context?.npub) {
+      const { truncateNpub } = require('../../utils/security.js');
+      message = message.replace(new RegExp(context.npub.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), truncateNpub(context.npub));
+    }
+    
+    // Sanitize file paths
+    if (context?.filePath) {
+      const sanitizedPath = this.sanitizePathForError(context.filePath);
+      message = message.replace(new RegExp(context.filePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), sanitizedPath);
+    }
+    
+    return message;
   }
 
   /**
@@ -80,12 +290,10 @@ export class FileManager {
     if (!resolvedPath.startsWith(resolvedRoot + '/')) {
       throw new Error('Path traversal detected: worktree path outside allowed root');
     }
-    const { mkdir, rm } = await import('fs/promises');
+    const { rm } = await this.getFsPromises();
     
-    // Ensure worktree root exists (use resolved path)
-    if (!existsSync(resolvedWorktreeRoot)) {
-      await mkdir(resolvedWorktreeRoot, { recursive: true });
-    }
+    // Ensure worktree root exists (use resolved path) with parent check
+    await this.ensureDirectoryExists(resolvedWorktreeRoot, 'worktree root directory', true);
     
     const git = simpleGit(repoPath);
     
@@ -125,7 +333,7 @@ export class FileManager {
     }
     
     // Check if worktree already exists at the correct location
-    if (existsSync(worktreePath)) {
+    if (await this.pathExists(worktreePath)) {
       // Verify it's a valid worktree
       try {
         const worktreeGit = simpleGit(worktreePath);
@@ -133,6 +341,7 @@ export class FileManager {
         return worktreePath;
       } catch {
         // Invalid worktree, remove it
+        const { rm } = await this.getFsPromises();
         await rm(worktreePath, { recursive: true, force: true });
       }
     }
@@ -393,8 +602,8 @@ export class FileManager {
       });
       
       // Verify the worktree directory was actually created (after the promise resolves)
-      if (!existsSync(worktreePath)) {
-        throw new Error(`Worktree directory was not created: ${worktreePath}`);
+      if (!(await this.pathExists(worktreePath))) {
+        throw new Error(`Worktree directory was not created: ${this.sanitizePathForError(worktreePath)}`);
       }
       
       // Verify it's a valid git repository
@@ -1047,10 +1256,7 @@ export class FileManager {
       }
       
       // Ensure directory exists
-      if (!existsSync(fileDir)) {
-        const { mkdir } = await import('fs/promises');
-        await mkdir(fileDir, { recursive: true });
-      }
+      await this.ensureDirectoryExists(fileDir, 'directory for file', true);
 
       const { writeFile: writeFileFs } = await import('fs/promises');
       await writeFileFs(fullFilePath, content, 'utf-8');
@@ -1508,8 +1714,8 @@ export class FileManager {
         throw new Error('Path validation failed: resolved path outside work directory');
       }
       
-      if (existsSync(fullFilePath)) {
-        const { unlink } = await import('fs/promises');
+      if (await this.pathExists(fullFilePath)) {
+        const { unlink } = await this.getFsPromises();
         await unlink(fullFilePath);
       }
 
@@ -1621,23 +1827,33 @@ export class FileManager {
         // Create worktree for the new branch directly (orphan branch)
         const worktreeRoot = join(this.repoRoot, npub, `${repoName}.worktrees`);
         const worktreePath = resolve(join(worktreeRoot, branchName));
-        const { mkdir, rm } = await import('fs/promises');
+        const { rm } = await this.getFsPromises();
         
-        if (!existsSync(worktreeRoot)) {
-          await mkdir(worktreeRoot, { recursive: true });
+        // Ensure repoRoot is writable if it exists
+        if (await this.pathExists(this.repoRoot)) {
+          await this.verifyDirectoryWritable(this.repoRoot, 'GIT_REPO_ROOT directory');
         }
         
+        // Ensure parent directory exists (npub directory)
+        const parentDir = join(this.repoRoot, npub);
+        await this.ensureDirectoryExists(parentDir, 'parent directory for worktree', true);
+        
+        // Create worktree root directory
+        await this.ensureDirectoryExists(worktreeRoot, 'worktree root directory', false);
+        
         // Remove existing worktree if it exists
-        if (existsSync(worktreePath)) {
+        if (await this.pathExists(worktreePath)) {
           try {
             await git.raw(['worktree', 'remove', worktreePath, '--force']);
           } catch {
+            const { rm } = await this.getFsPromises();
             await rm(worktreePath, { recursive: true, force: true });
           }
         }
         
         // Create worktree with orphan branch
-        await git.raw(['worktree', 'add', worktreePath, '--orphan', branchName]);
+        // Note: --orphan must come before branch name, path comes last
+        await git.raw(['worktree', 'add', '--orphan', branchName, worktreePath]);
         
         // Create initial empty commit with announcement as message
         const workGit: SimpleGit = simpleGit(worktreePath);
@@ -1865,8 +2081,9 @@ export class FileManager {
 
       return files;
     } catch (error) {
-      logger.error({ error, repoPath, fromRef, toRef }, 'Error getting diff');
-      throw new Error(`Failed to get diff: ${error instanceof Error ? error.message : String(error)}`);
+      const sanitizedError = sanitizeError(error);
+      logger.error({ error: sanitizedError, repoPath: this.sanitizePathForError(repoPath), fromRef, toRef }, 'Error getting diff');
+      throw new Error(`Failed to get diff: ${sanitizedError}`);
     }
   }
 
@@ -1891,9 +2108,51 @@ export class FileManager {
     const git: SimpleGit = simpleGit(repoPath);
 
     try {
+      // Check if repository has any commits
+      let hasCommits = false;
+      try {
+        // Try to get HEAD commit
+        const headCommit = await git.raw(['rev-parse', 'HEAD']).catch(() => null);
+        hasCommits = !!(headCommit && headCommit.trim().length > 0);
+      } catch {
+        // Check if any branch has commits
+        try {
+          const branches = await git.branch(['-a']);
+          for (const branch of branches.all) {
+            const branchName = branch.replace(/^remotes\/origin\//, '').replace(/^remotes\//, '');
+            if (branchName.includes('HEAD')) continue;
+            try {
+              const commitHash = await git.raw(['rev-parse', `refs/heads/${branchName}`]).catch(() => null);
+              if (commitHash && commitHash.trim().length > 0) {
+                hasCommits = true;
+                // If ref is HEAD and we found a branch with commits, use that branch
+                if (ref === 'HEAD') {
+                  ref = branchName;
+                }
+                break;
+              }
+            } catch {
+              // Continue checking other branches
+            }
+          }
+        } catch {
+          // Could not check branches
+        }
+      }
+
+      if (!hasCommits) {
+        throw new Error('Cannot create tag: repository has no commits. Please create at least one commit first.');
+      }
+
+      // Validate that the ref exists
+      try {
+        await git.raw(['rev-parse', '--verify', ref]);
+      } catch (refErr) {
+        throw new Error(`Invalid reference '${ref}': ${refErr instanceof Error ? refErr.message : String(refErr)}`);
+      }
+
       if (message) {
         // Create annotated tag
-        await git.addTag(tagName);
         // Note: simple-git addTag doesn't support message directly, use raw command
         if (ref !== 'HEAD') {
           await git.raw(['tag', '-a', tagName, '-m', message, ref]);

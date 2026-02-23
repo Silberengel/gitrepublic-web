@@ -442,7 +442,9 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
       
       // Fetch from remote with appropriate environment
       // Use spawn with proper argument arrays for security
-      await execGitWithEnv(repoPath, ['fetch', remoteName, '--all'], gitEnv);
+      // Note: 'git fetch <remote>' already fetches all branches from that remote
+      // The --all flag is only for fetching from all remotes (without specifying a remote)
+      await execGitWithEnv(repoPath, ['fetch', remoteName], gitEnv);
       
       // Update remote head
       try {

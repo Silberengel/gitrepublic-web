@@ -1,8 +1,12 @@
 services:
   gitrepublic:
-    # For using a pre-built image (e.g., from local build or registry):
+    # OPTION 1: Use pre-built image from registry (recommended for production)
+    # Only requires: docker-compose.yml and ./repos directory
+    # No Dockerfile or docker-entrypoint.sh needed on the server
     image: ${DOCKER_IMAGE:-silberengel/gitrepublic-web:latest}
-    # For building from source, comment out image above and uncomment build below:
+    
+    # OPTION 2: Build from source (uncomment below and comment out image above)
+    # Requires: Dockerfile, docker-entrypoint.sh, and source code
     # build:
     #   context: .
     #   dockerfile: Dockerfile
@@ -25,12 +29,19 @@ services:
       - PORT=6543
     volumes:
       # Persist git repositories
-      # Note: Ensure ./repos directory exists on the remote machine, or Docker will create it
+      # The entrypoint script will automatically fix permissions on startup
+      # No manual chown needed - works out of the box!
       - ./repos:/repos
       # Optional: persist audit logs
       # - ./logs:/app/logs
       # Optional: mount config file if needed
       # - ./config:/app/config:ro
+    # Optional: Override UID/GID via environment variables if needed
+    # Default is 10000:10000 (standardized, avoids conflicts)
+    # Uncomment and adjust if you need to match a specific host user:
+    # environment:
+    #   - GITREPUBLIC_UID=1001
+    #   - GITREPUBLIC_GID=1001
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:6543', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)}).on('error', () => {process.exit(1)})"]
