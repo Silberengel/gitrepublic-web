@@ -79,7 +79,7 @@
   let userPubkey = $state<string | null>(null);
   let userPubkeyHex = $state<string | null>(null);
   let showCommitDialog = $state(false);
-  let activeTab = $state<'files' | 'history' | 'tags' | 'issues' | 'prs' | 'docs' | 'discussions' | 'patches'>('files');
+  let activeTab = $state<'files' | 'history' | 'tags' | 'issues' | 'prs' | 'docs' | 'discussions' | 'patches' | 'releases' | 'code-search'>('files');
   let showRepoMenu = $state(false);
   
   // Tabs will be defined as derived after issues and prs are declared
@@ -223,7 +223,8 @@
   let diffData = $state<Array<{ file: string; additions: number; deletions: number; diff: string }>>([]);
 
   // Tags
-  let tags = $state<Array<{ name: string; hash: string; message?: string }>>([]);
+  let tags = $state<Array<{ name: string; hash: string; message?: string; date?: number }>>([]);
+  let selectedTag = $state<string | null>(null);
   let showCreateTagDialog = $state(false);
   let newTagName = $state('');
   let newTagMessage = $state('');
@@ -352,7 +353,7 @@
   let selectedPR = $state<string | null>(null);
   
   // Tabs menu - defined after issues and prs
-  // Order: Files, Issues, PRs, Patches, Discussion, History, Tags, Docs
+  // Order: Files, Issues, PRs, Patches, Discussion, History, Tags, Code Search, Docs
   // Show tabs that require cloned repo when repo is cloned OR API fallback is available
   const tabs = $derived.by(() => {
     const allTabs = [
@@ -363,6 +364,7 @@
       { id: 'discussions', label: 'Discussions', icon: '/icons/message-circle.svg', requiresClone: false },
       { id: 'history', label: 'Commit History', icon: '/icons/git-commit.svg', requiresClone: true },
       { id: 'tags', label: 'Tags', icon: '/icons/tag.svg', requiresClone: true },
+      { id: 'code-search', label: 'Code Search', icon: '/icons/search.svg', requiresClone: true },
       { id: 'docs', label: 'Docs', icon: '/icons/book.svg', requiresClone: false }
     ];
     
@@ -415,6 +417,37 @@
   let replyingToComment = $state<{ id: string; kind?: number; pubkey?: string; author: string } | null>(null);
   let replyContent = $state('');
   let creatingReply = $state(false);
+
+  // Releases
+  let releases = $state<Array<{
+    id: string;
+    tagName: string;
+    tagHash?: string;
+    releaseNotes?: string;
+    isDraft?: boolean;
+    isPrerelease?: boolean;
+    created_at: number;
+    pubkey: string;
+  }>>([]);
+  let loadingReleases = $state(false);
+  let showCreateReleaseDialog = $state(false);
+  let newReleaseTagName = $state('');
+  let newReleaseTagHash = $state('');
+  let newReleaseNotes = $state('');
+  let newReleaseIsDraft = $state(false);
+  let newReleaseIsPrerelease = $state(false);
+  let creatingRelease = $state(false);
+
+  // Code Search
+  let codeSearchQuery = $state('');
+  let codeSearchResults = $state<Array<{
+    file: string;
+    line: number;
+    content: string;
+    branch: string;
+  }>>([]);
+  let loadingCodeSearch = $state(false);
+  let codeSearchScope = $state<'repo' | 'all'>('repo');
 
   // Discussions
   let selectedDiscussion = $state<string | null>(null);
@@ -3979,6 +4012,10 @@
       });
       if (response.ok) {
         tags = await response.json();
+        // Auto-select first tag if none selected
+        if (tags.length > 0 && !selectedTag) {
+          selectedTag = tags[0].name;
+        }
       }
     } catch (err) {
       console.error('Failed to load tags:', err);
@@ -4028,6 +4065,123 @@
       error = err instanceof Error ? err.message : 'Failed to create tag';
     } finally {
       saving = false;
+    }
+  }
+
+  async function loadReleases() {
+    if (repoNotFound) return;
+    loadingReleases = true;
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/releases`, {
+        headers: buildApiHeaders()
+      });
+      if (response.ok) {
+        const data = await response.json();
+        releases = data.map((release: any) => ({
+          id: release.id,
+          tagName: release.tags.find((t: string[]) => t[0] === 'tag')?.[1] || '',
+          tagHash: release.tags.find((t: string[]) => t[0] === 'r' && t[2] === 'tag')?.[1],
+          releaseNotes: release.content || '',
+          isDraft: release.tags.some((t: string[]) => t[0] === 'draft' && t[1] === 'true'),
+          isPrerelease: release.tags.some((t: string[]) => t[0] === 'prerelease' && t[1] === 'true'),
+          created_at: release.created_at,
+          pubkey: release.pubkey
+        }));
+      }
+    } catch (err) {
+      console.error('Failed to load releases:', err);
+    } finally {
+      loadingReleases = false;
+    }
+  }
+
+  async function createRelease() {
+    if (!newReleaseTagName.trim() || !newReleaseTagHash.trim()) {
+      alert('Please enter a tag name and tag hash');
+      return;
+    }
+
+    if (!userPubkey) {
+      alert('Please connect your NIP-07 extension');
+      return;
+    }
+
+    if (!isMaintainer && userPubkeyHex !== repoOwnerPubkeyDerived) {
+      alert('Only repository owners and maintainers can create releases');
+      return;
+    }
+
+    creatingRelease = true;
+    error = null;
+
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/releases`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildApiHeaders()
+        },
+        body: JSON.stringify({
+          tagName: newReleaseTagName,
+          tagHash: newReleaseTagHash,
+          releaseNotes: newReleaseNotes,
+          isDraft: newReleaseIsDraft,
+          isPrerelease: newReleaseIsPrerelease
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to create release');
+      }
+
+      showCreateReleaseDialog = false;
+      newReleaseTagName = '';
+      newReleaseTagHash = '';
+      newReleaseNotes = '';
+      newReleaseIsDraft = false;
+      newReleaseIsPrerelease = false;
+      await loadReleases();
+      // Reload tags to show release indicator
+      await loadTags();
+      alert('Release created successfully!');
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to create release';
+      alert(error);
+    } finally {
+      creatingRelease = false;
+    }
+  }
+
+  async function performCodeSearch() {
+    if (!codeSearchQuery.trim() || codeSearchQuery.length < 2) {
+      codeSearchResults = [];
+      return;
+    }
+
+    loadingCodeSearch = true;
+    error = null;
+
+    try {
+      const url = codeSearchScope === 'repo' 
+        ? `/api/repos/${npub}/${repo}/code-search?q=${encodeURIComponent(codeSearchQuery.trim())}`
+        : `/api/code-search?q=${encodeURIComponent(codeSearchQuery.trim())}&repo=${encodeURIComponent(`${npub}/${repo}`)}`;
+      
+      const response = await fetch(url, {
+        headers: buildApiHeaders()
+      });
+
+      if (response.ok) {
+        codeSearchResults = await response.json();
+      } else {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to search code');
+      }
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to search code';
+      codeSearchResults = [];
+    } finally {
+      loadingCodeSearch = false;
     }
   }
 
@@ -4437,6 +4591,9 @@
         loadCommitHistory();
       } else if (activeTab === 'tags') {
         loadTags();
+        loadReleases(); // Load releases to check for tag associations
+      } else if (activeTab === 'code-search') {
+        // Code search is performed on demand, not auto-loaded
       } else if (activeTab === 'issues') {
         loadIssues();
       } else if (activeTab === 'prs') {
@@ -4929,6 +5086,55 @@
               <img src="/icons/plus.svg" alt="New Tag" class="icon" />
             </button>
           {/if}
+          <button 
+            onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+            class="mobile-toggle-button"
+            title="Show content"
+          >
+            <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
+          </button>
+        </div>
+        {#if tags.length > 0}
+          <ul class="tag-list">
+            {#each tags as tag}
+              {@const tagHash = tag.hash || ''}
+              {#if tagHash}
+                <li class="tag-item" class:selected={selectedTag === tag.name}>
+                  <button 
+                    onclick={() => selectedTag = tag.name}
+                    class="tag-item-button"
+                  >
+                    <div class="tag-name">{tag.name}</div>
+                    <div class="tag-hash">{tagHash.slice(0, 7)}</div>
+                    {#if tag.date}
+                      <div class="tag-date">{new Date(tag.date * 1000).toLocaleDateString()}</div>
+                    {/if}
+                    {#if releases.find(r => r.tagName === tag.name)}
+                      <img src="/icons/package.svg" alt="Has release" class="tag-has-release-icon" title="This tag has a release" />
+                    {/if}
+                  </button>
+                </li>
+              {/if}
+            {/each}
+          </ul>
+        {:else}
+          <div class="empty-state">
+            <p>No tags found</p>
+          </div>
+        {/if}
+      </aside>
+      {/if}
+
+      <!-- Code Search View -->
+      {#if activeTab === 'code-search' && canViewRepo}
+      <aside class="code-search-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'code-search'}>
+        <div class="code-search-header">
+          <TabsMenu 
+            activeTab={activeTab} 
+            {tabs} 
+            onTabChange={(tab) => activeTab = tab as typeof activeTab}
+          />
+          <h2>Code Search</h2>
           <button 
             onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
             class="mobile-toggle-button"
@@ -5430,24 +5636,131 @@
                 <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
               </button>
             </div>
-            {#if tags.length > 0}
-              <ul class="tag-list">
-                {#each tags as tag}
-                  {@const tagHash = tag.hash || ''}
-                  {#if tagHash}
-                    <li class="tag-item">
-                      <div class="tag-name">{tag.name}</div>
-                      <div class="tag-hash">{tagHash.slice(0, 7)}</div>
-                      {#if tag.message}
-                        <div class="tag-message">{tag.message}</div>
+            {#if selectedTag}
+              {@const tag = tags.find(t => t.name === selectedTag)}
+              {@const release = releases.find(r => r.tagName === selectedTag)}
+              {#if tag}
+                <div class="tag-detail">
+                  <div class="tag-detail-header">
+                    <h3>{tag.name}</h3>
+                    <div class="tag-detail-meta">
+                      <span>Tag: {tag.hash?.slice(0, 7) || 'N/A'}</span>
+                      {#if tag.date}
+                        <span class="tag-date">Created {new Date(tag.date * 1000).toLocaleString()}</span>
                       {/if}
-                    </li>
+                      <a 
+                        href={`/api/repos/${npub}/${repo}/download?ref=${tag.name}&format=zip`}
+                        download={`${repo}-${tag.name}.zip`}
+                        class="download-tag-button"
+                        title="Download source code as ZIP"
+                      >
+                        <img src="/icons/download.svg" alt="Download" class="icon-inline" />
+                        Download ZIP
+                      </a>
+                      {#if (isMaintainer || userPubkeyHex === repoOwnerPubkeyDerived) && isRepoCloned && !release}
+                        <button 
+                          onclick={() => {
+                            newReleaseTagName = tag.name;
+                            newReleaseTagHash = tag.hash || '';
+                            showCreateReleaseDialog = true;
+                          }}
+                          class="release-tag-button"
+                          title="Create a release for this tag"
+                        >
+                          Release this tag
+                        </button>
+                      {/if}
+                    </div>
+                  </div>
+                  {#if tag.message}
+                    <div class="tag-message">
+                      <p>{tag.message}</p>
+                    </div>
                   {/if}
-                {/each}
-              </ul>
+                  {#if release}
+                    <div class="tag-release-section">
+                      <h4>Release</h4>
+                      <div class="release-info">
+                        {#if release.isDraft}
+                          <span class="release-badge draft">Draft</span>
+                        {/if}
+                        {#if release.isPrerelease}
+                          <span class="release-badge prerelease">Pre-release</span>
+                        {/if}
+                        <div class="release-meta">
+                          <span>Released {new Date(release.created_at * 1000).toLocaleDateString()}</span>
+                        </div>
+                        {#if release.releaseNotes}
+                          <div class="release-notes">
+                            {@html release.releaseNotes.replace(/\n/g, '<br>')}
+                          </div>
+                        {/if}
+                      </div>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             {:else}
               <div class="empty-state">
-                <p>No tags found</p>
+                <p>Select a tag from the sidebar to view details</p>
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+
+        {#if activeTab === 'code-search' && canViewRepo}
+          <div class="code-search-content" class:hide-on-mobile={showLeftPanelOnMobile && activeTab === 'code-search'}>
+            <div class="content-header-mobile">
+              <button 
+                onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
+                class="mobile-toggle-button"
+                title="Show list"
+              >
+                <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
+              </button>
+            </div>
+            <div class="code-search-form">
+              <div class="search-input-group">
+                <input 
+                  type="text" 
+                  bind:value={codeSearchQuery}
+                  placeholder="Search code..."
+                  onkeydown={(e) => e.key === 'Enter' && performCodeSearch()}
+                  class="code-search-input"
+                />
+                <select bind:value={codeSearchScope} class="code-search-scope">
+                  <option value="repo">This Repository</option>
+                  <option value="all">All Repositories</option>
+                </select>
+                <button onclick={performCodeSearch} disabled={loadingCodeSearch || !codeSearchQuery.trim()} class="search-button">
+                  {loadingCodeSearch ? 'Searching...' : 'Search'}
+                </button>
+              </div>
+            </div>
+            {#if loadingCodeSearch}
+              <div class="empty-state">
+                <p>Searching...</p>
+              </div>
+            {:else if codeSearchResults.length > 0}
+              <div class="code-search-results">
+                <h3>Found {codeSearchResults.length} result{codeSearchResults.length !== 1 ? 's' : ''}</h3>
+                {#each codeSearchResults as result}
+                  <div class="code-search-result-item">
+                    <div class="result-header">
+                      <span class="result-file">{result.file}</span>
+                      <span class="result-line">Line {result.line}</span>
+                      {#if codeSearchScope === 'all' && 'repo' in result}
+                        <span class="result-repo">{result.repo || npub}/{result.repo || repo}</span>
+                      {/if}
+                    </div>
+                    <pre class="result-content">{result.content}</pre>
+                  </div>
+                {/each}
+              </div>
+            {:else if codeSearchQuery.trim() && !loadingCodeSearch}
+              <div class="empty-state">
+                <p>No results found</p>
               </div>
             {/if}
           </div>
@@ -5632,6 +5945,43 @@
                     <span>#{patch.id.slice(0, 7)}</span>
                     <span>Created {new Date(patch.created_at * 1000).toLocaleString()}</span>
                     <EventCopyButton eventId={patch.id} kind={patch.kind} pubkey={patch.author} />
+                    {#if (isMaintainer || userPubkeyHex === repoOwnerPubkeyDerived) && isRepoCloned}
+                      <button 
+                        onclick={async () => {
+                          if (!confirm('Apply this patch to the repository? This will create a commit with the patch changes.')) return;
+                          try {
+                            const response = await fetch(`/api/repos/${npub}/${repo}/patches/${patch.id}/apply`, {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                                ...buildApiHeaders()
+                              },
+                              body: JSON.stringify({
+                                branch: currentBranch || 'main',
+                                commitMessage: `Apply patch ${patch.id.slice(0, 8)}: ${patch.subject}`
+                              })
+                            });
+                            if (response.ok) {
+                              const data = await response.json();
+                              alert(`Patch applied successfully! Commit: ${data.commitHash.slice(0, 7)}`);
+                              // Reload files to show changes
+                              if (activeTab === 'files') {
+                                loadFiles(currentPath);
+                              }
+                            } else {
+                              const errorData = await response.json();
+                              alert(`Failed to apply patch: ${errorData.message || 'Unknown error'}`);
+                            }
+                          } catch (err) {
+                            alert(`Failed to apply patch: ${err instanceof Error ? err.message : 'Unknown error'}`);
+                          }
+                        }}
+                        class="apply-patch-button"
+                        title="Apply this patch to the repository"
+                      >
+                        Apply Patch
+                      </button>
+                    {/if}
                   </div>
                   {#if patch.description && patch.description !== patch.subject}
                     <div class="patch-description">{patch.description}</div>
@@ -6087,6 +6437,59 @@
     </div>
   {/if}
 
+  <!-- Create Release Dialog -->
+  {#if showCreateReleaseDialog && userPubkey && (isMaintainer || userPubkeyHex === repoOwnerPubkeyDerived) && isRepoCloned}
+    <div 
+      class="modal-overlay" 
+      role="dialog"
+      aria-modal="true"
+      aria-label="Create new release"
+      onclick={() => showCreateReleaseDialog = false}
+      onkeydown={(e) => e.key === 'Escape' && (showCreateReleaseDialog = false)}
+      tabindex="-1"
+    >
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div 
+        class="modal" 
+        role="document"
+        onclick={(e) => e.stopPropagation()}
+      >
+        <h3>Create New Release</h3>
+        <label>
+          Tag Name:
+          <input type="text" bind:value={newReleaseTagName} placeholder="v1.0.0" />
+        </label>
+        <label>
+          Tag Hash (commit hash):
+          <input type="text" bind:value={newReleaseTagHash} placeholder="abc1234..." />
+        </label>
+        <label>
+          Release Notes:
+          <textarea bind:value={newReleaseNotes} rows="10" placeholder="Release notes in markdown..."></textarea>
+        </label>
+        <label>
+          <input type="checkbox" bind:checked={newReleaseIsDraft} />
+          Draft Release
+        </label>
+        <label>
+          <input type="checkbox" bind:checked={newReleaseIsPrerelease} />
+          Pre-release
+        </label>
+        <div class="modal-actions">
+          <button onclick={() => showCreateReleaseDialog = false} class="cancel-button">Cancel</button>
+          <button 
+            onclick={createRelease} 
+            disabled={!newReleaseTagName.trim() || !newReleaseTagHash.trim() || creatingRelease} 
+            class="save-button"
+          >
+            {creatingRelease ? 'Creating...' : 'Create Release'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <!-- Create Issue Dialog -->
   {#if showCreateIssueDialog && userPubkey}
     <div 
@@ -6460,5 +6863,60 @@
     object-fit: contain;
     border-radius: 4px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  /* Tag date styling */
+  .tag-date {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+  }
+
+  /* Tag detail meta styling */
+  .tag-detail-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+    margin-top: 0.5rem;
+  }
+
+  .tag-detail-meta .tag-date {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+  }
+
+  /* Download tag button styling */
+  .download-tag-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--button-primary);
+    color: var(--accent-text, #ffffff);
+    border: none;
+    border-radius: 4px;
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-family: 'IBM Plex Serif', serif;
+    transition: background 0.2s ease;
+    cursor: pointer;
+  }
+
+  .download-tag-button:hover {
+    background: var(--button-primary-hover);
+  }
+
+  .download-tag-button .icon-inline {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* Tag has release icon styling */
+  .tag-has-release-icon {
+    width: 16px;
+    height: 16px;
+    vertical-align: middle;
+    opacity: 0.8;
   }
 </style>

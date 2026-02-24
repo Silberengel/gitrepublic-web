@@ -41,12 +41,13 @@ export interface RepoPrivacyInfo {
   isPrivate: boolean;
   owner: string;
   maintainers: string[];
+  contributors: string[];
 }
 
 export class MaintainerService {
   private nostrClient: NostrClient;
   private ownershipTransferService: OwnershipTransferService;
-  private cache: Map<string, { maintainers: string[]; owner: string; timestamp: number; isPrivate: boolean }> = new Map();
+  private cache: Map<string, { maintainers: string[]; contributors: string[]; owner: string; timestamp: number; isPrivate: boolean }> = new Map();
   private cacheTTL = 5 * 60 * 1000; // 5 minutes
 
   constructor(relays: string[]) {
@@ -63,15 +64,15 @@ export class MaintainerService {
   }
 
   /**
-   * Get maintainers and privacy info for a repository from NIP-34 announcement
+   * Get maintainers, contributors, and privacy info for a repository from NIP-34 announcement
    */
-  async getMaintainers(repoOwnerPubkey: string, repoId: string): Promise<{ owner: string; maintainers: string[]; isPrivate: boolean }> {
+  async getMaintainers(repoOwnerPubkey: string, repoId: string): Promise<{ owner: string; maintainers: string[]; contributors: string[]; isPrivate: boolean }> {
     const cacheKey = `${repoOwnerPubkey}:${repoId}`;
     const cached = this.cache.get(cacheKey);
     
     // Return cached if still valid
     if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
-      return { owner: cached.owner, maintainers: cached.maintainers, isPrivate: cached.isPrivate };
+      return { owner: cached.owner, maintainers: cached.maintainers, contributors: cached.contributors, isPrivate: cached.isPrivate };
     }
 
     try {
@@ -87,7 +88,7 @@ export class MaintainerService {
 
       if (events.length === 0) {
         // If no announcement found, only the owner is a maintainer, and repo is public by default
-        const result = { owner: repoOwnerPubkey, maintainers: [repoOwnerPubkey], isPrivate: false };
+        const result = { owner: repoOwnerPubkey, maintainers: [repoOwnerPubkey], contributors: [], isPrivate: false };
         this.cache.set(cacheKey, { ...result, timestamp: Date.now() });
         return result;
       }
@@ -105,6 +106,7 @@ export class MaintainerService {
       const currentOwner = await fileManager.getCurrentOwnerFromRepo(npub, repoId) || announcement.pubkey;
       
       const maintainers: string[] = [currentOwner]; // Current owner is always a maintainer
+      const contributors: string[] = []; // Contributors can view but not modify
 
       // Extract maintainers from tags
       // Maintainers tag format: ['maintainers', 'pubkey1', 'pubkey2', 'pubkey3', ...]
@@ -137,14 +139,48 @@ export class MaintainerService {
         }
       }
 
-      const result = { owner: currentOwner, maintainers, isPrivate };
+      // Extract contributors from tags
+      // Contributors tag format: ['contributors', 'pubkey1', 'pubkey2', 'pubkey3', ...]
+      for (const tag of announcement.tags) {
+        if (tag[0] === 'contributors') {
+          // Iterate through all contributors in the tag (skip index 0 which is 'contributors')
+          for (let i = 1; i < tag.length; i++) {
+            const contributorValue = tag[i];
+            if (!contributorValue || typeof contributorValue !== 'string') {
+              continue;
+            }
+            
+            // Contributors can be npub or hex pubkey
+            let pubkey = contributorValue;
+            try {
+              // Try to decode if it's an npub
+              const decoded = nip19.decode(pubkey);
+              if (decoded.type === 'npub') {
+                pubkey = decoded.data as string;
+              }
+            } catch {
+              // Assume it's already a hex pubkey
+            }
+            
+            // Add contributor if it's valid and not already in the list (case-insensitive check)
+            // Also ensure they're not already a maintainer
+            if (pubkey && 
+                !contributors.some(c => c.toLowerCase() === pubkey.toLowerCase()) &&
+                !maintainers.some(m => m.toLowerCase() === pubkey.toLowerCase())) {
+              contributors.push(pubkey);
+            }
+          }
+        }
+      }
+
+      const result = { owner: currentOwner, maintainers, contributors, isPrivate };
       this.cache.set(cacheKey, { ...result, timestamp: Date.now() });
       return result;
     } catch (error) {
       const logger = await getLogger();
       logger.error({ error, repoOwnerPubkey, repoId }, 'Error fetching maintainers');
       // Fallback: only owner is maintainer, repo is public by default
-      const result = { owner: repoOwnerPubkey, maintainers: [repoOwnerPubkey], isPrivate: false };
+      const result = { owner: repoOwnerPubkey, maintainers: [repoOwnerPubkey], contributors: [], isPrivate: false };
       this.cache.set(cacheKey, { ...result, timestamp: Date.now() });
       return result;
     }
@@ -161,10 +197,10 @@ export class MaintainerService {
   /**
    * Check if a user can view a repository
    * Public repos: anyone can view
-   * Private repos: only owners and maintainers can view
+   * Private repos: only owners, maintainers, and contributors can view
    */
   async canView(userPubkey: string | null, repoOwnerPubkey: string, repoId: string): Promise<boolean> {
-    const { isPrivate, maintainers, owner } = await this.getMaintainers(repoOwnerPubkey, repoId);
+    const { isPrivate, maintainers, contributors, owner } = await this.getMaintainers(repoOwnerPubkey, repoId);
     const logger = await getLogger();
     
     logger.debug({ 
@@ -173,7 +209,8 @@ export class MaintainerService {
       currentOwner: owner.substring(0, 16) + '...',
       repoId,
       userPubkey: userPubkey ? userPubkey.substring(0, 16) + '...' : null,
-      maintainerCount: maintainers.length
+      maintainerCount: maintainers.length,
+      contributorCount: contributors.length
     }, 'canView check');
     
     // Public repos are viewable by anyone
@@ -202,33 +239,38 @@ export class MaintainerService {
     // Normalize to lowercase for comparison
     userPubkeyHex = userPubkeyHex.toLowerCase();
     const normalizedMaintainers = maintainers.map(m => m.toLowerCase());
+    const normalizedContributors = contributors.map(c => c.toLowerCase());
     const normalizedOwner = owner.toLowerCase();
 
     logger.debug({ 
       userPubkeyHex: userPubkeyHex.substring(0, 16) + '...', 
       normalizedOwner: normalizedOwner.substring(0, 16) + '...',
-      maintainers: normalizedMaintainers.map(m => m.substring(0, 16) + '...')
+      maintainers: normalizedMaintainers.map(m => m.substring(0, 16) + '...'),
+      contributors: normalizedContributors.map(c => c.substring(0, 16) + '...')
     }, 'Comparing pubkeys');
 
-    // Check if user is in maintainers list OR is the current owner
-    const hasAccess = normalizedMaintainers.includes(userPubkeyHex) || userPubkeyHex === normalizedOwner;
+    // Check if user is in maintainers list, contributors list, OR is the current owner
+    const hasAccess = normalizedMaintainers.includes(userPubkeyHex) || 
+                      normalizedContributors.includes(userPubkeyHex) || 
+                      userPubkeyHex === normalizedOwner;
     
     if (!hasAccess) {
       logger.debug({ 
         userPubkeyHex: userPubkeyHex.substring(0, 16) + '...', 
         currentOwner: normalizedOwner.substring(0, 16) + '...', 
         repoId,
-        maintainers: normalizedMaintainers.map(m => m.substring(0, 16) + '...')
-      }, 'Access denied: user not in maintainers list and not current owner');
+        maintainers: normalizedMaintainers.map(m => m.substring(0, 16) + '...'),
+        contributors: normalizedContributors.map(c => c.substring(0, 16) + '...')
+      }, 'Access denied: user not in maintainers/contributors list and not current owner');
     } else {
       logger.debug({ 
         userPubkeyHex: userPubkeyHex.substring(0, 16) + '...', 
         currentOwner: normalizedOwner.substring(0, 16) + '...', 
         repoId
-      }, 'Access granted: user is maintainer or current owner');
+      }, 'Access granted: user is maintainer, contributor, or current owner');
     }
 
-    // Check if user is owner or maintainer
+    // Check if user is owner, maintainer, or contributor
     return hasAccess;
   }
 
@@ -236,8 +278,26 @@ export class MaintainerService {
    * Get privacy info for a repository
    */
   async getPrivacyInfo(repoOwnerPubkey: string, repoId: string): Promise<RepoPrivacyInfo> {
-    const { owner, maintainers, isPrivate } = await this.getMaintainers(repoOwnerPubkey, repoId);
-    return { isPrivate, owner, maintainers };
+    const { owner, maintainers, contributors, isPrivate } = await this.getMaintainers(repoOwnerPubkey, repoId);
+    return { isPrivate, owner, maintainers, contributors };
+  }
+
+  /**
+   * Check if a user is a contributor (can view but not modify)
+   */
+  async isContributor(userPubkey: string, repoOwnerPubkey: string, repoId: string): Promise<boolean> {
+    const { contributors } = await this.getMaintainers(repoOwnerPubkey, repoId);
+    // Convert userPubkey to hex if needed
+    let userPubkeyHex = userPubkey;
+    try {
+      const decoded = nip19.decode(userPubkey);
+      if (decoded.type === 'npub') {
+        userPubkeyHex = decoded.data as string;
+      }
+    } catch {
+      // Assume it's already a hex pubkey
+    }
+    return contributors.some(c => c.toLowerCase() === userPubkeyHex.toLowerCase());
   }
 
   /**

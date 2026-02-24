@@ -57,12 +57,12 @@ export class HighlightsService {
   /**
    * Get PR address (a tag format for PR)
    */
-  private getPRAddress(prId: string, prAuthor: string, repoOwnerPubkey: string, repoId: string): string {
-    return `${KIND.PULL_REQUEST}:${prAuthor}:${repoId}`;
+  private getTargetAddress(targetId: string, targetAuthor: string, repoOwnerPubkey: string, repoId: string, targetKind: typeof KIND.PULL_REQUEST | typeof KIND.PATCH): string {
+    return `${targetKind}:${targetAuthor}:${repoId}`;
   }
 
   /**
-   * Fetch highlights for a pull request
+   * Fetch highlights for a pull request or patch
    */
   async getHighlightsForPR(
     prId: string,
@@ -70,22 +70,47 @@ export class HighlightsService {
     repoOwnerPubkey: string,
     repoId: string
   ): Promise<HighlightWithComments[]> {
-    const prAddress = this.getPRAddress(prId, prAuthor, repoOwnerPubkey, repoId);
+    return this.getHighlightsForTarget(prId, prAuthor, repoOwnerPubkey, repoId, KIND.PULL_REQUEST);
+  }
+
+  /**
+   * Fetch highlights for a patch
+   */
+  async getHighlightsForPatch(
+    patchId: string,
+    patchAuthor: string,
+    repoOwnerPubkey: string,
+    repoId: string
+  ): Promise<HighlightWithComments[]> {
+    return this.getHighlightsForTarget(patchId, patchAuthor, repoOwnerPubkey, repoId, KIND.PATCH);
+  }
+
+  /**
+   * Fetch highlights for a pull request or patch (generic)
+   */
+  async getHighlightsForTarget(
+    targetId: string,
+    targetAuthor: string,
+    repoOwnerPubkey: string,
+    repoId: string,
+    targetKind: typeof KIND.PULL_REQUEST | typeof KIND.PATCH
+  ): Promise<HighlightWithComments[]> {
+    const targetAddress = this.getTargetAddress(targetId, targetAuthor, repoOwnerPubkey, repoId, targetKind);
     
-    // Fetch highlights that reference this PR
+    // Fetch highlights that reference this target
     const highlights = await this.nostrClient.fetchEvents([
       {
         kinds: [KIND.HIGHLIGHT],
-        '#a': [prAddress],
+        '#a': [targetAddress],
         limit: 100
       }
     ]) as Highlight[];
 
-    // Also fetch highlights that reference the PR by event ID
+    // Also fetch highlights that reference the target by event ID
     const highlightsByEvent = await this.nostrClient.fetchEvents([
       {
         kinds: [KIND.HIGHLIGHT],
-        '#e': [prId],
+        '#e': [targetId],
         limit: 100
       }
     ]) as Highlight[];
@@ -225,13 +250,14 @@ export class HighlightsService {
   }
 
   /**
-   * Get comments for a pull request
+   * Get comments for a pull request or patch
    */
-  async getCommentsForPR(prId: string): Promise<Comment[]> {
+  async getCommentsForTarget(targetId: string, targetKind: typeof KIND.PULL_REQUEST | typeof KIND.PATCH = KIND.PULL_REQUEST): Promise<Comment[]> {
     const comments = await this.nostrClient.fetchEvents([
       {
         kinds: [KIND.COMMENT],
-        '#e': [prId], // Root event (lowercase e for filter)
+        '#E': [targetId], // Root event (uppercase E for NIP-22)
+        '#K': [targetKind.toString()], // Root kind
         limit: 100
       }
     ]) as NostrEvent[];
@@ -265,10 +291,11 @@ export class HighlightsService {
    * Create a highlight event template
    * 
    * @param highlightedContent - The selected code/text content
-   * @param prId - Pull request event ID
-   * @param prAuthor - PR author pubkey
+   * @param targetId - Pull request or patch event ID
+   * @param targetAuthor - PR/patch author pubkey
    * @param repoOwnerPubkey - Repository owner pubkey
    * @param repoId - Repository identifier
+   * @param targetKind - Kind of target (PULL_REQUEST or PATCH)
    * @param filePath - Path to the file being highlighted
    * @param lineStart - Starting line number (optional)
    * @param lineEnd - Ending line number (optional)
@@ -277,23 +304,24 @@ export class HighlightsService {
    */
   createHighlightEvent(
     highlightedContent: string,
-    prId: string,
-    prAuthor: string,
+    targetId: string,
+    targetAuthor: string,
     repoOwnerPubkey: string,
     repoId: string,
+    targetKind: typeof KIND.PULL_REQUEST | typeof KIND.PATCH = KIND.PULL_REQUEST,
     filePath?: string,
     lineStart?: number,
     lineEnd?: number,
     context?: string,
     comment?: string
   ): Omit<NostrEvent, 'sig' | 'id'> {
-    const prAddress = `${KIND.PULL_REQUEST}:${prAuthor}:${repoId}`;
+    const targetAddress = `${targetKind}:${targetAuthor}:${repoId}`;
     
     const tags: string[][] = [
-      ['a', prAddress], // Reference to PR
-      ['e', prId], // PR event ID
-      ['P', prAuthor], // PR author
-      ['K', KIND.PULL_REQUEST.toString()], // Root kind
+      ['a', targetAddress], // Reference to PR or patch
+      ['e', targetId], // PR/patch event ID
+      ['P', targetAuthor], // PR/patch author
+      ['K', targetKind.toString()], // Root kind
     ];
 
     // Add file path and line numbers if provided

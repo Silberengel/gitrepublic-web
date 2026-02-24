@@ -175,11 +175,12 @@
         pr.author,
         repoOwnerPubkey,
         repo,
-        currentFilePath || undefined,
-        selectedStartLine,
-        selectedEndLine,
+        KIND.PULL_REQUEST, // targetKind
+        currentFilePath || undefined, // filePath
+        selectedStartLine, // lineStart
+        selectedEndLine, // lineEnd
         undefined, // context
-        highlightComment.trim() || undefined
+        highlightComment.trim() || undefined // comment
       );
 
       const signedEvent = await signEventWithNIP07(eventTemplate);
@@ -350,15 +351,13 @@
     error = null;
 
     try {
-      const response = await fetch(`/api/repos/${npub}/${repo}/prs/merge`, {
+      const response = await fetch(`/api/repos/${npub}/${repo}/prs/${pr.id}/merge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prId: pr.id,
-          prAuthor: pr.author,
-          prCommitId: pr.commitId,
           targetBranch: mergeTargetBranch,
-          mergeMessage: mergeMessage.trim() || `Merge pull request ${pr.id.slice(0, 7)}`
+          mergeCommitMessage: mergeMessage.trim() || `Merge pull request ${pr.id.slice(0, 7)}`,
+          mergeStrategy: 'merge'
         })
       });
 

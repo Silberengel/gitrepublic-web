@@ -48,6 +48,7 @@ export const KIND = {
   STATUS_DRAFT: 1633, // NIP-34: Status draft
   COMMIT_SIGNATURE: 1640, // Custom: Git commit signature event
   OWNERSHIP_TRANSFER: 1641, // Custom: Repository ownership transfer event (non-replaceable for chain integrity)
+  RELEASE: 1642, // Custom: Repository release event
   COMMENT: 1111, // NIP-22: Comment event
   THREAD: 11, // NIP-7D: Discussion thread
   BRANCH_PROTECTION: 30620, // Custom: Branch protection rules

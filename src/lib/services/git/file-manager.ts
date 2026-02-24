@@ -46,6 +46,7 @@ export interface Tag {
   name: string;
   hash: string;
   message?: string;
+  date?: number; // Unix timestamp of the commit the tag points to
 }
 
 export class FileManager {
@@ -2268,23 +2269,45 @@ export class FileManager {
 
       for (const tagName of tags.all) {
         try {
-          // Try to get tag message
-          const tagInfo = await git.raw(['cat-file', '-p', tagName]);
-          const messageMatch = tagInfo.match(/^(.+)$/m);
+          // Get the commit hash the tag points to
           const hash = await git.raw(['rev-parse', tagName]);
+          const commitHash = hash.trim();
           
-          tagList.push({
-            name: tagName,
-            hash: hash.trim(),
-            message: messageMatch ? messageMatch[1] : undefined
-          });
-        } catch {
-          // Lightweight tag
-          const hash = await git.raw(['rev-parse', tagName]);
-          tagList.push({
-            name: tagName,
-            hash: hash.trim()
-          });
+          // Get the commit date (Unix timestamp)
+          let commitDate: number | undefined;
+          try {
+            const dateStr = await git.raw(['log', '-1', '--format=%at', commitHash]);
+            commitDate = parseInt(dateStr.trim(), 10);
+            if (isNaN(commitDate)) {
+              commitDate = undefined;
+            }
+          } catch {
+            // If we can't get the date, continue without it
+            commitDate = undefined;
+          }
+          
+          // Try to get tag message (for annotated tags)
+          try {
+            const tagInfo = await git.raw(['cat-file', '-p', tagName]);
+            const messageMatch = tagInfo.match(/^(.+)$/m);
+            
+            tagList.push({
+              name: tagName,
+              hash: commitHash,
+              message: messageMatch ? messageMatch[1] : undefined,
+              date: commitDate
+            });
+          } catch {
+            // Lightweight tag - no message
+            tagList.push({
+              name: tagName,
+              hash: commitHash,
+              date: commitDate
+            });
+          }
+        } catch (err) {
+          // If we can't process this tag, skip it
+          logger.warn({ error: err, tagName }, 'Error processing tag, skipping');
         }
       }
 

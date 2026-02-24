@@ -262,10 +262,20 @@
   }
 
   // Provide theme context to child components
-  setContext('theme', {
-    get theme() { return { value: theme }; },
-    toggleTheme
-  });
+  // Guard against SSR issues where setContext might be called outside component initialization
+  try {
+    setContext('theme', {
+      get theme() { return { value: theme }; },
+      toggleTheme
+    });
+  } catch (err) {
+    // Silently ignore setContext errors during SSR or if called outside component initialization
+    // This can happen during server-side rendering or in certain edge cases
+    if (typeof window !== 'undefined') {
+      // Only log in browser to avoid cluttering SSR logs
+      console.warn('Failed to set theme context:', err);
+    }
+  }
 
   // Hide nav bar and footer on splash page (root path)
   const isSplashPage = $derived($page.url.pathname === '/');

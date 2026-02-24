@@ -39,7 +39,8 @@ export const GET: RequestHandler = createRepoGetHandler(
             const tags = apiData.tags.map(t => ({
               name: t.name,
               hash: t.sha,
-              message: t.message
+              message: t.message,
+              date: undefined // API fallback doesn't provide date
             }));
             return json(tags);
           }

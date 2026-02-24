@@ -14,6 +14,7 @@ import { IssuesService } from './nostr/issues-service.js';
 import { ForkCountService } from './nostr/fork-count-service.js';
 import { PRsService } from './nostr/prs-service.js';
 import { HighlightsService } from './nostr/highlights-service.js';
+import { ReleasesService } from './nostr/releases-service.js';
 import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS } from '../config.js';
 
 // Get repo root from environment or use default
@@ -33,6 +34,7 @@ let _issuesService: IssuesService | null = null;
 let _forkCountService: ForkCountService | null = null;
 let _prsService: PRsService | null = null;
 let _highlightsService: HighlightsService | null = null;
+let _releasesService: ReleasesService | null = null;
 
 /**
  * Get singleton FileManager instance
@@ -144,6 +146,16 @@ export function getHighlightsService(): HighlightsService {
   return _highlightsService;
 }
 
+/**
+ * Get singleton ReleasesService instance
+ */
+export function getReleasesService(): ReleasesService {
+  if (!_releasesService) {
+    _releasesService = new ReleasesService(DEFAULT_NOSTR_RELAYS);
+  }
+  return _releasesService;
+}
+
 // Convenience exports for direct access (common pattern)
 export const fileManager = getFileManager();
 export const repoManager = getRepoManager();
@@ -156,3 +168,4 @@ export const issuesService = getIssuesService();
 export const forkCountService = getForkCountService();
 export const prsService = getPRsService();
 export const highlightsService = getHighlightsService();
+export const releasesService = getReleasesService();

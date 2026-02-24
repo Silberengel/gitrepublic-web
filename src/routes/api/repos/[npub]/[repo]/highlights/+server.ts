@@ -9,6 +9,7 @@ import { DEFAULT_NOSTR_RELAYS, combineRelays } from '$lib/config.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '$lib/types/nostr.js';
+import { KIND } from '$lib/types/nostr.js';
 import { createRepoGetHandler, withRepoValidation } from '$lib/utils/api-handlers.js';
 import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
 import { handleApiError, handleValidationError } from '$lib/utils/error-handler.js';
@@ -41,7 +42,7 @@ export const GET: RequestHandler = createRepoGetHandler(
     );
 
     // Also get top-level comments on the PR
-    const prComments = await highlightsService.getCommentsForPR(prId);
+    const prComments = await highlightsService.getCommentsForTarget(prId, KIND.PULL_REQUEST);
 
     return json({
       highlights,
