@@ -12,7 +12,11 @@ if (process.env.NODE_ENV === 'production' || process.argv.includes('build')) {
     return (
       message.includes('externalized for browser compatibility') ||
       message.includes('[plugin:vite:resolve]') && message.includes('has been externalized') ||
-      message.includes('[vite-plugin-svelte]') && message.includes('Unused CSS selector')
+      message.includes('[vite-plugin-svelte]') && message.includes('Unused CSS selector') ||
+      message.includes('try_get_request_store') && message.includes('never used') ||
+      message.includes('is imported from external module') && message.includes('but never used') ||
+      (message.includes('[plugin:vite:reporter]') && message.includes('is dynamically imported by') && message.includes('but also statically imported by')) ||
+      (message.includes('dynamic import will not move module into another chunk'))
     );
   };
 
@@ -96,8 +100,11 @@ export default defineConfig({
         // Suppress warnings about externalized modules (expected for SSR builds)
         if (
           warning.code === 'MODULE_LEVEL_DIRECTIVE' ||
-          (typeof warning.message === 'string' && 
-           warning.message.includes('externalized for browser compatibility'))
+          (typeof warning.message === 'string' && (
+            warning.message.includes('externalized for browser compatibility') ||
+            warning.message.includes('try_get_request_store') && warning.message.includes('never used') ||
+            warning.message.includes('is imported from external module') && warning.message.includes('but never used')
+          ))
         ) {
           return;
         }
