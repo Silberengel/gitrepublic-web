@@ -5,102 +5,189 @@
   import { nip19 } from 'nostr-tools';
   import SettingsButton from './SettingsButton.svelte';
   import UserBadge from './UserBadge.svelte';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { userStore } from '../stores/user-store.js';
   import { clearActivity, updateActivity, isSessionExpired } from '../services/activity-tracker.js';
   import { determineUserLevel, decodePubkey } from '../services/nostr/user-level-service.js';
 
   let userPubkey = $state<string | null>(null);
   let mobileMenuOpen = $state(false);
+  let nip07Available = $state(false); // Track NIP-07 availability (client-side only)
+  let isClient = $state(false); // Track if we're on the client
+  
+  // Component mount tracking to prevent state updates after destruction
+  let isMounted = $state(true);
+  
+  // Store cleanup references
+  let expiryCheckInterval: ReturnType<typeof setInterval> | null = null;
+  let updateActivityOnInteraction: ((event: Event) => void) | null = null;
 
   // Sync with userStore changes
   $effect(() => {
-    const currentUser = $userStore;
-    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
-      // Check if session expired
-      if (isSessionExpired()) {
-        userStore.reset();
+    if (!isMounted || typeof window === 'undefined') return;
+    try {
+      const currentUser = $userStore;
+      if (!currentUser || !isMounted) return;
+      
+      if (currentUser.userPubkey && currentUser.userPubkeyHex && isMounted) {
+        // Check if session expired
+        if (isSessionExpired()) {
+          if (isMounted) {
+            userStore.reset();
+            userPubkey = null;
+          }
+        } else if (isMounted) {
+          userPubkey = currentUser.userPubkey;
+          updateActivity();
+        }
+      } else if (isMounted) {
         userPubkey = null;
-      } else {
-        userPubkey = currentUser.userPubkey;
-        updateActivity();
       }
-    } else {
-      userPubkey = null;
+    } catch (err) {
+      // Ignore errors during destruction
+      if (isMounted) {
+        console.warn('User store sync error in NavBar:', err);
+      }
     }
   });
 
   onMount(() => {
+    // Mark as client-side
+    isClient = true;
+    if (!isMounted) return;
+    
+    // Check NIP-07 availability (client-side only)
+    nip07Available = isNIP07Available();
+    
     // User store already checks session expiry on initialization
     // Just restore state from store (which loads from localStorage)
-    const currentState = $userStore;
-    if (currentState.userPubkey && currentState.userPubkeyHex) {
-      // User is logged in - restore state (already synced by $effect, but ensure it's set)
-      userPubkey = currentState.userPubkey;
-      // Update activity to extend session
-      updateActivity();
-    } else {
-      // User not logged in - check auth
-      checkAuth();
+    try {
+      const currentState = $userStore;
+      if (currentState && currentState.userPubkey && currentState.userPubkeyHex && isMounted) {
+        // User is logged in - restore state (already synced by $effect, but ensure it's set)
+        userPubkey = currentState.userPubkey;
+        // Update activity to extend session
+        updateActivity();
+      } else if (isMounted) {
+        // User not logged in - check auth
+        checkAuth();
+      }
+    } catch (err) {
+      if (isMounted) {
+        console.warn('Failed to restore user state in NavBar:', err);
+      }
     }
     
     // Set up activity tracking for user interactions
-    const updateActivityOnInteraction = () => {
-      if (userPubkey) {
+    updateActivityOnInteraction = () => {
+      if (isMounted && userPubkey) {
         updateActivity();
       }
     };
     
     // Track various user interactions
-    document.addEventListener('click', updateActivityOnInteraction, { passive: true });
-    document.addEventListener('keydown', updateActivityOnInteraction, { passive: true });
-    document.addEventListener('scroll', updateActivityOnInteraction, { passive: true });
+    if (updateActivityOnInteraction) {
+      document.addEventListener('click', updateActivityOnInteraction, { passive: true });
+      document.addEventListener('keydown', updateActivityOnInteraction, { passive: true });
+      document.addEventListener('scroll', updateActivityOnInteraction, { passive: true });
+    }
     
     // Check session expiry periodically (every 5 minutes)
-    const expiryCheckInterval = setInterval(() => {
-      if (isSessionExpired()) {
-        // Session expired - logout user
-        userStore.reset();
-        userPubkey = null;
-        clearInterval(expiryCheckInterval);
+    expiryCheckInterval = setInterval(() => {
+      if (!isMounted) {
+        if (expiryCheckInterval) {
+          clearInterval(expiryCheckInterval);
+          expiryCheckInterval = null;
+        }
+        return;
+      }
+      
+      try {
+        if (isSessionExpired()) {
+          // Session expired - logout user
+          if (isMounted) {
+            userStore.reset();
+            userPubkey = null;
+          }
+          if (expiryCheckInterval) {
+            clearInterval(expiryCheckInterval);
+            expiryCheckInterval = null;
+          }
+        }
+      } catch (err) {
+        // Ignore errors during destruction
+        if (isMounted) {
+          console.warn('Session expiry check error:', err);
+        }
       }
     }, 5 * 60 * 1000); // Check every 5 minutes
+  });
+  
+  onDestroy(() => {
+    // Mark component as unmounted first
+    isMounted = false;
     
-    return () => {
-      document.removeEventListener('click', updateActivityOnInteraction);
-      document.removeEventListener('keydown', updateActivityOnInteraction);
-      document.removeEventListener('scroll', updateActivityOnInteraction);
-      clearInterval(expiryCheckInterval);
-    };
+    // Clean up event listeners
+    try {
+      if (updateActivityOnInteraction) {
+        document.removeEventListener('click', updateActivityOnInteraction);
+        document.removeEventListener('keydown', updateActivityOnInteraction);
+        document.removeEventListener('scroll', updateActivityOnInteraction);
+        updateActivityOnInteraction = null;
+      }
+    } catch (err) {
+      // Ignore errors during cleanup
+    }
+    
+    // Clean up interval
+    try {
+      if (expiryCheckInterval) {
+        clearInterval(expiryCheckInterval);
+        expiryCheckInterval = null;
+      }
+    } catch (err) {
+      // Ignore errors during cleanup
+    }
   });
 
   function toggleMobileMenu() {
+    if (typeof window === 'undefined') return;
     mobileMenuOpen = !mobileMenuOpen;
   }
 
   function closeMobileMenu() {
+    if (typeof window === 'undefined') return;
     mobileMenuOpen = false;
   }
 
   async function checkAuth() {
-    // Don't check auth if user store indicates user is logged out
-    const currentState = $userStore;
-    if (!currentState.userPubkey) {
-      userPubkey = null;
-      return;
-    }
+    if (!isMounted || typeof window === 'undefined') return;
     
+    // Don't check auth if user store indicates user is logged out
     try {
-      if (isNIP07Available()) {
+      const currentState = $userStore;
+      if (!currentState || !currentState.userPubkey) {
+        if (isMounted) {
+          userPubkey = null;
+        }
+        return;
+      }
+      
+      if (isNIP07Available() && isMounted) {
         userPubkey = await getPublicKeyWithNIP07();
+      } else if (isMounted) {
+        userPubkey = null;
       }
     } catch (err) {
-      console.log('NIP-07 not available or user not connected');
-      userPubkey = null;
+      if (isMounted) {
+        console.log('NIP-07 not available or user not connected');
+        userPubkey = null;
+      }
     }
   }
 
   async function login() {
+    if (typeof window === 'undefined' || !isMounted) return;
     if (!isNIP07Available()) {
       alert('Nostr extension not found. Please install a Nostr extension like nos2x or Alby to login.');
       return;
@@ -111,40 +198,52 @@
       let pubkey: string;
       try {
         pubkey = await getPublicKeyWithNIP07();
-        if (!pubkey) {
+        if (!pubkey || !isMounted) {
           throw new Error('No public key returned from extension');
         }
       } catch (err) {
-        console.error('Failed to get public key from NIP-07:', err);
-        alert('Failed to connect to Nostr extension. Please make sure your extension is unlocked and try again.');
+        if (isMounted) {
+          console.error('Failed to get public key from NIP-07:', err);
+          alert('Failed to connect to Nostr extension. Please make sure your extension is unlocked and try again.');
+        }
         return;
       }
+
+      if (!isMounted) return;
 
       // Convert npub to hex for API calls
       let pubkeyHex: string;
       if (/^[0-9a-f]{64}$/i.test(pubkey)) {
         // Already hex format
         pubkeyHex = pubkey.toLowerCase();
-        userPubkey = pubkey;
+        if (isMounted) {
+          userPubkey = pubkey;
+        }
       } else {
         // Try to decode as npub
         try {
           const decoded = nip19.decode(pubkey);
-          if (decoded.type === 'npub') {
+          if (decoded.type === 'npub' && isMounted) {
             pubkeyHex = decoded.data as string;
             userPubkey = pubkey; // Keep original npub format
           } else {
             throw new Error('Invalid pubkey format');
           }
         } catch (decodeErr) {
-          console.error('Failed to decode pubkey:', decodeErr);
-          alert('Invalid public key format. Please try again.');
+          if (isMounted) {
+            console.error('Failed to decode pubkey:', decodeErr);
+            alert('Invalid public key format. Please try again.');
+          }
           return;
         }
       }
 
+      if (!isMounted) return;
+
       // Determine user level (checks relay write access)
       const levelResult = await determineUserLevel(userPubkey, pubkeyHex);
+      
+      if (!isMounted) return;
       
       // Update user store
       userStore.setUser(
@@ -155,19 +254,21 @@
       );
       
       // Update activity tracking on successful login
-      updateActivity();
+      if (isMounted) {
+        updateActivity();
+      }
       
       // Check for pending transfer events
-      if (levelResult.userPubkeyHex) {
+      if (levelResult.userPubkeyHex && isMounted) {
         try {
           const response = await fetch('/api/transfers/pending', {
             headers: {
               'X-User-Pubkey': levelResult.userPubkeyHex
             }
           });
-          if (response.ok) {
+          if (response.ok && isMounted) {
             const data = await response.json();
-            if (data.pendingTransfers && data.pendingTransfers.length > 0) {
+            if (data.pendingTransfers && data.pendingTransfers.length > 0 && isMounted) {
               // Trigger a custom event to notify layout about pending transfers
               // The layout component will handle displaying the notifications
               window.dispatchEvent(new CustomEvent('pendingTransfers', { 
@@ -176,10 +277,14 @@
             }
           }
         } catch (err) {
-          console.error('Failed to check for pending transfers:', err);
+          if (isMounted) {
+            console.error('Failed to check for pending transfers:', err);
+          }
           // Don't fail login if transfer check fails
         }
       }
+      
+      if (!isMounted) return;
       
       // Show success message
       const { hasUnlimitedAccess } = await import('../../lib/utils/user-access.js');
@@ -189,28 +294,44 @@
         console.log('Logged in with rate-limited access.');
       }
     } catch (err) {
-      console.error('Login error:', err);
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      alert(`Failed to login: ${errorMessage}. Please make sure your Nostr extension is unlocked and try again.`);
+      if (isMounted) {
+        console.error('Login error:', err);
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        alert(`Failed to login: ${errorMessage}. Please make sure your Nostr extension is unlocked and try again.`);
+      }
     }
   }
 
   async function logout() {
-    userPubkey = null;
-    // Reset user store
-    userStore.reset();
-    // Clear activity tracking
-    clearActivity();
+    if (typeof window === 'undefined' || !isMounted) return;
+    if (isMounted) {
+      userPubkey = null;
+      // Reset user store
+      userStore.reset();
+      // Clear activity tracking
+      clearActivity();
+    }
     // Navigate to home page to reset all component state to anonymous
     // Use replace to prevent back button from going back to logged-in state
-    await goto('/', { replaceState: true, invalidateAll: true });
+    if (isMounted) {
+      await goto('/', { replaceState: true, invalidateAll: true });
+    }
   }
 
   function isActive(path: string): boolean {
-    return $page.url.pathname === path || $page.url.pathname.startsWith(path + '/');
+    // Guard against SSR and component destruction
+    if (typeof window === 'undefined' || !isMounted) return false;
+    try {
+      const pageUrl = $page.url;
+      if (!pageUrl || !isMounted) return false;
+      return pageUrl.pathname === path || pageUrl.pathname.startsWith(path + '/');
+    } catch {
+      return false;
+    }
   }
 </script>
 
+{#if typeof window !== 'undefined' || isClient}
 <header class="site-header">
   <div class="header-container">
     <a href="/" class="header-logo">
@@ -219,29 +340,30 @@
     </a>
     <nav class:mobile-open={mobileMenuOpen}>
       <div class="nav-links">
-        <a href="/repos" class:active={isActive('/repos')} onclick={closeMobileMenu}>Repositories</a>
-        <a href="/search" class:active={isActive('/search')} onclick={closeMobileMenu}>Search</a>
-        <a href="/signup" class:active={isActive('/signup')} onclick={closeMobileMenu}>Register</a>
-        <a href="/docs" class:active={isActive('/docs')} onclick={closeMobileMenu}>Docs</a>
-        <a href="/api-docs" class:active={isActive('/api-docs')} onclick={closeMobileMenu}>API Docs</a>
+        <a href="/repos" class:active={isActive('/repos')} onclick={() => closeMobileMenu()}>Repositories</a>
+        <a href="/search" class:active={isActive('/search')} onclick={() => closeMobileMenu()}>Search</a>
+        <a href="/signup" class:active={isActive('/signup')} onclick={() => closeMobileMenu()}>Register</a>
+        <a href="/docs" class:active={isActive('/docs')} onclick={() => closeMobileMenu()}>Docs</a>
+        <a href="/api-docs" class:active={isActive('/api-docs')} onclick={() => closeMobileMenu()}>API Docs</a>
       </div>
     </nav>
     <div class="auth-section">
       <SettingsButton />
       {#if userPubkey}
         <UserBadge pubkey={userPubkey} />
-        <button onclick={logout} class="logout-button">Logout</button>
+        <button onclick={(e) => { e.preventDefault(); logout(); }} class="logout-button">Logout</button>
       {:else}
-        <button onclick={login} class="login-button" disabled={!isNIP07Available()}>
-          {isNIP07Available() ? 'Login' : 'NIP-07 Not Available'}
+        <button onclick={(e) => { e.preventDefault(); login(); }} class="login-button" disabled={!nip07Available}>
+          {nip07Available ? 'Login' : 'NIP-07 Not Available'}
         </button>
       {/if}
-      <button class="mobile-menu-toggle" onclick={toggleMobileMenu} aria-label="Toggle menu">
+      <button class="mobile-menu-toggle" onclick={() => toggleMobileMenu()} aria-label="Toggle menu">
         <img src="/icons/menu.svg" alt="Menu" class="hamburger-icon" />
       </button>
     </div>
   </div>
 </header>
+{/if}
 
 <style>
   .site-header {

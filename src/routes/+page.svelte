@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { getPublicKeyWithNIP07, isNIP07Available } from '../lib/services/nostr/nip07-signer.js';
@@ -13,101 +13,164 @@
   let checkingAuth = $state(true);
   let checkingLevel = $state(false);
   let levelMessage = $state<string | null>(null);
+  
+  // Component mount tracking to prevent state updates after destruction
+  let isMounted = $state(true);
 
   // React to userStore changes (e.g., when user logs in or out)
   $effect(() => {
-    const currentUser = $userStore;
-    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
-      // User is logged in - sync local state with store
-      userPubkey = currentUser.userPubkey;
-      userPubkeyHex = currentUser.userPubkeyHex;
-    } else {
-      // User has logged out - clear local state
-      userPubkey = null;
-      userPubkeyHex = null;
+    if (!isMounted || typeof window === 'undefined') return;
+    try {
+      const currentUser = $userStore;
+      if (!currentUser || !isMounted) return;
+      
+      if (currentUser.userPubkey && currentUser.userPubkeyHex && isMounted) {
+        // User is logged in - sync local state with store
+        userPubkey = currentUser.userPubkey;
+        userPubkeyHex = currentUser.userPubkeyHex;
+      } else if (isMounted) {
+        // User has logged out - clear local state
+        userPubkey = null;
+        userPubkeyHex = null;
+      }
+    } catch (err) {
+      // Ignore errors during destruction
+      if (isMounted) {
+        console.warn('User store sync error in splash page:', err);
+      }
     }
   });
 
   onMount(() => {
-    // Prevent body scroll when splash page is shown
-    document.body.style.overflow = 'hidden';
+    if (typeof window === 'undefined' || !isMounted) return;
     
-    // Check for session expiry first
-    if (isSessionExpired()) {
-      // Session expired - logout user
-      userStore.reset();
-      checkingAuth = true;
-      checkAuth();
-    } else {
-      // Check userStore first - if user is already logged in, use store values
-      const currentUser = $userStore;
-      if (currentUser.userPubkey && currentUser.userPubkeyHex) {
-        // User is already logged in - use store values
-        userPubkey = currentUser.userPubkey;
-        userPubkeyHex = currentUser.userPubkeyHex;
-        checkingAuth = false;
-        // Update activity to extend session
-        updateActivity();
-        // Don't redirect immediately - let the user see they're logged in
-        // They can click "View Repositories" or navigate away
-      } else {
-        // User not logged in - check if extension is available
-        checkingAuth = true;
-        checkAuth();
+    // Prevent body scroll when splash page is shown
+    try {
+      document.body.style.overflow = 'hidden';
+    } catch (err) {
+      if (isMounted) {
+        console.warn('Failed to set body overflow:', err);
       }
     }
     
-    // Return cleanup function
-    return () => {
-      // Re-enable scrolling when component is destroyed
-      document.body.style.overflow = '';
-    };
+    // Check for session expiry first
+    try {
+      if (isSessionExpired()) {
+        // Session expired - logout user
+        if (isMounted) {
+          userStore.reset();
+          checkingAuth = true;
+          checkAuth();
+        }
+      } else if (isMounted) {
+        // Check userStore first - if user is already logged in, use store values
+        const currentUser = $userStore;
+        if (currentUser && currentUser.userPubkey && currentUser.userPubkeyHex) {
+          // User is already logged in - use store values
+          userPubkey = currentUser.userPubkey;
+          userPubkeyHex = currentUser.userPubkeyHex;
+          checkingAuth = false;
+          // Update activity to extend session
+          updateActivity();
+          // Don't redirect immediately - let the user see they're logged in
+          // They can click "View Repositories" or navigate away
+        } else if (isMounted) {
+          // User not logged in - check if extension is available
+          checkingAuth = true;
+          checkAuth();
+        }
+      }
+    } catch (err) {
+      if (isMounted) {
+        console.warn('Failed to check auth on mount:', err);
+      }
+    }
+  });
+  
+  onDestroy(() => {
+    // Mark component as unmounted first
+    isMounted = false;
+    
+    // Re-enable scrolling when component is destroyed
+    try {
+      if (typeof document !== 'undefined' && document.body) {
+        document.body.style.overflow = '';
+      }
+    } catch (err) {
+      // Ignore errors during cleanup
+    }
   });
 
   async function checkAuth() {
-    checkingAuth = true;
+    if (!isMounted || typeof window === 'undefined') return;
     
-    // Check userStore first - if user has logged out, clear state
-    const currentUser = $userStore;
-    if (!currentUser.userPubkey) {
-      userPubkey = null;
-      userPubkeyHex = null;
-      checkingAuth = false;
-      return;
+    if (isMounted) {
+      checkingAuth = true;
     }
     
-    if (isNIP07Available()) {
-      try {
-        userPubkey = await getPublicKeyWithNIP07();
-        // Convert npub to hex for API calls
-        // NIP-07 may return either npub or hex
-        if (/^[0-9a-f]{64}$/i.test(userPubkey)) {
-          // Already hex format
-          userPubkeyHex = userPubkey.toLowerCase();
-        } else {
-          // Try to decode as npub
-          try {
-            const decoded = nip19.decode(userPubkey);
-            if (decoded.type === 'npub') {
-              userPubkeyHex = decoded.data as string;
-            } else {
-              userPubkeyHex = userPubkey; // Unknown type, use as-is
+    // Check userStore first - if user has logged out, clear state
+    try {
+      const currentUser = $userStore;
+      if (!currentUser || !currentUser.userPubkey) {
+        if (isMounted) {
+          userPubkey = null;
+          userPubkeyHex = null;
+          checkingAuth = false;
+        }
+        return;
+      }
+      
+      if (!isMounted) return;
+      
+      if (isNIP07Available()) {
+        try {
+          userPubkey = await getPublicKeyWithNIP07();
+          if (!isMounted) return;
+          
+          // Convert npub to hex for API calls
+          // NIP-07 may return either npub or hex
+          if (/^[0-9a-f]{64}$/i.test(userPubkey)) {
+            // Already hex format
+            if (isMounted) {
+              userPubkeyHex = userPubkey.toLowerCase();
             }
-          } catch {
-            userPubkeyHex = userPubkey; // Assume it's already hex or use as-is
+          } else if (isMounted) {
+            // Try to decode as npub
+            try {
+              const decoded = nip19.decode(userPubkey);
+              if (decoded.type === 'npub') {
+                userPubkeyHex = decoded.data as string;
+              } else {
+                userPubkeyHex = userPubkey; // Unknown type, use as-is
+              }
+            } catch {
+              if (isMounted) {
+                userPubkeyHex = userPubkey; // Assume it's already hex or use as-is
+              }
+            }
+          }
+        } catch (err) {
+          if (isMounted) {
+            console.warn('Failed to load user pubkey:', err);
+            userPubkey = null;
+            userPubkeyHex = null;
           }
         }
-      } catch (err) {
-        console.warn('Failed to load user pubkey:', err);
+      } else if (isMounted) {
+        // Extension not available, clear state
         userPubkey = null;
         userPubkeyHex = null;
       }
-    } else {
-      // Extension not available, clear state
-      userPubkey = null;
-      userPubkeyHex = null;
+      
+      if (isMounted) {
+        checkingAuth = false;
+      }
+    } catch (err) {
+      if (isMounted) {
+        console.warn('Auth check error:', err);
+        checkingAuth = false;
+      }
     }
-    checkingAuth = false;
   }
 
   async function handleLogin() {
