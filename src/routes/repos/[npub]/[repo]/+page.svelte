@@ -30,21 +30,36 @@
     description?: string;
     image?: string;
     banner?: string;
-    repoName?: string;
-    repoDescription?: string;
     repoUrl?: string;
-    repoCloneUrls?: string[];
-    repoMaintainers?: string[];
-    repoOwnerPubkey?: string;
-    repoLanguage?: string;
-    repoTopics?: string[];
-    repoWebsite?: string;
-    repoIsPrivate?: boolean;
+    announcement?: NostrEvent;
     gitDomain?: string;
   });
 
   const npub = ($page.params as { npub?: string; repo?: string }).npub || '';
   const repo = ($page.params as { npub?: string; repo?: string }).repo || '';
+
+  // Extract fields from announcement for convenience
+  const repoAnnouncement = $derived(pageData.announcement);
+  const repoName = $derived(repoAnnouncement?.tags.find((t: string[]) => t[0] === 'name')?.[1] || repo);
+  const repoDescription = $derived(repoAnnouncement?.tags.find((t: string[]) => t[0] === 'description')?.[1] || '');
+  const repoCloneUrls = $derived(repoAnnouncement?.tags
+    .filter((t: string[]) => t[0] === 'clone')
+    .flatMap((t: string[]) => t.slice(1))
+    .filter((url: string) => url && typeof url === 'string') as string[] || []);
+  const repoMaintainers = $derived(repoAnnouncement?.tags
+    .filter((t: string[]) => t[0] === 'maintainers')
+    .flatMap((t: string[]) => t.slice(1))
+    .filter((m: string) => m && typeof m === 'string') as string[] || []);
+  const repoOwnerPubkeyDerived = $derived(repoAnnouncement?.pubkey || '');
+  const repoLanguage = $derived(repoAnnouncement?.tags.find((t: string[]) => t[0] === 'language')?.[1]);
+  const repoTopics = $derived(repoAnnouncement?.tags
+    .filter((t: string[]) => t[0] === 't' && t[1] !== 'private')
+    .map((t: string[]) => t[1])
+    .filter((t: string) => t && typeof t === 'string') as string[] || []);
+  const repoWebsite = $derived(repoAnnouncement?.tags.find((t: string[]) => t[0] === 'website')?.[1]);
+  const repoIsPrivate = $derived(repoAnnouncement?.tags.some((t: string[]) => 
+    (t[0] === 'private' && t[1] === 'true') || (t[0] === 't' && t[1] === 'private')
+  ) || false);
 
   let loading = $state(true);
   let error = $state<string | null>(null);
@@ -91,7 +106,7 @@
     // 1. We have page data
     // 2. Effect hasn't run yet for this repo
     // 3. We're not currently loading
-    if ((data.repoOwnerPubkey || (data.repoMaintainers && data.repoMaintainers.length > 0)) && 
+    if ((repoOwnerPubkeyDerived || (repoMaintainers && repoMaintainers.length > 0)) && 
         !maintainersEffectRan && 
         !loadingMaintainers) {
       maintainersEffectRan = true; // Mark as ran to prevent re-running
@@ -813,8 +828,8 @@
   let repoImage = $state<string | null>(null);
   let repoBanner = $state<string | null>(null);
 
-  // Repository owner pubkey (decoded from npub)
-  let repoOwnerPubkey = $state<string | null>(null);
+  // Repository owner pubkey (decoded from npub) - kept for backward compatibility with some functions
+  let repoOwnerPubkeyState = $state<string | null>(null);
 
   // Mobile view toggle for file list/file viewer
   let showFileListOnMobile = $state(true);
@@ -836,7 +851,7 @@
 
   // Load clone URL reachability status
   async function loadCloneUrlReachability(forceRefresh: boolean = false) {
-    if (!pageData.repoCloneUrls || pageData.repoCloneUrls.length === 0) {
+    if (!repoCloneUrls || repoCloneUrls.length === 0) {
       return;
     }
     
@@ -1422,7 +1437,7 @@
       // If repo is not cloned, check if API fallback is available
       if (!wasCloned) {
         // Try to detect API fallback by checking if we have clone URLs
-        if (pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0) {
+        if (repoCloneUrls && repoCloneUrls.length > 0) {
           // We have clone URLs, so API fallback might work - will be detected when loadBranches() runs
           apiFallbackAvailable = null; // Will be set to true if a subsequent request succeeds
         } else {
@@ -1569,7 +1584,7 @@
       const events = await client.fetchEvents([
         {
           kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [repoOwnerPubkey],
+          authors: [repoOwnerPubkeyDerived],
           '#d': [repo],
           limit: 1
         }
@@ -1702,7 +1717,7 @@
       const events = await client.fetchEvents([
         {
           kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [repoOwnerPubkey],
+          authors: [repoOwnerPubkeyDerived],
           '#d': [repo],
           limit: 1
         }
@@ -1804,7 +1819,7 @@
       const events = await client.fetchEvents([
         {
           kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [repoOwnerPubkey],
+          authors: [repoOwnerPubkeyDerived],
           '#d': [repo],
           limit: 1
         }
@@ -1946,7 +1961,7 @@
     try {
       // Check if repo is private and user has access
       const data = $page.data as typeof pageData;
-      if (data.repoIsPrivate) {
+      if (repoIsPrivate) {
         // Check access via API
         const accessResponse = await fetch(`/api/repos/${npub}/${repo}/access`, {
           headers: buildApiHeaders()
@@ -1974,7 +1989,7 @@
         const announcementEvents = await client.fetchEvents([
           {
             kinds: [KIND.REPO_ANNOUNCEMENT],
-            authors: [repoOwnerPubkey],
+            authors: [repoOwnerPubkeyDerived],
             '#d': [repo],
             limit: 1
           }
@@ -2095,7 +2110,7 @@
       if (!repoImage && !repoBanner) {
         const data = $page.data as typeof pageData;
         // Check access for private repos
-        if (data.repoIsPrivate) {
+        if (repoIsPrivate) {
           const headers: Record<string, string> = {};
           if (userPubkey) {
             try {
@@ -2129,7 +2144,7 @@
           const events = await client.fetchEvents([
             {
               kinds: [30617], // REPO_ANNOUNCEMENT
-              authors: [repoOwnerPubkey],
+              authors: [repoOwnerPubkeyDerived],
               '#d': [repo],
               limit: 1
             }
@@ -2187,8 +2202,8 @@
     try {
       const decoded = nip19.decode(npub);
       if (decoded.type === 'npub') {
-        repoOwnerPubkey = decoded.data as string;
-        repoAddress = `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkey}:${repo}`;
+        repoOwnerPubkeyState = decoded.data as string;
+        repoAddress = `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkeyState}:${repo}`;
       }
     } catch (err) {
       console.warn('Failed to decode npub for bookmark address:', err);
@@ -2436,7 +2451,7 @@
   }
 
   async function copyEventId() {
-    if (!repoAddress || !repoOwnerPubkey) {
+    if (!repoAddress || !repoOwnerPubkeyDerived) {
       alert('Repository address not available');
       return;
     }
@@ -2565,11 +2580,11 @@
       console.error('Failed to load maintainers:', err);
       maintainersLoaded = false; // Reset flag on error
       // Fallback to pageData if available
-      if (pageData.repoOwnerPubkey) {
-        allMaintainers = [{ pubkey: pageData.repoOwnerPubkey, isOwner: true }];
-        if (pageData.repoMaintainers) {
-          for (const maintainer of pageData.repoMaintainers) {
-            if (maintainer.toLowerCase() !== pageData.repoOwnerPubkey.toLowerCase()) {
+      if (repoOwnerPubkeyDerived) {
+        allMaintainers = [{ pubkey: repoOwnerPubkeyDerived, isOwner: true }];
+        if (repoMaintainers) {
+          for (const maintainer of repoMaintainers) {
+            if (maintainer.toLowerCase() !== repoOwnerPubkeyDerived.toLowerCase()) {
               allMaintainers.push({ pubkey: maintainer, isOwner: false });
             }
           }
@@ -2605,7 +2620,7 @@
   }
 
   async function generateAnnouncementFileForRepo() {
-    if (!pageData.repoOwnerPubkey || !userPubkeyHex) {
+    if (!repoOwnerPubkeyDerived || !userPubkeyHex) {
       error = 'Unable to generate announcement file: missing repository or user information';
       return;
     }
@@ -2616,7 +2631,7 @@
       const events = await nostrClient.fetchEvents([
         {
           kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [pageData.repoOwnerPubkey],
+          authors: [repoOwnerPubkeyDerived],
           '#d': [repo],
           limit: 1
         }
@@ -2654,7 +2669,7 @@
       return;
     }
 
-    if (!pageData.repoOwnerPubkey || userPubkeyHex !== pageData.repoOwnerPubkey) {
+    if (!repoOwnerPubkeyDerived || userPubkeyHex !== repoOwnerPubkeyDerived) {
       alert('Only the repository owner can delete the announcement');
       return;
     }
@@ -2678,7 +2693,7 @@
       const events = await nostrClient.fetchEvents([
         {
           kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [pageData.repoOwnerPubkey],
+          authors: [repoOwnerPubkeyDerived],
           '#d': [repo],
           limit: 1
         }
@@ -2703,7 +2718,7 @@
         content: `Requesting deletion of repository announcement for ${repo}`,
         tags: [
           ['e', announcement.id], // Reference to the announcement event
-          ['a', `${KIND.REPO_ANNOUNCEMENT}:${pageData.repoOwnerPubkey}:${repo}`], // Repository address
+          ['a', `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkeyDerived}:${repo}`], // Repository address
           ['k', KIND.REPO_ANNOUNCEMENT.toString()] // Kind of event being deleted
         ]
       };
@@ -2814,7 +2829,7 @@
         const errorText = await response.text().catch(() => '');
         if (errorText.includes('not cloned locally')) {
           // Repository is not cloned - check if API fallback might be available
-          if (pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0) {
+          if (repoCloneUrls && repoCloneUrls.length > 0) {
             // We have clone URLs, so API fallback might work - mark as unknown for now
             // It will be set to true if a subsequent request succeeds
             apiFallbackAvailable = null;
@@ -2877,7 +2892,7 @@
           const errorText = await response.text().catch(() => '');
           if (errorText.includes('not cloned locally')) {
             // Repository is not cloned - check if API fallback might be available
-            if (pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0) {
+            if (repoCloneUrls && repoCloneUrls.length > 0) {
               // We have clone URLs, so API fallback might work - mark as unknown for now
               // It will be set to true if a subsequent request succeeds
               apiFallbackAvailable = null;
@@ -3800,12 +3815,16 @@
       // Otherwise, use the selected branch or current branch
       let fromBranch: string | undefined = newBranchFrom || currentBranch || undefined;
       
-      // Only include fromBranch if repo has branches
-      const requestBody: { branchName: string; fromBranch?: string } = {
+      // Include announcement if available (for empty repos)
+      const requestBody: { branchName: string; fromBranch?: string; announcement?: NostrEvent } = {
         branchName: newBranchName
       };
       if (branches.length > 0 && fromBranch) {
         requestBody.fromBranch = fromBranch;
+      }
+      // Pass announcement if available (especially useful for empty repos)
+      if (repoAnnouncement) {
+        requestBody.announcement = repoAnnouncement;
       }
 
       const response = await fetch(`/api/repos/${npub}/${repo}/branches`, {
@@ -4452,8 +4471,8 @@
   
   <!-- OpenGraph / Facebook -->
   <meta property="og:type" content="website" />
-  <meta property="og:title" content={pageData.title || `${pageData.repoName || repo} - Repository`} />
-  <meta property="og:description" content={pageData.description || pageData.repoDescription || `Repository: ${pageData.repoName || repo}`} />
+  <meta property="og:title" content={pageData.title || `${repoName} - Repository`} />
+  <meta property="og:description" content={pageData.description || repoDescription || `Repository: ${repoName}`} />
   <meta property="og:url" content={pageData.repoUrl || `https://${$page.url.host}${$page.url.pathname}`} />
   {#if (pageData.image || repoImage) && String(pageData.image || repoImage).trim()}
     <meta property="og:image" content={pageData.image || repoImage} />
@@ -4465,8 +4484,8 @@
   
   <!-- Twitter Card -->
   <meta name="twitter:card" content={repoBanner || repoImage ? "summary_large_image" : "summary"} />
-  <meta name="twitter:title" content={pageData.title || `${pageData.repoName || repo} - Repository`} />
-  <meta name="twitter:description" content={pageData.description || pageData.repoDescription || `Repository: ${pageData.repoName || repo}`} />
+  <meta name="twitter:title" content={pageData.title || `${repoName} - Repository`} />
+  <meta name="twitter:description" content={pageData.description || repoDescription || `Repository: ${repoName}`} />
   {#if pageData.banner || repoBanner}
     <meta name="twitter:image" content={pageData.banner || repoBanner} />
   {:else if pageData.image || repoImage}
@@ -4486,18 +4505,18 @@
     </div>
   {/if}
   
-  {#if repoOwnerPubkey}
+  {#if repoOwnerPubkeyDerived}
     <RepoHeaderEnhanced
-      repoName={pageData.repoName || repo}
-      repoDescription={pageData.repoDescription}
+      repoName={repoName}
+      repoDescription={repoDescription}
       ownerNpub={npub}
-      ownerPubkey={repoOwnerPubkey}
+      ownerPubkey={repoOwnerPubkeyDerived}
       isMaintainer={isMaintainer}
-      isPrivate={pageData.repoIsPrivate || false}
-      cloneUrls={pageData.repoCloneUrls || []}
+      isPrivate={repoIsPrivate}
+      cloneUrls={repoCloneUrls}
       branches={branches}
       currentBranch={currentBranch}
-      topics={pageData.repoTopics || []}
+      topics={repoTopics}
       defaultBranch={defaultBranch}
       isRepoCloned={isRepoCloned}
       copyingCloneUrl={copyingCloneUrl}
@@ -4532,8 +4551,8 @@
         showCreateBranchDialog = true;
       }}
       onSettings={() => goto(`/signup?npub=${npub}&repo=${repo}`)}
-      onGenerateVerification={pageData.repoOwnerPubkey && userPubkeyHex === pageData.repoOwnerPubkey && verificationStatus?.verified !== true ? generateAnnouncementFileForRepo : undefined}
-      onDeleteAnnouncement={pageData.repoOwnerPubkey && userPubkeyHex === pageData.repoOwnerPubkey ? deleteAnnouncement : undefined}
+      onGenerateVerification={repoOwnerPubkeyDerived && userPubkeyHex === repoOwnerPubkeyDerived && verificationStatus?.verified !== true ? generateAnnouncementFileForRepo : undefined}
+      onDeleteAnnouncement={repoOwnerPubkeyDerived && userPubkeyHex === repoOwnerPubkeyDerived ? deleteAnnouncement : undefined}
       deletingAnnouncement={deletingAnnouncement}
       hasUnlimitedAccess={hasUnlimitedAccess($userStore.userLevel)}
       needsClone={needsClone}
@@ -4544,26 +4563,26 @@
 
   <!-- Additional repo metadata (website, clone URLs with verification) -->
 
-  {#if pageData.repoWebsite || (pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0) || pageData.repoLanguage || (pageData.repoTopics && pageData.repoTopics.length > 0) || forkInfo?.isFork}
+  {#if repoWebsite || (repoCloneUrls && repoCloneUrls.length > 0) || repoLanguage || (repoTopics && repoTopics.length > 0) || forkInfo?.isFork}
     <div class="repo-metadata-section">
-      {#if pageData.repoWebsite}
+      {#if repoWebsite}
         <div class="repo-website">
-          <a href={pageData.repoWebsite} target="_blank" rel="noopener noreferrer">
+          <a href={repoWebsite} target="_blank" rel="noopener noreferrer">
             <img src="/icons/external-link.svg" alt="" class="icon-inline" />
-            {pageData.repoWebsite}
+            {repoWebsite}
           </a>
         </div>
       {/if}
-      {#if pageData.repoLanguage}
+      {#if repoLanguage}
         <span class="repo-language">
           <img src="/icons/file-text.svg" alt="" class="icon-inline" />
-          {pageData.repoLanguage}
+          {repoLanguage}
         </span>
       {/if}
       {#if forkInfo?.isFork && forkInfo.originalRepo}
         <span class="fork-badge">Forked from <a href={`/repos/${forkInfo.originalRepo.npub}/${forkInfo.originalRepo.repo}`}>{forkInfo.originalRepo.repo}</a></span>
       {/if}
-      {#if pageData.repoCloneUrls && pageData.repoCloneUrls.length > 0}
+      {#if repoCloneUrls && repoCloneUrls.length > 0}
         <div class="repo-clone-urls">
           <div style="display: flex; align-items: center; gap: 0.5rem;">
             <button 
@@ -4600,7 +4619,7 @@
                 {copyingCloneUrl ? 'Copying...' : 'Copy Clone URL'}
               </button>
             {/if}
-            {#each (showAllCloneUrls ? pageData.repoCloneUrls : pageData.repoCloneUrls.slice(0, 3)) as cloneUrl}
+            {#each (showAllCloneUrls ? repoCloneUrls : repoCloneUrls.slice(0, 3)) as cloneUrl}
             {@const cloneVerification = verificationStatus?.cloneVerifications?.find(cv => {
               const normalizeUrl = (url: string) => url.replace(/\/$/, '').toLowerCase().replace(/^https?:\/\//, '');
               const normalizedCv = normalizeUrl(cv.url);
@@ -4670,13 +4689,13 @@
               {/if}
             </div>
             {/each}
-            {#if pageData.repoCloneUrls.length > 3}
+            {#if repoCloneUrls.length > 3}
               <button 
                 class="clone-more" 
                 onclick={() => showAllCloneUrls = !showAllCloneUrls}
                 title={showAllCloneUrls ? 'Show fewer' : 'Show all clone URLs'}
               >
-                {showAllCloneUrls ? `-${pageData.repoCloneUrls.length - 3} less` : `+${pageData.repoCloneUrls.length - 3} more`}
+                {showAllCloneUrls ? `-${repoCloneUrls.length - 3} less` : `+${repoCloneUrls.length - 3} more`}
               </button>
             {/if}
           </div>

@@ -1422,10 +1422,11 @@ export class FileManager {
   async saveRepoEventToWorktree(
     worktreePath: string,
     event: NostrEvent,
-    eventType: 'announcement' | 'transfer'
-  ): Promise<void> {
+    eventType: 'announcement' | 'transfer',
+    skipIfExists: boolean = true
+  ): Promise<boolean> {
     try {
-      const { mkdir, writeFile } = await import('fs/promises');
+      const { mkdir, writeFile, readFile } = await import('fs/promises');
       const { join } = await import('path');
       
       // Create nostr directory in worktree
@@ -1434,15 +1435,39 @@ export class FileManager {
       
       // Append to repo-events.jsonl with event type metadata
       const jsonlFile = join(nostrDir, 'repo-events.jsonl');
+      
+      // Check if event already exists if skipIfExists is true
+      if (skipIfExists) {
+        try {
+          const existingContent = await readFile(jsonlFile, 'utf-8');
+          const lines = existingContent.trim().split('\n').filter(l => l.trim());
+          for (const line of lines) {
+            try {
+              const parsed = JSON.parse(line);
+              if (parsed.event && parsed.event.id === event.id) {
+                logger.debug({ eventId: event.id, worktreePath }, 'Event already exists in nostr/repo-events.jsonl, skipping');
+                return false;
+              }
+            } catch {
+              // Skip invalid JSON lines
+            }
+          }
+        } catch {
+          // File doesn't exist yet, that's fine
+        }
+      }
+      
       const eventLine = JSON.stringify({
         type: eventType,
         timestamp: event.created_at,
         event
       }) + '\n';
       await writeFile(jsonlFile, eventLine, { flag: 'a', encoding: 'utf-8' });
+      return true;
     } catch (err) {
       logger.debug({ error: err, worktreePath, eventType }, 'Failed to save repo event to nostr/repo-events.jsonl');
       // Don't throw - this is a nice-to-have feature
+      return false;
     }
   }
 
@@ -1765,7 +1790,8 @@ export class FileManager {
     npub: string,
     repoName: string,
     branchName: string,
-    fromBranch?: string
+    fromBranch?: string,
+    announcement?: NostrEvent
   ): Promise<void> {
     // Security: Validate branch names to prevent path traversal
     if (!isValidBranchName(branchName)) {
@@ -1796,29 +1822,34 @@ export class FileManager {
 
       // If no branches exist, create an orphan branch (branch with no parent)
       if (!hasBranches) {
-        // Fetch repo announcement to use as initial commit message
+        // Use provided announcement or fetch repo announcement to use as initial commit message and save to file
         let commitMessage = 'Initial commit';
-        try {
-          const { NostrClient } = await import('../nostr/nostr-client.js');
-          const { DEFAULT_NOSTR_RELAYS } = await import('../../config.js');
-          const { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } = await import('../../utils/nostr-utils.js');
-          const { eventCache } = await import('../nostr/event-cache.js');
-          const { requireNpubHex } = await import('../../utils/npub-utils.js');
-          
-          const repoOwnerPubkey = requireNpubHex(npub);
-          const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
-          const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoOwnerPubkey, eventCache);
-          const announcement = findRepoAnnouncement(allEvents, repoName);
-          
-          if (announcement) {
-            // Format announcement as commit message
-            const name = announcement.tags.find((t: string[]) => t[0] === 'name')?.[1] || repoName;
-            const description = announcement.tags.find((t: string[]) => t[0] === 'description')?.[1] || '';
-            commitMessage = `Repository announcement: ${name}${description ? '\n\n' + description : ''}\n\nEvent ID: ${announcement.id}`;
-            logger.debug({ branchName, announcementId: announcement.id }, 'Using repo announcement as initial commit message');
+        let announcementEvent: NostrEvent | null = announcement || null;
+        
+        // If announcement not provided, try to fetch it
+        if (!announcementEvent) {
+          try {
+            const { NostrClient } = await import('../nostr/nostr-client.js');
+            const { DEFAULT_NOSTR_RELAYS } = await import('../../config.js');
+            const { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } = await import('../../utils/nostr-utils.js');
+            const { eventCache } = await import('../nostr/event-cache.js');
+            const { requireNpubHex } = await import('../../utils/npub-utils.js');
+            
+            const repoOwnerPubkey = requireNpubHex(npub);
+            const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+            const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoOwnerPubkey, eventCache);
+            announcementEvent = findRepoAnnouncement(allEvents, repoName);
+          } catch (announcementErr) {
+            logger.debug({ error: announcementErr, branchName }, 'Failed to fetch announcement, using default commit message');
           }
-        } catch (announcementErr) {
-          logger.debug({ error: announcementErr, branchName }, 'Failed to fetch announcement, using default commit message');
+        }
+        
+        if (announcementEvent) {
+          // Format announcement as commit message
+          const name = announcementEvent.tags.find((t: string[]) => t[0] === 'name')?.[1] || repoName;
+          const description = announcementEvent.tags.find((t: string[]) => t[0] === 'description')?.[1] || '';
+          commitMessage = `Repository announcement: ${name}${description ? '\n\n' + description : ''}\n\nEvent ID: ${announcementEvent.id}`;
+          logger.debug({ branchName, announcementId: announcementEvent.id }, 'Using repo announcement as initial commit message');
         }
         
         // Create worktree for the new branch directly (orphan branch)
@@ -1852,16 +1883,40 @@ export class FileManager {
         // Note: --orphan must come before branch name, path comes last
         await git.raw(['worktree', 'add', '--orphan', branchName, worktreePath]);
         
-        // Create initial empty commit with announcement as message
+        // Save announcement to nostr/repo-events.jsonl if we have it
+        let announcementSaved = false;
+        if (announcementEvent) {
+          try {
+            announcementSaved = await this.saveRepoEventToWorktree(worktreePath, announcementEvent, 'announcement', true);
+            logger.debug({ branchName, announcementId: announcementEvent.id }, 'Saved announcement to nostr/repo-events.jsonl');
+          } catch (saveErr) {
+            logger.warn({ error: saveErr, branchName }, 'Failed to save announcement to nostr/repo-events.jsonl, continuing with empty commit');
+          }
+        }
+        
+        // Stage files if announcement was saved
         const workGit: SimpleGit = simpleGit(worktreePath);
-        await workGit.commit(commitMessage, ['--allow-empty'], {
-          '--author': 'GitRepublic <noreply@gitrepublic.com>'
-        });
+        const filesToAdd: string[] = [];
+        if (announcementSaved) {
+          filesToAdd.push('nostr/repo-events.jsonl');
+        }
+        
+        // Create initial commit with announcement file (if saved) or empty commit
+        if (filesToAdd.length > 0) {
+          await workGit.add(filesToAdd);
+          await workGit.commit(commitMessage, filesToAdd, {
+            '--author': 'GitRepublic <noreply@gitrepublic.com>'
+          });
+        } else {
+          await workGit.commit(commitMessage, ['--allow-empty'], {
+            '--author': 'GitRepublic <noreply@gitrepublic.com>'
+          });
+        }
         
         // Set the default branch to the new branch in the bare repo
         await git.raw(['symbolic-ref', 'HEAD', `refs/heads/${branchName}`]);
         
-        logger.debug({ branchName }, 'Created orphan branch with initial commit');
+        logger.debug({ branchName, announcementSaved }, 'Created orphan branch with initial commit');
         
         // Clean up worktree
         await this.removeWorktree(repoPath, worktreePath);

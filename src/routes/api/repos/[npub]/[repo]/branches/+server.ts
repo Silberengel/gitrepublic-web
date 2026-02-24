@@ -161,7 +161,7 @@ export const GET: RequestHandler = createRepoGetHandler(
 export const POST: RequestHandler = createRepoPostHandler(
   async (context: RepoRequestContext, event: RequestEvent) => {
     const body = await event.request.json();
-    const { branchName, fromBranch } = body;
+    const { branchName, fromBranch, announcement } = body;
 
     if (!branchName) {
       throw handleValidationError('Missing branchName parameter', { operation: 'createBranch', npub: context.npub, repo: context.repo });
@@ -269,7 +269,7 @@ export const POST: RequestHandler = createRepoPostHandler(
     }
     // If repo has no branches, sourceBranch will be undefined/null, which createBranch will handle correctly
     
-    await fileManager.createBranch(context.npub, context.repo, branchName, sourceBranch);
+    await fileManager.createBranch(context.npub, context.repo, branchName, sourceBranch, announcement);
     return json({ success: true, message: 'Branch created successfully' });
   },
   { operation: 'createBranch', requireRepoExists: false } // Allow creating branches in empty repos

@@ -16,7 +16,9 @@ if (process.env.NODE_ENV === 'production' || process.argv.includes('build')) {
       message.includes('try_get_request_store') && message.includes('never used') ||
       message.includes('is imported from external module') && message.includes('but never used') ||
       (message.includes('[plugin:vite:reporter]') && message.includes('is dynamically imported by') && message.includes('but also statically imported by')) ||
-      (message.includes('dynamic import will not move module into another chunk'))
+      (message.includes('dynamic import will not move module into another chunk')) ||
+      message.includes("The 'this' keyword is equivalent to 'undefined'") ||
+      message.includes('Circular dependency') && message.includes('@asciidoctor/opal-runtime')
     );
   };
 
@@ -100,10 +102,13 @@ export default defineConfig({
         // Suppress warnings about externalized modules (expected for SSR builds)
         if (
           warning.code === 'MODULE_LEVEL_DIRECTIVE' ||
+          warning.code === 'CIRCULAR_DEPENDENCY' ||
           (typeof warning.message === 'string' && (
             warning.message.includes('externalized for browser compatibility') ||
             warning.message.includes('try_get_request_store') && warning.message.includes('never used') ||
-            warning.message.includes('is imported from external module') && warning.message.includes('but never used')
+            warning.message.includes('is imported from external module') && warning.message.includes('but never used') ||
+            warning.message.includes("The 'this' keyword is equivalent to 'undefined'") ||
+            (warning.message.includes('Circular dependency') && warning.message.includes('@asciidoctor/opal-runtime'))
           ))
         ) {
           return;
