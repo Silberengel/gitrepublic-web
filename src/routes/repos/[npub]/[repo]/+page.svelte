@@ -9,6 +9,9 @@
   import RepoHeaderEnhanced from '$lib/components/RepoHeaderEnhanced.svelte';
   import TabsMenu from '$lib/components/TabsMenu.svelte';
   import NostrLinkRenderer from '$lib/components/NostrLinkRenderer.svelte';
+  import TagsTab from './components/TagsTab.svelte';
+  import { downloadRepository as downloadRepoUtil } from './utils/download.js';
+  import { buildApiHeaders } from './utils/api-client.js';
   import '$lib/styles/repo.css';
   import { getPublicKeyWithNIP07, isNIP07Available, signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
   import { NostrClient } from '$lib/services/nostr/nostr-client.js';
@@ -102,9 +105,58 @@
     .map((t: string[]) => t[1])
     .filter((t: string) => t && typeof t === 'string') as string[] || []);
   const repoWebsite = $derived(repoAnnouncement?.tags.find((t: string[]) => t[0] === 'website')?.[1]);
-  const repoIsPrivate = $derived(repoAnnouncement?.tags.some((t: string[]) => 
+  const repoIsPrivate = $derived(repoAnnouncement?.tags.some((t: string[]) =>
     (t[0] === 'private' && t[1] === 'true') || (t[0] === 't' && t[1] === 'private')
   ) || false);
+  
+  // Safe page URL for SSR - computed from pageData or current URL
+  // Must be completely SSR-safe to prevent "Cannot read properties of null" errors
+  const pageUrl = $derived.by(() => {
+    try {
+      // First try pageData (safest)
+      if (pageData && typeof pageData === 'object' && pageData.repoUrl) {
+        const url = pageData.repoUrl;
+        if (typeof url === 'string' && url.trim()) {
+          return url;
+        }
+      }
+      
+      // During SSR, return empty string immediately
+      if (typeof window === 'undefined') {
+        return '';
+      }
+      
+      // On client, try to get from current location as fallback
+      try {
+        if (window && window.location && window.location.protocol && window.location.host && window.location.pathname) {
+          return `${window.location.protocol}//${window.location.host}${window.location.pathname}`;
+        }
+      } catch (err) {
+        // Silently ignore errors during SSR or if window.location is unavailable
+        console.debug('Could not get page URL from window.location:', err);
+      }
+      
+      return '';
+    } catch (err) {
+      // Catch any unexpected errors and return empty string
+      console.debug('Error computing pageUrl:', err);
+      return '';
+    }
+  });
+  
+  // Safe Twitter card type - avoid IIFE in head during SSR
+  const twitterCardType = $derived.by(() => {
+    try {
+      const banner = (pageData?.banner || repoBanner) || (pageData?.image || repoImage);
+      if (banner && typeof banner === 'string' && banner.trim()) {
+        return "summary_large_image";
+      }
+      return "summary";
+    } catch {
+      return "summary";
+    }
+  });
+  
 
   let loading = $state(true);
   let error = $state<string | null>(null);
@@ -406,6 +458,10 @@
       // This ensures we use the same domain/port the user is currently viewing
       // Guard against SSR - $page store can only be accessed in component context
       if (typeof window === 'undefined') return;
+      // Guard against SSR - $page.url might not be available
+      if (typeof window === 'undefined' || !$page?.url) {
+        return '';
+      }
       const currentUrl = $page.url;
       const host = currentUrl.host; // Includes port if present (e.g., "localhost:5173")
       const protocol = currentUrl.protocol.slice(0, -1); // Remove trailing ":"
@@ -985,6 +1041,95 @@
   // Repository images
   let repoImage = $state<string | null>(null);
   let repoBanner = $state<string | null>(null);
+  
+  // Safe values for head section to prevent SSR errors (must be after repoImage/repoBanner declaration)
+  const safeRepo = $derived(repo || 'Repository');
+  const safeRepoName = $derived.by(() => {
+    try {
+      return repoName || repo || 'Repository';
+    } catch {
+      return repo || 'Repository';
+    }
+  });
+  const safeRepoDescription = $derived.by(() => {
+    try {
+      return repoDescription || '';
+    } catch {
+      return '';
+    }
+  });
+  const safeTitle = $derived.by(() => {
+    try {
+      return pageData?.title || `${safeRepo} - Repository`;
+    } catch {
+      return `${safeRepo} - Repository`;
+    }
+  });
+  const safeDescription = $derived.by(() => {
+    try {
+      return pageData?.description || `Repository: ${safeRepo}`;
+    } catch {
+      return `Repository: ${safeRepo}`;
+    }
+  });
+  const safeImage = $derived.by(() => {
+    try {
+      return pageData?.image || repoImage || null;
+    } catch {
+      return null;
+    }
+  });
+  const safeBanner = $derived.by(() => {
+    try {
+      return pageData?.banner || repoBanner || null;
+    } catch {
+      return null;
+    }
+  });
+  const hasImage = $derived.by(() => {
+    try {
+      return safeImage && typeof safeImage === 'string' && safeImage.trim() !== '';
+    } catch {
+      return false;
+    }
+  });
+  const hasBanner = $derived.by(() => {
+    try {
+      return safeBanner && typeof safeBanner === 'string' && safeBanner.trim() !== '';
+    } catch {
+      return false;
+    }
+  });
+  
+  // Additional safe values for head section to avoid IIFEs
+  const safeOgDescription = $derived.by(() => {
+    try {
+      return pageData?.description || safeRepoDescription || `Repository: ${safeRepoName || safeRepo || 'Repository'}`;
+    } catch {
+      return 'Repository';
+    }
+  });
+  const safeTwitterDescription = $derived.by(() => {
+    try {
+      return pageData?.description || safeRepoDescription || `Repository: ${safeRepoName || safeRepo || 'Repository'}`;
+    } catch {
+      return 'Repository';
+    }
+  });
+  const safeTwitterCard = $derived.by(() => {
+    try {
+      return twitterCardType || 'summary';
+    } catch {
+      return 'summary';
+    }
+  });
+  const safePageUrl = $derived.by(() => {
+    try {
+      return pageUrl || '';
+    } catch {
+      return '';
+    }
+  });
 
   // Repository owner pubkey (decoded from npub) - kept for backward compatibility with some functions
   let repoOwnerPubkeyState = $state<string | null>(null);
@@ -1577,13 +1722,19 @@
   }
 
   async function checkCloneStatus(force: boolean = false) {
-    if (checkingCloneStatus || (!force && isRepoCloned !== null)) return;
+    if (checkingCloneStatus) return;
+    if (!force && isRepoCloned !== null) {
+      console.log(`[Clone Status] Skipping check - already checked: ${isRepoCloned}, force: ${force}`);
+      return;
+    }
     
     checkingCloneStatus = true;
     try {
       // Check if repo exists locally by trying to fetch branches
       // 404 = repo not cloned, 403 = repo exists but access denied (cloned), 200 = cloned and accessible
-      const response = await fetch(`/api/repos/${npub}/${repo}/branches`, {
+      const url = `/api/repos/${npub}/${repo}/branches`;
+      console.log(`[Clone Status] Checking clone status for ${npub}/${repo}...`);
+      const response = await fetch(url, {
         headers: buildApiHeaders()
       });
       // If response is 403, repo exists (cloned) but user doesn't have access
@@ -2456,40 +2607,34 @@
     });
   });
   
-  // Cleanup on destroy
-  onDestroy(() => {
-    // Mark component as unmounted first to prevent any state updates
-    isMounted = false;
-    
-    // Clean up intervals and timeouts
-    try {
-      if (autoSaveInterval) {
-        clearInterval(autoSaveInterval);
-        autoSaveInterval = null;
+  // Cleanup on destroy - only register on client side to prevent SSR errors
+  if (typeof window !== 'undefined') {
+    onDestroy(() => {
+      try {
+        // Mark component as unmounted first to prevent any state updates
+        isMounted = false;
+        
+        // Clean up intervals and timeouts
+        if (autoSaveInterval) {
+          clearInterval(autoSaveInterval);
+          autoSaveInterval = null;
+        }
+        
+        if (readmeAutoLoadTimeout) {
+          clearTimeout(readmeAutoLoadTimeout);
+          readmeAutoLoadTimeout = null;
+        }
+        
+        // Clean up event listeners
+        if (clickOutsideHandler && typeof document !== 'undefined') {
+          document.removeEventListener('click', clickOutsideHandler);
+          clickOutsideHandler = null;
+        }
+      } catch (err) {
+        // Ignore all errors during cleanup - component is being destroyed anyway
       }
-    } catch (err) {
-      // Ignore errors during cleanup
-    }
-    
-    try {
-      if (readmeAutoLoadTimeout) {
-        clearTimeout(readmeAutoLoadTimeout);
-        readmeAutoLoadTimeout = null;
-      }
-    } catch (err) {
-      // Ignore errors during cleanup
-    }
-    
-    // Clean up event listeners
-    try {
-      if (clickOutsideHandler) {
-        document.removeEventListener('click', clickOutsideHandler);
-        clickOutsideHandler = null;
-      }
-    } catch (err) {
-      // Ignore errors - listener may not exist or already removed
-    }
-  });
+    });
+  }
 
   async function checkAuth() {
     // Check userStore first
@@ -2989,19 +3134,77 @@
     URL.revokeObjectURL(url);
   }
 
-  // Helper function to build headers with user pubkey
-  function buildApiHeaders(): Record<string, string> {
-    const headers: Record<string, string> = {};
-    // Use $userStore directly to ensure we get the latest value
-    const currentUserPubkeyHex = $userStore.userPubkeyHex || userPubkeyHex;
-    if (currentUserPubkeyHex) {
-      headers['X-User-Pubkey'] = currentUserPubkeyHex;
-      // Debug logging (remove in production)
-      console.debug('[API Headers] Sending X-User-Pubkey:', currentUserPubkeyHex.substring(0, 16) + '...');
-    } else {
-      console.debug('[API Headers] No user pubkey available, sending request without X-User-Pubkey header');
+  // buildApiHeaders is now imported from utils/api-client.ts - using it directly
+
+  // Safe wrapper functions for SSR - use function declarations that check at call time
+  // This ensures they're always defined and never null, even during SSR
+  function safeCopyCloneUrl() {
+    if (typeof window === 'undefined') return Promise.resolve();
+    try {
+      return copyCloneUrl();
+    } catch (err) {
+      console.warn('Error in copyCloneUrl:', err);
+      return Promise.resolve();
     }
-    return headers;
+  }
+
+  function safeDeleteBranch(branchName: string) {
+    if (typeof window === 'undefined') return Promise.resolve();
+    try {
+      return deleteBranch(branchName);
+    } catch (err) {
+      console.warn('Error in deleteBranch:', err);
+      return Promise.resolve();
+    }
+  }
+
+  function safeToggleBookmark() {
+    if (typeof window === 'undefined') return Promise.resolve();
+    try {
+      return toggleBookmark();
+    } catch (err) {
+      console.warn('Error in toggleBookmark:', err);
+      return Promise.resolve();
+    }
+  }
+
+  function safeForkRepository() {
+    if (typeof window === 'undefined') return Promise.resolve();
+    try {
+      return forkRepository();
+    } catch (err) {
+      console.warn('Error in forkRepository:', err);
+      return Promise.resolve();
+    }
+  }
+
+  function safeCloneRepository() {
+    if (typeof window === 'undefined') return Promise.resolve();
+    try {
+      return cloneRepository();
+    } catch (err) {
+      console.warn('Error in cloneRepository:', err);
+      return Promise.resolve();
+    }
+  }
+
+  function safeHandleBranchChange(branch: string) {
+    if (typeof window === 'undefined') return;
+    try {
+      handleBranchChangeDirect(branch);
+    } catch (err) {
+      console.warn('Error in handleBranchChangeDirect:', err);
+    }
+  }
+
+  // Download function - now using extracted utility
+  async function downloadRepository(ref?: string, filename?: string): Promise<void> {
+    await downloadRepoUtil({
+      npub,
+      repo,
+      ref,
+      filename
+    });
   }
 
   async function loadBranches() {
@@ -4879,77 +5082,79 @@
 </script>
 
 <svelte:head>
-  <title>{pageData.title || `${repo} - Repository`}</title>
-  <meta name="description" content={pageData.description || `Repository: ${repo}`} />
+  <title>{safeTitle || 'Repository'}</title>
+  <meta name="description" content={safeDescription || 'Repository'} />
   
   <!-- OpenGraph / Facebook -->
   <meta property="og:type" content="website" />
-  <meta property="og:title" content={pageData.title || `${repoName} - Repository`} />
-  <meta property="og:description" content={pageData.description || repoDescription || `Repository: ${repoName}`} />
-  <meta property="og:url" content={pageData.repoUrl || (typeof window !== 'undefined' ? `https://${$page.url.host}${$page.url.pathname}` : '')} />
-  {#if (pageData.image || repoImage) && String(pageData.image || repoImage).trim()}
-    <meta property="og:image" content={pageData.image || repoImage} />
+  <meta property="og:title" content={safeTitle || 'Repository'} />
+  <meta property="og:description" content={safeOgDescription} />
+  <meta property="og:url" content={safePageUrl} />
+  {#if hasImage && safeImage}
+    <meta property="og:image" content={safeImage} />
   {/if}
-  {#if (pageData.banner || repoBanner) && String(pageData.banner || repoBanner).trim()}
+  {#if hasBanner && safeBanner}
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
   {/if}
   
   <!-- Twitter Card -->
-  <meta name="twitter:card" content={repoBanner || repoImage ? "summary_large_image" : "summary"} />
-  <meta name="twitter:title" content={pageData.title || `${repoName} - Repository`} />
-  <meta name="twitter:description" content={pageData.description || repoDescription || `Repository: ${repoName}`} />
-  {#if pageData.banner || repoBanner}
-    <meta name="twitter:image" content={pageData.banner || repoBanner} />
-  {:else if pageData.image || repoImage}
-    <meta name="twitter:image" content={pageData.image || repoImage} />
+  <meta name="twitter:card" content={safeTwitterCard} />
+  <meta name="twitter:title" content={safeTitle || 'Repository'} />
+  <meta name="twitter:description" content={safeTwitterDescription} />
+  {#if hasBanner && safeBanner}
+    <meta name="twitter:image" content={safeBanner} />
+  {:else if hasImage && safeImage}
+    <meta name="twitter:image" content={safeImage} />
   {/if}
 </svelte:head>
 
 <div class="container">
   <!-- Banner hidden on mobile, shown on desktop -->
-  {#if repoBanner}
+  {#if repoBanner && typeof repoBanner === 'string' && repoBanner.trim()}
     <div class="repo-banner desktop-only">
       <img src={repoBanner} alt="" onerror={(e) => { 
-        console.error('[Repo Images] Failed to load banner:', repoBanner); 
-        const target = e.target as HTMLImageElement;
-        if (target) target.style.display = 'none';
+        if (typeof window !== 'undefined') {
+          console.error('[Repo Images] Failed to load banner:', repoBanner); 
+          const target = e.target as HTMLImageElement;
+          if (target) target.style.display = 'none';
+        }
       }} />
     </div>
   {/if}
   
   {#if repoOwnerPubkeyDerived}
     <RepoHeaderEnhanced
-      repoName={repoName}
-      repoDescription={repoDescription}
-      ownerNpub={npub}
-      ownerPubkey={repoOwnerPubkeyDerived}
-      isMaintainer={isMaintainer}
-      isPrivate={repoIsPrivate}
-      cloneUrls={repoCloneUrls}
-      branches={branches}
-      currentBranch={currentBranch}
-      topics={repoTopics}
-      defaultBranch={defaultBranch}
-      isRepoCloned={isRepoCloned}
-      copyingCloneUrl={copyingCloneUrl}
-      onBranchChange={handleBranchChangeDirect}
-      onCopyCloneUrl={copyCloneUrl}
-      onDeleteBranch={deleteBranch}
-      onMenuToggle={() => showRepoMenu = !showRepoMenu}
-      showMenu={showRepoMenu}
-      userPubkey={userPubkey}
-      isBookmarked={isBookmarked}
-      loadingBookmark={loadingBookmark}
-      onToggleBookmark={toggleBookmark}
-      onFork={forkRepository}
-      forking={forking}
-      onCloneToServer={cloneRepository}
-      cloning={cloning}
-      checkingCloneStatus={checkingCloneStatus}
-      onCreateIssue={() => showCreateIssueDialog = true}
-      onCreatePR={() => showCreatePRDialog = true}
-      onCreatePatch={() => showCreatePatchDialog = true}
+      repoName={repoName || ''}
+      repoDescription={repoDescription || ''}
+      ownerNpub={npub || ''}
+      ownerPubkey={repoOwnerPubkeyDerived || ''}
+      isMaintainer={isMaintainer || false}
+      isPrivate={repoIsPrivate || false}
+      cloneUrls={repoCloneUrls || []}
+      branches={branches || []}
+      currentBranch={currentBranch || null}
+      topics={repoTopics || []}
+      defaultBranch={defaultBranch || null}
+      isRepoCloned={isRepoCloned || false}
+      copyingCloneUrl={copyingCloneUrl || false}
+      onBranchChange={safeHandleBranchChange}
+      onCopyCloneUrl={safeCopyCloneUrl}
+      onDeleteBranch={safeDeleteBranch}
+      onMenuToggle={() => { if (typeof showRepoMenu !== 'undefined') showRepoMenu = !showRepoMenu; }}
+      showMenu={showRepoMenu || false}
+      userPubkey={userPubkey || null}
+      isBookmarked={isBookmarked || false}
+      loadingBookmark={loadingBookmark || false}
+      onToggleBookmark={safeToggleBookmark}
+      onFork={safeForkRepository}
+      forking={forking || false}
+      onCloneToServer={safeCloneRepository}
+      cloning={cloning || false}
+      checkingCloneStatus={checkingCloneStatus || false}
+      onCreateIssue={() => { if (typeof showCreateIssueDialog !== 'undefined') showCreateIssueDialog = true; }}
+      onCreatePR={() => { if (typeof showCreatePRDialog !== 'undefined') showCreatePRDialog = true; }}
+      onCreatePatch={() => { if (typeof showCreatePatchDialog !== 'undefined') showCreatePatchDialog = true; }}
       onCreateBranch={async () => {
         if (!userPubkey || !isMaintainer || needsClone) return;
         try {
@@ -5300,66 +5505,34 @@
       {/if}
 
       <!-- Tags View -->
-      {#if activeTab === 'tags' && canViewRepo}
-      <aside class="tags-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'tags'}>
-        <div class="tags-header">
-          <TabsMenu 
-            activeTab={activeTab} 
-            {tabs} 
-            onTabChange={(tab) => activeTab = tab as typeof activeTab}
-          />
-          <h2>Tags {#if isRepoCloned === false && canUseApiFallback}<span class="read-only-badge">Read-Only</span>{/if}</h2>
-          {#if userPubkey && isMaintainer}
-            <button 
-              onclick={() => {
-                if (!userPubkey || !isMaintainer || needsClone) return;
-                showCreateTagDialog = true;
-              }} 
-              class="create-tag-button"
-              disabled={needsClone}
-              title={needsClone ? cloneTooltip : 'Create a new tag'}
-            >
-              <img src="/icons/plus.svg" alt="New Tag" class="icon" />
-            </button>
-          {/if}
-          <button 
-            onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-            class="mobile-toggle-button"
-            title="Show content"
-          >
-            <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
-          </button>
-        </div>
-        {#if tags.length > 0}
-          <ul class="tag-list">
-            {#each tags as tag}
-              {@const tagHash = tag.hash || ''}
-              {#if tagHash}
-                <li class="tag-item" class:selected={selectedTag === tag.name}>
-                  <button 
-                    onclick={() => selectedTag = tag.name}
-                    class="tag-item-button"
-                  >
-                    <div class="tag-name">{tag.name}</div>
-                    <div class="tag-hash">{tagHash.slice(0, 7)}</div>
-                    {#if tag.date}
-                      <div class="tag-date">{new Date(tag.date * 1000).toLocaleDateString()}</div>
-                    {/if}
-                    {#if releases.find(r => r.tagName === tag.name)}
-                      <img src="/icons/package.svg" alt="Has release" class="tag-has-release-icon" title="This tag has a release" />
-                    {/if}
-                  </button>
-                </li>
-              {/if}
-            {/each}
-          </ul>
-        {:else}
-          <div class="empty-state">
-            <p>No tags found</p>
-          </div>
-        {/if}
-      </aside>
-      {/if}
+      <TagsTab
+        {npub}
+        {repo}
+        {tags}
+        {releases}
+        {selectedTag}
+        {isMaintainer}
+        {userPubkeyHex}
+        repoOwnerPubkeyDerived={repoOwnerPubkeyDerived}
+        {isRepoCloned}
+        {canViewRepo}
+        {canUseApiFallback}
+        {needsClone}
+        {cloneTooltip}
+        {activeTab}
+        {tabs}
+        {showLeftPanelOnMobile}
+        onTagSelect={(tagName) => selectedTag = tagName}
+        onTabChange={(tab) => activeTab = tab as typeof activeTab}
+        onToggleMobilePanel={() => showLeftPanelOnMobile = !showLeftPanelOnMobile}
+        onCreateTag={() => showCreateTagDialog = true}
+        onCreateRelease={(tagName, tagHash) => {
+          newReleaseTagName = tagName;
+          newReleaseTagHash = tagHash;
+          showCreateReleaseDialog = true;
+        }}
+        onLoadTags={loadTags}
+      />
 
       <!-- Code Search View -->
       {#if activeTab === 'code-search' && canViewRepo}
@@ -5644,7 +5817,16 @@
                   </button>
                 {/if}
                 <a href={`/api/repos/${npub}/${repo}/raw?path=${readmePath}`} target="_blank" class="raw-link">View Raw</a>
-                <a href={`/api/repos/${npub}/${repo}/download?format=zip`} class="download-link">Download ZIP</a>
+                <button 
+                  type="button"
+                  class="download-link"
+                  onclick={async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                          await downloadRepository();
+                  }}
+                >Download ZIP</button>
                 <button 
                   onclick={() => showFileListOnMobile = !showFileListOnMobile} 
                   class="mobile-toggle-button"
@@ -5861,88 +6043,7 @@
           </div>
         {/if}
 
-        {#if activeTab === 'tags'}
-          <div class="tags-content" class:hide-on-mobile={showLeftPanelOnMobile && activeTab === 'tags'}>
-            <div class="content-header-mobile">
-              <button 
-                onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-                class="mobile-toggle-button"
-                title="Show list"
-              >
-                <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
-              </button>
-            </div>
-            {#if selectedTag}
-              {@const tag = tags.find(t => t.name === selectedTag)}
-              {@const release = releases.find(r => r.tagName === selectedTag)}
-              {#if tag}
-                <div class="tag-detail">
-                  <div class="tag-detail-header">
-                    <h3>{tag.name}</h3>
-                    <div class="tag-detail-meta">
-                      <span>Tag: {tag.hash?.slice(0, 7) || 'N/A'}</span>
-                      {#if tag.date}
-                        <span class="tag-date">Created {new Date(tag.date * 1000).toLocaleString()}</span>
-                      {/if}
-                      <a 
-                        href={`/api/repos/${npub}/${repo}/download?ref=${tag.name}&format=zip`}
-                        download={`${repo}-${tag.name}.zip`}
-                        class="download-tag-button"
-                        title="Download source code as ZIP"
-                      >
-                        <img src="/icons/download.svg" alt="Download" class="icon-inline" />
-                        Download ZIP
-                      </a>
-                      {#if (isMaintainer || userPubkeyHex === repoOwnerPubkeyDerived) && isRepoCloned && !release}
-                        <button 
-                          onclick={() => {
-                            newReleaseTagName = tag.name;
-                            newReleaseTagHash = tag.hash || '';
-                            showCreateReleaseDialog = true;
-                          }}
-                          class="release-tag-button"
-                          title="Create a release for this tag"
-                        >
-                          Release this tag
-                        </button>
-                      {/if}
-                    </div>
-                  </div>
-                  {#if tag.message}
-                    <div class="tag-message">
-                      <p>{tag.message}</p>
-                    </div>
-                  {/if}
-                  {#if release}
-                    <div class="tag-release-section">
-                      <h4>Release</h4>
-                      <div class="release-info">
-                        {#if release.isDraft}
-                          <span class="release-badge draft">Draft</span>
-                        {/if}
-                        {#if release.isPrerelease}
-                          <span class="release-badge prerelease">Pre-release</span>
-                        {/if}
-                        <div class="release-meta">
-                          <span>Released {new Date(release.created_at * 1000).toLocaleDateString()}</span>
-                        </div>
-                        {#if release.releaseNotes}
-                          <div class="release-notes">
-                            {@html release.releaseNotes.replace(/\n/g, '<br>')}
-                          </div>
-                        {/if}
-                      </div>
-                    </div>
-                  {/if}
-                </div>
-              {/if}
-            {:else}
-              <div class="empty-state">
-                <p>Select a tag from the sidebar to view details</p>
-              </div>
-            {/if}
-          </div>
-        {/if}
+        <!-- Tags content is now handled by TagsTab component -->
 
 
         {#if activeTab === 'code-search' && canViewRepo}

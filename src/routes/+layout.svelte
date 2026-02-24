@@ -174,29 +174,32 @@
     // No need for redundant checks here
   });
   
-  onDestroy(() => {
-    // Mark component as unmounted first
-    isMounted = false;
-    
-    // Clean up event listeners
-    try {
-      if (handlePendingTransfersEvent) {
-        window.removeEventListener('pendingTransfers', handlePendingTransfersEvent);
-        handlePendingTransfersEvent = null;
+  // Only register onDestroy on client side to prevent SSR errors
+  if (typeof window !== 'undefined') {
+    onDestroy(() => {
+      // Mark component as unmounted first
+      isMounted = false;
+      
+      // Clean up event listeners
+      try {
+        if (handlePendingTransfersEvent) {
+          window.removeEventListener('pendingTransfers', handlePendingTransfersEvent);
+          handlePendingTransfersEvent = null;
+        }
+      } catch (err) {
+        // Ignore errors during cleanup
       }
-    } catch (err) {
-      // Ignore errors during cleanup
-    }
-    
-    try {
-      if (handleThemeChanged) {
-        window.removeEventListener('themeChanged', handleThemeChanged);
-        handleThemeChanged = null;
+      
+      try {
+        if (handleThemeChanged) {
+          window.removeEventListener('themeChanged', handleThemeChanged);
+          handleThemeChanged = null;
+        }
+      } catch (err) {
+        // Ignore errors during cleanup
       }
-    } catch (err) {
-      // Ignore errors during cleanup
-    }
-  });
+    });
+  }
   
   async function checkUserLevel() {
     // Only run client-side

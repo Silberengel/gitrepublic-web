@@ -87,19 +87,22 @@
     }
   });
   
-  onDestroy(() => {
-    // Mark component as unmounted first
-    isMounted = false;
-    
-    // Re-enable scrolling when component is destroyed
-    try {
-      if (typeof document !== 'undefined' && document.body) {
-        document.body.style.overflow = '';
+  // Only register onDestroy on client side to prevent SSR errors
+  if (typeof window !== 'undefined') {
+    onDestroy(() => {
+      // Mark component as unmounted first
+      isMounted = false;
+      
+      // Re-enable scrolling when component is destroyed
+      try {
+        if (document.body) {
+          document.body.style.overflow = '';
+        }
+      } catch (err) {
+        // Ignore errors during cleanup
       }
-    } catch (err) {
-      // Ignore errors during cleanup
-    }
-  });
+    });
+  }
 
   async function checkAuth() {
     if (!isMounted || typeof window === 'undefined') return;

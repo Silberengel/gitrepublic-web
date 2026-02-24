@@ -123,32 +123,35 @@
     }, 5 * 60 * 1000); // Check every 5 minutes
   });
   
-  onDestroy(() => {
-    // Mark component as unmounted first
-    isMounted = false;
-    
-    // Clean up event listeners
-    try {
-      if (updateActivityOnInteraction) {
-        document.removeEventListener('click', updateActivityOnInteraction);
-        document.removeEventListener('keydown', updateActivityOnInteraction);
-        document.removeEventListener('scroll', updateActivityOnInteraction);
-        updateActivityOnInteraction = null;
+  // Only register onDestroy on client side to prevent SSR errors
+  if (typeof window !== 'undefined') {
+    onDestroy(() => {
+      // Mark component as unmounted first
+      isMounted = false;
+      
+      // Clean up event listeners
+      try {
+        if (updateActivityOnInteraction) {
+          document.removeEventListener('click', updateActivityOnInteraction);
+          document.removeEventListener('keydown', updateActivityOnInteraction);
+          document.removeEventListener('scroll', updateActivityOnInteraction);
+          updateActivityOnInteraction = null;
+        }
+      } catch (err) {
+        // Ignore errors during cleanup
       }
-    } catch (err) {
-      // Ignore errors during cleanup
-    }
-    
-    // Clean up interval
-    try {
-      if (expiryCheckInterval) {
-        clearInterval(expiryCheckInterval);
-        expiryCheckInterval = null;
+      
+      // Clean up interval
+      try {
+        if (expiryCheckInterval) {
+          clearInterval(expiryCheckInterval);
+          expiryCheckInterval = null;
+        }
+      } catch (err) {
+        // Ignore errors during cleanup
       }
-    } catch (err) {
-      // Ignore errors during cleanup
-    }
-  });
+    });
+  }
 
   function toggleMobileMenu() {
     if (typeof window === 'undefined') return;
