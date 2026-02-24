@@ -18,6 +18,7 @@
   import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS, combineRelays } from '$lib/config.js';
   import { getUserRelays } from '$lib/services/nostr/user-relays.js';
   import { BookmarksService } from '$lib/services/nostr/bookmarks-service.js';
+  import { HighlightsService } from '$lib/services/nostr/highlights-service.js';
   import { KIND } from '$lib/types/nostr.js';
   import { nip19 } from 'nostr-tools';
   import { userStore } from '$lib/stores/user-store.js';
@@ -578,6 +579,50 @@
   let newPatchContent = $state('');
   let newPatchSubject = $state('');
   let creatingPatch = $state(false);
+
+  // Patch highlights
+  let patchHighlights = $state<Array<{
+    id: string;
+    content: string;
+    pubkey: string;
+    created_at: number;
+    highlightedContent?: string;
+    file?: string;
+    lineStart?: number;
+    lineEnd?: number;
+    comment?: string;
+    comments?: Array<{
+      id: string;
+      content: string;
+      pubkey: string;
+      created_at: number;
+      [key: string]: unknown;
+    }>;
+    [key: string]: unknown;
+  }>>([]);
+  let patchComments = $state<Array<{
+    id: string;
+    content: string;
+    pubkey: string;
+    created_at: number;
+    [key: string]: unknown;
+  }>>([]);
+  let loadingPatchHighlights = $state(false);
+  let selectedPatchText = $state('');
+  let selectedPatchStartLine = $state(0);
+  let selectedPatchEndLine = $state(0);
+  let selectedPatchStartPos = $state(0);
+  let selectedPatchEndPos = $state(0);
+  let showPatchHighlightDialog = $state(false);
+  let patchHighlightComment = $state('');
+  let creatingPatchHighlight = $state(false);
+  let patchEditor = $state<any>(null); // CodeEditor component instance
+  let showPatchCommentDialog = $state(false);
+  let patchCommentContent = $state('');
+  let creatingPatchComment = $state(false);
+  let replyingToPatchComment = $state<string | null>(null);
+  
+  const highlightsService = new HighlightsService(DEFAULT_NOSTR_RELAYS);
 
   // Documentation
   let documentationContent = $state<string | null>(null);
@@ -4986,6 +5031,218 @@
     }
   }
 
+  async function loadPatchHighlights(patchId: string, patchAuthor: string) {
+    if (!patchId || !patchAuthor) return;
+    
+    loadingPatchHighlights = true;
+    try {
+      const decoded = nip19.decode(npub);
+      if (decoded.type !== 'npub') {
+        throw new Error('Invalid npub format');
+      }
+      const repoOwnerPubkey = decoded.data as string;
+
+      const response = await fetch(
+        `/api/repos/${npub}/${repo}/highlights?patchId=${patchId}&patchAuthor=${patchAuthor}`
+      );
+      if (response.ok) {
+        const data = await response.json();
+        patchHighlights = data.highlights || [];
+        patchComments = data.comments || [];
+      }
+    } catch (err) {
+      console.error('Failed to load patch highlights:', err);
+    } finally {
+      loadingPatchHighlights = false;
+    }
+  }
+
+  function handlePatchCodeSelection(
+    text: string,
+    startLine: number,
+    endLine: number,
+    startPos: number,
+    endPos: number
+  ) {
+    if (!text.trim() || !userPubkey) return;
+    
+    selectedPatchText = text;
+    selectedPatchStartLine = startLine;
+    selectedPatchEndLine = endLine;
+    selectedPatchStartPos = startPos;
+    selectedPatchEndPos = endPos;
+    showPatchHighlightDialog = true;
+  }
+
+  async function createPatchHighlight() {
+    if (!userPubkey || !selectedPatchText.trim() || !selectedPatch) return;
+
+    const patch = patches.find(p => p.id === selectedPatch);
+    if (!patch) return;
+
+    creatingPatchHighlight = true;
+    error = null;
+
+    try {
+      const decoded = nip19.decode(npub);
+      if (decoded.type !== 'npub') {
+        throw new Error('Invalid npub format');
+      }
+      const repoOwnerPubkey = decoded.data as string;
+
+      const eventTemplate = highlightsService.createHighlightEvent(
+        selectedPatchText,
+        patch.id,
+        patch.author,
+        repoOwnerPubkey,
+        repo,
+        KIND.PATCH, // targetKind
+        undefined, // filePath
+        selectedPatchStartLine, // lineStart
+        selectedPatchEndLine, // lineEnd
+        undefined, // context
+        patchHighlightComment.trim() || undefined // comment
+      );
+
+      const signedEvent = await signEventWithNIP07(eventTemplate);
+      
+      const tempClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+      const { outbox } = await getUserRelays(userPubkey, tempClient);
+      const combinedRelays = combineRelays(outbox);
+
+      const response = await fetch(`/api/repos/${npub}/${repo}/highlights`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'highlight',
+          event: signedEvent,
+          userPubkey
+        })
+      });
+
+      if (response.ok) {
+        showPatchHighlightDialog = false;
+        selectedPatchText = '';
+        patchHighlightComment = '';
+        await loadPatchHighlights(patch.id, patch.author);
+      } else {
+        const data = await response.json();
+        error = data.error || 'Failed to create highlight';
+      }
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to create highlight';
+    } finally {
+      creatingPatchHighlight = false;
+    }
+  }
+
+  function formatPubkey(pubkey: string): string {
+    try {
+      return nip19.npubEncode(pubkey);
+    } catch {
+      return pubkey.slice(0, 8) + '...';
+    }
+  }
+
+  function startPatchComment(parentId?: string) {
+    if (!userPubkey) {
+      alert('Please connect your NIP-07 extension');
+      return;
+    }
+    replyingToPatchComment = parentId || null;
+    showPatchCommentDialog = true;
+  }
+
+  async function createPatchComment() {
+    if (!userPubkey || !patchCommentContent.trim() || !selectedPatch) return;
+
+    const patch = patches.find(p => p.id === selectedPatch);
+    if (!patch) return;
+
+    creatingPatchComment = true;
+    error = null;
+
+    try {
+      const decoded = nip19.decode(npub);
+      if (decoded.type !== 'npub') {
+        throw new Error('Invalid npub format');
+      }
+      const repoOwnerPubkey = decoded.data as string;
+
+      const rootEventId = replyingToPatchComment || patch.id;
+      const rootEventKind = replyingToPatchComment ? KIND.COMMENT : KIND.PATCH;
+      const rootPubkey = replyingToPatchComment ? 
+        (patchComments.find(c => c.id === replyingToPatchComment)?.pubkey || patch.author) :
+        patch.author;
+
+      let parentEventId: string | undefined;
+      let parentEventKind: number | undefined;
+      let parentPubkey: string | undefined;
+
+      if (replyingToPatchComment) {
+        // Reply to a comment
+        const parentComment = patchComments.find(c => c.id === replyingToPatchComment) || 
+                             patchHighlights.flatMap(h => h.comments || []).find(c => c.id === replyingToPatchComment);
+        if (parentComment) {
+          parentEventId = replyingToPatchComment;
+          parentEventKind = KIND.COMMENT;
+          parentPubkey = parentComment.pubkey;
+        }
+      }
+
+      const eventTemplate = highlightsService.createCommentEvent(
+        patchCommentContent.trim(),
+        rootEventId,
+        rootEventKind,
+        rootPubkey,
+        parentEventId,
+        parentEventKind,
+        parentPubkey
+      );
+
+      const signedEvent = await signEventWithNIP07(eventTemplate);
+      
+      const tempClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+      const { outbox } = await getUserRelays(userPubkey, tempClient);
+      const combinedRelays = combineRelays(outbox);
+
+      const response = await fetch(`/api/repos/${npub}/${repo}/highlights`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'comment',
+          event: signedEvent,
+          userPubkey
+        })
+      });
+
+      if (response.ok) {
+        showPatchCommentDialog = false;
+        patchCommentContent = '';
+        replyingToPatchComment = null;
+        await loadPatchHighlights(patch.id, patch.author);
+      } else {
+        const data = await response.json();
+        error = data.error || 'Failed to create comment';
+      }
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to create comment';
+    } finally {
+      creatingPatchComment = false;
+    }
+  }
+
+  // Load highlights when a patch is selected
+  $effect(() => {
+    if (!isMounted || !selectedPatch) return;
+    const patch = patches.find(p => p.id === selectedPatch);
+    if (patch) {
+      loadPatchHighlights(patch.id, patch.author).catch(err => {
+        if (isMounted) console.warn('Failed to load patch highlights:', err);
+      });
+    }
+  });
+
   // Only load tab content when tab actually changes, not on every render
   let lastTab = $state<string | null>(null);
   $effect(() => {
@@ -6343,7 +6600,102 @@
                     <div class="patch-description">{patch.description}</div>
                   {/if}
                   <div class="patch-body">
-                    <pre class="patch-content">{patch.content}</pre>
+                    <div class="patch-content-wrapper">
+                      <CodeEditor
+                        bind:this={patchEditor}
+                        content={patch.content}
+                        language="text"
+                        readOnly={true}
+                        onSelection={handlePatchCodeSelection}
+                      />
+                    </div>
+                  </div>
+                  
+                  <!-- Highlights Section -->
+                  <div class="patch-highlights-section">
+                    <div class="section-header">
+                      <h4>Highlights & Comments</h4>
+                      {#if userPubkey}
+                        <button onclick={() => startPatchComment()} class="add-comment-btn">Add Comment</button>
+                      {/if}
+                    </div>
+                    {#if loadingPatchHighlights}
+                      <div class="loading">Loading highlights...</div>
+                    {:else}
+                      <!-- Top-level comments on patch -->
+                      {#each patchComments as comment}
+                        <div class="comment-item">
+                          <div class="comment-header">
+                            <span class="comment-author">{formatPubkey(comment.pubkey)}</span>
+                            <span class="comment-date">{new Date(comment.created_at * 1000).toLocaleString()}</span>
+                          </div>
+                          <div class="comment-content">{comment.content}</div>
+                          {#if userPubkey}
+                            <button onclick={() => startPatchComment(comment.id)} class="reply-btn">Reply</button>
+                          {/if}
+                        </div>
+                      {/each}
+
+                      <!-- Highlights with comments - filter to only show highlights for this patch -->
+                      {#each patchHighlights.filter(h => !h.sourceEventId || h.sourceEventId === patch.id) as highlight}
+                        <div class="highlight-item">
+                          <div class="highlight-header">
+                            <span class="highlight-author">{formatPubkey(highlight.pubkey)}</span>
+                            <span class="highlight-date">{new Date(highlight.created_at * 1000).toLocaleString()}</span>
+                            {#if highlight.file}
+                              <span class="highlight-file">{highlight.file}</span>
+                            {/if}
+                            {#if highlight.lineStart && highlight.sourceEventId === patch.id}
+                              <button
+                                class="highlight-lines-button"
+                                onclick={() => {
+                                  if (patchEditor && highlight.lineStart && highlight.lineEnd) {
+                                    patchEditor.scrollToLines(highlight.lineStart, highlight.lineEnd);
+                                  }
+                                }}
+                                title="Click to highlight these lines in the patch"
+                              >
+                                Lines {highlight.lineStart}-{highlight.lineEnd}
+                              </button>
+                            {/if}
+                          </div>
+                          <div class="highlighted-code">
+                            <pre><code>{highlight.highlightedContent || highlight.content}</code></pre>
+                          </div>
+                          {#if highlight.comment}
+                            <div class="highlight-comment">
+                              <img src="/icons/message-circle.svg" alt="Comment" class="comment-icon" />
+                              {highlight.comment}
+                            </div>
+                          {/if}
+                          
+                          <!-- Comments on this highlight -->
+                          {#if highlight.comments && highlight.comments.length > 0}
+                            <div class="highlight-comments">
+                              {#each highlight.comments as comment}
+                                <div class="comment-item nested">
+                                  <div class="comment-header">
+                                    <span class="comment-author">{formatPubkey(comment.pubkey)}</span>
+                                    <span class="comment-date">{new Date(comment.created_at * 1000).toLocaleString()}</span>
+                                  </div>
+                                  <div class="comment-content">{comment.content}</div>
+                                  {#if userPubkey}
+                                    <button onclick={() => startPatchComment(comment.id)} class="reply-btn">Reply</button>
+                                  {/if}
+                                </div>
+                              {/each}
+                            </div>
+                          {/if}
+                          {#if userPubkey}
+                            <button onclick={() => startPatchComment(highlight.id)} class="add-comment-btn">Add Comment</button>
+                          {/if}
+                        </div>
+                      {/each}
+
+                      {#if patchHighlights.filter(h => !h.sourceEventId || h.sourceEventId === patch.id).length === 0 && patchComments.length === 0}
+                        <div class="empty">No highlights or comments yet. Select text in the patch to create a highlight.</div>
+                      {/if}
+                    {/if}
                   </div>
                 </div>
               {/each}
@@ -7057,6 +7409,76 @@
           <button onclick={() => showCreatePatchDialog = false} class="cancel-button">Cancel</button>
           <button onclick={createPatch} disabled={!newPatchContent.trim() || creatingPatch} class="save-button">
             {creatingPatch ? 'Creating...' : 'Create Patch'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Patch Highlight Dialog -->
+  {#if showPatchHighlightDialog}
+    <div 
+      class="modal-overlay" 
+      role="dialog"
+      aria-modal="true"
+      aria-label="Create highlight"
+      tabindex="-1"
+      onclick={() => showPatchHighlightDialog = false}
+      onkeydown={(e) => {
+        if (e.key === 'Escape') {
+          showPatchHighlightDialog = false;
+        }
+      }}
+    >
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div class="modal" role="document" onclick={(e) => e.stopPropagation()}>
+        <h3>Create Highlight</h3>
+        <div class="selected-code">
+          <pre><code>{selectedPatchText}</code></pre>
+        </div>
+        <label>
+          Comment (optional):
+          <textarea bind:value={patchHighlightComment} rows="4" placeholder="Add a comment about this code..."></textarea>
+        </label>
+        <div class="modal-actions">
+          <button onclick={() => showPatchHighlightDialog = false} class="cancel-btn">Cancel</button>
+          <button onclick={createPatchHighlight} disabled={creatingPatchHighlight} class="save-btn">
+            {creatingPatchHighlight ? 'Creating...' : 'Create Highlight'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Patch Comment Dialog -->
+  {#if showPatchCommentDialog}
+    <div 
+      class="modal-overlay" 
+      role="dialog"
+      aria-modal="true"
+      aria-label={replyingToPatchComment ? 'Reply to comment' : 'Add comment'}
+      tabindex="-1"
+      onclick={() => { showPatchCommentDialog = false; replyingToPatchComment = null; }}
+      onkeydown={(e) => {
+        if (e.key === 'Escape') {
+          showPatchCommentDialog = false;
+          replyingToPatchComment = null;
+        }
+      }}
+    >
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div class="modal" role="document" onclick={(e) => e.stopPropagation()}>
+        <h3>{replyingToPatchComment ? 'Reply to Comment' : 'Add Comment'}</h3>
+        <label>
+          Comment:
+          <textarea bind:value={patchCommentContent} rows="6" placeholder="Write your comment..."></textarea>
+        </label>
+        <div class="modal-actions">
+          <button onclick={() => { showPatchCommentDialog = false; replyingToPatchComment = null; }} class="cancel-btn">Cancel</button>
+          <button onclick={createPatchComment} disabled={creatingPatchComment || !patchCommentContent.trim()} class="save-btn">
+            {creatingPatchComment ? 'Creating...' : (replyingToPatchComment ? 'Reply' : 'Add Comment')}
           </button>
         </div>
       </div>

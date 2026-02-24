@@ -98,22 +98,34 @@ export class HighlightsService {
     const targetAddress = this.getTargetAddress(targetId, targetAuthor, repoOwnerPubkey, repoId, targetKind);
     
     // Fetch highlights that reference this target
-    const highlights = await this.nostrClient.fetchEvents([
-      {
-        kinds: [KIND.HIGHLIGHT],
-        '#a': [targetAddress],
-        limit: 100
-      }
-    ]) as Highlight[];
+    let highlights: Highlight[] = [];
+    try {
+      highlights = await this.nostrClient.fetchEvents([
+        {
+          kinds: [KIND.HIGHLIGHT],
+          '#a': [targetAddress],
+          limit: 100
+        }
+      ]) as Highlight[];
+    } catch (err) {
+      // Log error but continue - some relays may fail, we'll use what we can get
+      console.error('Error fetching highlights by address:', err);
+    }
 
     // Also fetch highlights that reference the target by event ID
-    const highlightsByEvent = await this.nostrClient.fetchEvents([
-      {
-        kinds: [KIND.HIGHLIGHT],
-        '#e': [targetId],
-        limit: 100
-      }
-    ]) as Highlight[];
+    let highlightsByEvent: Highlight[] = [];
+    try {
+      highlightsByEvent = await this.nostrClient.fetchEvents([
+        {
+          kinds: [KIND.HIGHLIGHT],
+          '#e': [targetId],
+          limit: 100
+        }
+      ]) as Highlight[];
+    } catch (err) {
+      // Log error but continue - some relays may fail, we'll use what we can get
+      console.error('Error fetching highlights by event ID:', err);
+    }
 
     // Combine and deduplicate
     const allHighlights = [...highlights, ...highlightsByEvent];
@@ -136,11 +148,20 @@ export class HighlightsService {
     // Fetch comments for each highlight
     const highlightsWithComments: HighlightWithComments[] = [];
     for (const highlight of parsedHighlights) {
-      const comments = await this.getCommentsForHighlight(highlight.id);
-      highlightsWithComments.push({
-        ...highlight,
-        comments
-      });
+      try {
+        const comments = await this.getCommentsForHighlight(highlight.id);
+        highlightsWithComments.push({
+          ...highlight,
+          comments
+        });
+      } catch (err) {
+        // If comments fail to load, still include the highlight without comments
+        console.error(`Error fetching comments for highlight ${highlight.id}:`, err);
+        highlightsWithComments.push({
+          ...highlight,
+          comments: []
+        });
+      }
     }
 
     // Sort by created_at descending (newest first)
@@ -213,13 +234,20 @@ export class HighlightsService {
    * Get comments for a highlight or PR
    */
   async getCommentsForHighlight(highlightId: string): Promise<Comment[]> {
-    const comments = await this.nostrClient.fetchEvents([
-      {
-        kinds: [KIND.COMMENT],
-        '#e': [highlightId],
-        limit: 100
-      }
-    ]) as NostrEvent[];
+    let comments: NostrEvent[] = [];
+    try {
+      comments = await this.nostrClient.fetchEvents([
+        {
+          kinds: [KIND.COMMENT],
+          '#e': [highlightId],
+          limit: 100
+        }
+      ]) as NostrEvent[];
+    } catch (err) {
+      // Log error but return empty array - some relays may fail
+      console.error(`Error fetching comments for highlight ${highlightId}:`, err);
+      return [];
+    }
 
     const parsedComments: Comment[] = [];
     for (const event of comments) {
@@ -253,14 +281,21 @@ export class HighlightsService {
    * Get comments for a pull request or patch
    */
   async getCommentsForTarget(targetId: string, targetKind: typeof KIND.PULL_REQUEST | typeof KIND.PATCH = KIND.PULL_REQUEST): Promise<Comment[]> {
-    const comments = await this.nostrClient.fetchEvents([
-      {
-        kinds: [KIND.COMMENT],
-        '#E': [targetId], // Root event (uppercase E for NIP-22)
-        '#K': [targetKind.toString()], // Root kind
-        limit: 100
-      }
-    ]) as NostrEvent[];
+    let comments: NostrEvent[] = [];
+    try {
+      comments = await this.nostrClient.fetchEvents([
+        {
+          kinds: [KIND.COMMENT],
+          '#E': [targetId], // Root event (uppercase E for NIP-22)
+          '#K': [targetKind.toString()], // Root kind
+          limit: 100
+        }
+      ]) as NostrEvent[];
+    } catch (err) {
+      // Log error but return empty array - some relays may fail
+      console.error('Error fetching comments for target:', err);
+      return [];
+    }
 
     const parsedComments: Comment[] = [];
     for (const event of comments) {

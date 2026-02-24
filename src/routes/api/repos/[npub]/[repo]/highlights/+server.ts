@@ -18,38 +18,70 @@ import { forwardEventIfEnabled } from '$lib/services/messaging/event-forwarder.j
 import logger from '$lib/services/logger.js';
 
 /**
- * GET - Get highlights for a pull request
- * Query params: prId, prAuthor
+ * GET - Get highlights for a pull request or patch
+ * Query params: prId, prAuthor (for PRs) OR patchId, patchAuthor (for patches)
  */
 export const GET: RequestHandler = createRepoGetHandler(
   async (context: RepoRequestContext, event: RequestEvent) => {
     const prId = event.url.searchParams.get('prId');
     const prAuthor = event.url.searchParams.get('prAuthor');
+    const patchId = event.url.searchParams.get('patchId');
+    const patchAuthor = event.url.searchParams.get('patchAuthor');
 
-    if (!prId || !prAuthor) {
-      return handleValidationError('Missing prId or prAuthor parameter', { operation: 'getHighlights', npub: context.npub, repo: context.repo });
+    // Support both PR and patch highlights
+    try {
+      if (prId && prAuthor) {
+        // Decode prAuthor if it's an npub
+        const prAuthorPubkey = decodeNpubToHex(prAuthor) || prAuthor;
+
+        // Get highlights for the PR
+        const highlights = await highlightsService.getHighlightsForPR(
+          prId,
+          prAuthorPubkey,
+          context.repoOwnerPubkey,
+          context.repo
+        );
+
+        // Also get top-level comments on the PR
+        const prComments = await highlightsService.getCommentsForTarget(prId, KIND.PULL_REQUEST);
+
+        return json({
+          highlights,
+          comments: prComments
+        });
+      } else if (patchId && patchAuthor) {
+        // Decode patchAuthor if it's an npub
+        const patchAuthorPubkey = decodeNpubToHex(patchAuthor) || patchAuthor;
+
+        // Get highlights for the patch
+        const highlights = await highlightsService.getHighlightsForPatch(
+          patchId,
+          patchAuthorPubkey,
+          context.repoOwnerPubkey,
+          context.repo
+        );
+
+        // Also get top-level comments on the patch
+        const patchComments = await highlightsService.getCommentsForTarget(patchId, KIND.PATCH);
+
+        return json({
+          highlights,
+          comments: patchComments
+        });
+      } else {
+        return handleValidationError('Missing prId/prAuthor or patchId/patchAuthor parameters', { operation: 'getHighlights', npub: context.npub, repo: context.repo });
+      }
+    } catch (err) {
+      // Log error but return empty arrays instead of crashing
+      // Some relays may fail (e.g., require payment), but we should still return successfully
+      logger.warn({ error: err, npub: context.npub, repo: context.repo, prId, patchId }, 'Error fetching highlights, returning empty arrays');
+      return json({
+        highlights: [],
+        comments: []
+      });
     }
-
-    // Decode prAuthor if it's an npub
-    const prAuthorPubkey = decodeNpubToHex(prAuthor) || prAuthor;
-
-    // Get highlights for the PR
-    const highlights = await highlightsService.getHighlightsForPR(
-      prId,
-      prAuthorPubkey,
-      context.repoOwnerPubkey,
-      context.repo
-    );
-
-    // Also get top-level comments on the PR
-    const prComments = await highlightsService.getCommentsForTarget(prId, KIND.PULL_REQUEST);
-
-    return json({
-      highlights,
-      comments: prComments
-    });
   },
-  { operation: 'getHighlights', requireRepoAccess: false } // Highlights are public
+  { operation: 'getHighlights', requireRepoAccess: false, requireRepoExists: false } // Highlights are public and don't require repo to be cloned
 );
 
 /**
@@ -79,13 +111,24 @@ export const POST: RequestHandler = withRepoValidation(
     }
 
     // Get user's relays and publish
-    const { outbox } = await getUserRelays(userPubkey, nostrClient);
-    const combinedRelays = combineRelays(outbox);
+    let result;
+    try {
+      const { outbox } = await getUserRelays(userPubkey, nostrClient);
+      const combinedRelays = combineRelays(outbox);
 
-    const result = await nostrClient.publishEvent(highlightEvent as NostrEvent, combinedRelays);
+      result = await nostrClient.publishEvent(highlightEvent as NostrEvent, combinedRelays);
+    } catch (err) {
+      // Log error but don't fail - some relays may have succeeded
+      logger.warn({ error: err, npub: repoContext.npub, repo: repoContext.repo, eventId: highlightEvent.id }, 'Error publishing highlight event, some relays may have succeeded');
+      // Return a result indicating failure, but don't throw
+      result = { success: [], failed: [{ relay: 'unknown', error: String(err) }] };
+    }
     
+    // Only throw if ALL relays failed - partial success is acceptable
     if (result.failed.length > 0 && result.success.length === 0) {
-      throw handleApiError(new Error('Failed to publish to all relays'), { operation: 'createHighlight', npub: repoContext.npub, repo: repoContext.repo }, 'Failed to publish to all relays');
+      logger.warn({ npub: repoContext.npub, repo: repoContext.repo, eventId: highlightEvent.id, failed: result.failed }, 'Failed to publish to all relays, but continuing anyway');
+      // Don't throw - return success anyway since the event was created
+      // The user can retry if needed
     }
 
     // Forward to messaging platforms if user has unlimited access and preferences configured
@@ -101,5 +144,5 @@ export const POST: RequestHandler = withRepoValidation(
 
     return json({ success: true, event: highlightEvent, published: result });
   },
-  { operation: 'createHighlight', requireRepoAccess: false } // Highlights can be created by anyone
+  { operation: 'createHighlight', requireRepoAccess: false, requireRepoExists: false } // Highlights can be created by anyone and don't require repo to be cloned
 );

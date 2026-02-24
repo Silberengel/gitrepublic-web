@@ -18,6 +18,16 @@ const domain = GIT_DOMAIN;
 let pollingService: RepoPollingService | null = null;
 
 if (typeof process !== 'undefined') {
+  // Handle unhandled promise rejections to prevent crashes from relay errors
+  process.on('unhandledRejection', (reason, promise) => {
+    // Log the error but don't crash - relay errors (like payment requirements) are expected
+    if (reason instanceof Error && reason.message.includes('restricted')) {
+      logger.debug({ error: reason.message }, 'Relay access restricted (expected for paid relays)');
+    } else {
+      logger.warn({ error: reason, promise }, 'Unhandled promise rejection (non-fatal)');
+    }
+  });
+
   pollingService = new RepoPollingService(DEFAULT_NOSTR_RELAYS, repoRoot, domain);
   pollingService.start();
   logger.info({ service: 'repo-polling', relays: DEFAULT_NOSTR_RELAYS.length }, 'Started repo polling service');

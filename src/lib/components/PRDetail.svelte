@@ -83,6 +83,7 @@
   let showMergeDialog = $state(false);
   let mergeTargetBranch = $state('main');
   let mergeMessage = $state('');
+  let prEditor = $state<any>(null); // CodeEditor component instance
 
   const highlightsService = new HighlightsService(DEFAULT_NOSTR_RELAYS);
   const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
@@ -434,6 +435,7 @@
       {:else if prDiff}
         <div class="diff-viewer">
           <CodeEditor
+            bind:this={prEditor}
             content={prDiff}
             language="text"
             readOnly={true}
@@ -470,8 +472,8 @@
           </div>
         {/each}
 
-        <!-- Highlights with comments -->
-        {#each highlights as highlight}
+        <!-- Highlights with comments - filter to only show highlights for this PR -->
+        {#each highlights.filter(h => !h.sourceEventId || h.sourceEventId === pr.id) as highlight}
           <div class="highlight-item">
             <div class="highlight-header">
               <span class="highlight-author">{formatPubkey(highlight.pubkey)}</span>
@@ -479,15 +481,28 @@
               {#if highlight.file}
                 <span class="highlight-file">{highlight.file}</span>
               {/if}
-              {#if highlight.lineStart}
-                <span class="highlight-lines">Lines {highlight.lineStart}-{highlight.lineEnd}</span>
+              {#if highlight.lineStart && highlight.sourceEventId === pr.id}
+                <button
+                  class="highlight-lines-button"
+                  onclick={() => {
+                    if (prEditor && highlight.lineStart && highlight.lineEnd) {
+                      prEditor.scrollToLines(highlight.lineStart, highlight.lineEnd);
+                    }
+                  }}
+                  title="Click to highlight these lines in the diff"
+                >
+                  Lines {highlight.lineStart}-{highlight.lineEnd}
+                </button>
               {/if}
             </div>
             <div class="highlighted-code">
               <pre><code>{highlight.highlightedContent}</code></pre>
             </div>
             {#if highlight.comment}
-              <div class="highlight-comment">{highlight.comment}</div>
+              <div class="highlight-comment">
+                <img src="/icons/message-circle.svg" alt="Comment" class="comment-icon" />
+                {highlight.comment}
+              </div>
             {/if}
             
             <!-- Comments on this highlight -->
@@ -514,7 +529,7 @@
           </div>
         {/each}
 
-        {#if highlights.length === 0 && comments.length === 0}
+        {#if highlights.filter(h => !h.sourceEventId || h.sourceEventId === pr.id).length === 0 && comments.length === 0}
           <div class="empty">No highlights or comments yet</div>
         {/if}
       {/if}
@@ -707,8 +722,17 @@
 
   .comment-item.nested {
     margin-left: 2rem;
-    margin-top: 0.5rem;
+    margin-top: 0.75rem;
     border-left-color: var(--success-text);
+    background: var(--bg-secondary);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+  }
+
+  .comment-item.nested .comment-content {
+    border-left-color: var(--success-text);
+    background: var(--card-bg);
+    margin: 0.5rem 0;
+    padding: 0.875rem 1rem;
   }
 
   .highlight-header, .comment-header {
@@ -722,6 +746,26 @@
   .highlight-author, .comment-author {
     font-weight: bold;
     color: var(--text-primary);
+  }
+
+  .highlight-lines-button {
+    margin: 0;
+    padding: 0.25rem 0.5rem;
+    background: none;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    color: var(--accent);
+    font-size: 0.9rem;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.2s ease;
+    font-family: 'IBM Plex Serif', serif;
+  }
+
+  .highlight-lines-button:hover {
+    background: var(--accent);
+    color: var(--accent-text, white);
+    border-color: var(--accent);
   }
 
   .highlighted-code {
@@ -739,12 +783,39 @@
     font-family: 'IBM Plex Mono', monospace;
   }
 
-  .highlight-comment, .comment-content {
-    margin: 0.5rem 0;
-    padding: 0.5rem;
-    background: var(--card-bg);
-    border-radius: 3px;
+  .highlight-comment {
+    margin: 1rem 0;
+    padding: 1rem 1.25rem 1rem 3rem;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    border-left: 4px solid var(--accent);
     color: var(--text-primary);
+    font-size: 1rem;
+    line-height: 1.6;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    position: relative;
+  }
+
+  .highlight-comment .comment-icon {
+    position: absolute;
+    left: 0.75rem;
+    top: 1rem;
+    width: 1.25rem;
+    height: 1.25rem;
+    opacity: 0.9;
+    filter: brightness(0) saturate(100%) invert(1);
+  }
+
+  .comment-content {
+    margin: 0.75rem 0;
+    padding: 1rem 1.25rem;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    border-left: 4px solid var(--accent);
+    color: var(--text-primary);
+    font-size: 1rem;
+    line-height: 1.6;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   }
 
   .highlight-comments {

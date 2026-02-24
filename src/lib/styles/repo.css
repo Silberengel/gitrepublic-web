@@ -1815,6 +1815,186 @@ span.clone-more {
   color: var(--text-primary);
 }
 
+.patch-content-wrapper {
+  height: 500px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  overflow: auto;
+  background: var(--bg-secondary);
+}
+
+.patch-highlights-section {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.patch-highlights-section .section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.patch-highlights-section .section-header h4 {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.patch-highlights-section .highlight-item,
+.patch-highlights-section .comment-item {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  border-left: 3px solid var(--accent);
+}
+
+.patch-highlights-section .comment-item.nested {
+  margin-left: 2rem;
+  margin-top: 0.75rem;
+  border-left-color: var(--success-text);
+  background: var(--bg-secondary);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+}
+
+.patch-highlights-section .comment-item.nested .comment-content {
+  border-left-color: var(--success-text);
+  background: var(--card-bg);
+  margin: 0.5rem 0;
+  padding: 0.875rem 1rem;
+}
+
+.patch-highlights-section .highlight-header,
+.patch-highlights-section .comment-header {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.patch-highlights-section .highlight-author,
+.patch-highlights-section .comment-author {
+  font-weight: bold;
+  color: var(--text-primary);
+}
+
+.patch-highlights-section .highlight-lines-button {
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.patch-highlights-section .highlight-lines-button:hover {
+  background: var(--accent);
+  color: var(--accent-text, white);
+  border-color: var(--accent);
+}
+
+.patch-highlights-section .highlighted-code {
+  background: var(--card-bg);
+  padding: 0.5rem;
+  border-radius: 3px;
+  margin: 0.5rem 0;
+  border: 1px solid var(--border-light);
+}
+
+.patch-highlights-section .highlighted-code pre {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.patch-highlights-section .highlight-comment {
+  margin: 1rem 0;
+  padding: 1rem 1.25rem 1rem 3rem;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  border-left: 4px solid var(--accent);
+  color: var(--text-primary);
+  font-size: 1rem;
+  line-height: 1.6;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  position: relative;
+}
+
+.patch-highlights-section .add-comment-btn,
+.patch-highlights-section .reply-btn {
+  padding: 0.5rem 1rem;
+  background: var(--button-primary, #007bff);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-family: 'IBM Plex Serif', serif;
+  transition: background 0.2s ease;
+  margin-top: 0.5rem;
+}
+
+.patch-highlights-section .add-comment-btn:hover,
+.patch-highlights-section .reply-btn:hover {
+  background: var(--button-primary-hover, #0056b3);
+}
+
+.patch-highlights-section .reply-btn {
+  background: var(--bg-tertiary, #6c757d);
+  font-size: 0.85rem;
+  padding: 0.375rem 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.patch-highlights-section .reply-btn:hover {
+  background: var(--bg-secondary, #5a6268);
+}
+
+.patch-highlights-section .highlight-comment .comment-icon {
+  position: absolute;
+  left: 0.75rem;
+  top: 1rem;
+  width: 1.25rem;
+  height: 1.25rem;
+  opacity: 0.9;
+  filter: brightness(0) saturate(100%) invert(1);
+}
+
+.patch-highlights-section .comment-content {
+  margin: 0.75rem 0;
+  padding: 1rem 1.25rem;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  border-left: 4px solid var(--accent);
+  color: var(--text-primary);
+  font-size: 1rem;
+  line-height: 1.6;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.patch-highlights-section .highlight-comments {
+  margin-top: 1rem;
+}
+
+.patch-highlights-section .empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 1rem;
+}
+
+.patch-highlights-section .loading {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 1rem;
+}
+
 .commit-list,
 .tag-list,
 .issue-list,

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { EditorView, keymap } from '@codemirror/view';
-  import { EditorState, type Extension, Compartment } from '@codemirror/state';
+  import { EditorView, keymap, Decoration } from '@codemirror/view';
+  import { EditorState, type Extension, Compartment, StateField, StateEffect } from '@codemirror/state';
   import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
   import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
   import { closeBrackets, autocompletion, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
@@ -16,6 +16,7 @@
     onSelection?: (selectedText: string, startLine: number, endLine: number, startPos: number, endPos: number) => void;
     readOnly?: boolean;
     highlights?: Array<{ id: string; startLine: number; endLine: number; content: string }>;
+    scrollToLine?: number | null;
   }
 
   let {
@@ -24,12 +25,41 @@
     onChange = () => {},
     onSelection = () => {},
     readOnly = false,
-    highlights = []
+    highlights = [],
+    scrollToLine = $bindable(null)
   }: Props = $props();
 
   let editorView: EditorView | null = null;
   let editorElement: HTMLDivElement;
   let languageCompartment = new Compartment();
+  
+  // Create a highlight decoration (marker style)
+  const highlightMark = Decoration.mark({
+    class: 'cm-highlight-marker',
+    attributes: { 'data-highlight': 'true' }
+  });
+  
+  // Effect to set highlight decorations (DecorationSet)
+  const setHighlightEffect = StateEffect.define<typeof Decoration.none>();
+  
+  // State field to track highlighted ranges
+  const highlightField = StateField.define({
+    create() {
+      return Decoration.none;
+    },
+    update(decorations, tr) {
+      decorations = decorations.map(tr.changes);
+      // Apply highlight effects
+      for (const effect of tr.effects) {
+        if (effect.is(setHighlightEffect)) {
+          // Replace all decorations with the new set
+          decorations = effect.value;
+        }
+      }
+      return decorations;
+    },
+    provide: f => EditorView.decorations.from(f)
+  });
 
   function getLanguageExtension(): Extension[] {
     switch (language) {
@@ -48,6 +78,7 @@
       closeBrackets(),
       autocompletion(),
       highlightSelectionMatches(),
+      highlightField,
       keymap.of([
         ...closeBracketsKeymap,
         ...defaultKeymap,
@@ -64,8 +95,8 @@
           onChange(newContent);
         }
         
-        // Handle text selection
-        if (update.selectionSet && !readOnly) {
+        // Handle text selection (allow in read-only mode for highlighting)
+        if (update.selectionSet) {
           const selection = update.state.selection.main;
           if (!selection.empty) {
             const selectedText = update.state.doc.sliceString(selection.from, selection.to);
@@ -131,6 +162,66 @@
       });
     }
   });
+
+  // Scroll to and highlight specific lines
+  $effect(() => {
+    if (editorView && scrollToLine !== null && scrollToLine > 0) {
+      try {
+        const doc = editorView.state.doc;
+        const line = doc.line(Math.min(scrollToLine, doc.lines));
+        const lineStart = line.from;
+        const lineEnd = line.to;
+        
+        // Scroll to the line
+        editorView.dispatch({
+          selection: { anchor: lineStart, head: lineEnd },
+          effects: EditorView.scrollIntoView(lineStart, { y: 'center' })
+        });
+        
+        // Clear scrollToLine after scrolling
+        setTimeout(() => {
+          scrollToLine = null;
+        }, 100);
+      } catch (err) {
+        console.error('Error scrolling to line:', err);
+      }
+    }
+  });
+
+  // Function to scroll to and highlight a range of lines with a persistent marker
+  export function scrollToLines(startLine: number, endLine: number) {
+    if (!editorView) return;
+    
+    try {
+      const doc = editorView.state.doc;
+      const start = Math.min(startLine, doc.lines);
+      const end = Math.min(endLine, doc.lines);
+      
+      const startLineObj = doc.line(start);
+      const endLineObj = doc.line(end);
+      
+      const from = startLineObj.from;
+      const to = endLineObj.to;
+      
+      // Create a highlight decoration for the range
+      const decorationRange = highlightMark.range(from, to);
+      
+      // Create a DecorationSet with the highlight
+      const decorationSet = Decoration.set([decorationRange]);
+      
+      // Update the highlight field with the new decoration using StateEffect
+      editorView.dispatch({
+        effects: setHighlightEffect.of(decorationSet)
+      });
+      
+      // Scroll to the lines
+      editorView.dispatch({
+        effects: EditorView.scrollIntoView(from, { y: 'center' })
+      });
+    } catch (err) {
+      console.error('Error scrolling to lines:', err);
+    }
+  }
 </script>
 
 <div bind:this={editorElement} class="code-editor"></div>
@@ -148,5 +239,11 @@
 
   :global(.code-editor .cm-scroller) {
     overflow: auto;
+  }
+
+  :global(.code-editor .cm-highlight-marker) {
+    background-color: rgba(255, 255, 0, 0.4);
+    padding: 2px 0;
+    border-radius: 2px;
   }
 </style>

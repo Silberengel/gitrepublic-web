@@ -269,14 +269,23 @@ export class NostrClient {
     // SimplePool handles connection management, retries, and error handling automatically
     try {
       // querySync takes a single filter, so we query each filter and combine results
+      // Wrap each query individually to catch errors from individual relays
       const queryPromises = filters.map(filter => 
         this.pool.querySync(this.relays, filter as Filter, { maxWait: 8000 })
+          .catch(err => {
+            // Log individual relay errors but don't fail the entire request
+            logger.debug({ error: err, filter }, 'Individual relay query failed');
+            return []; // Return empty array for failed queries
+          })
       );
       const results = await Promise.allSettled(queryPromises);
       
       for (const result of results) {
         if (result.status === 'fulfilled') {
           events.push(...result.value);
+        } else {
+          // Log rejected promises (shouldn't happen since we catch above, but just in case)
+          logger.debug({ error: result.reason }, 'Query promise rejected');
         }
       }
     } catch (err) {
@@ -449,15 +458,45 @@ export class NostrClient {
     const failed: Array<{ relay: string; error: string }> = [];
     
     // Use nostr-tools SimplePool to publish to all relays
+    // Wrap in Promise.resolve().then() to catch any synchronous errors and ensure all async errors are caught
     try {
-      await this.pool.publish(targetRelays, event);
+      // Create a promise that will catch all errors, including those from WebSocket event handlers
+      const publishPromise = Promise.resolve().then(async () => {
+        try {
+          await this.pool.publish(targetRelays, event);
+          // If publish succeeded, all relays succeeded
+          // Note: SimplePool.publish doesn't return per-relay results, so we assume all succeeded
+          return targetRelays;
+        } catch (error) {
+          // If publish failed, mark all as failed
+          // In a more sophisticated implementation, we could check individual relays
+          throw error;
+        }
+      });
       
-      // If publish succeeded, all relays succeeded
-      // Note: SimplePool.publish doesn't return per-relay results, so we assume all succeeded
-      success.push(...targetRelays);
+      // Wait for publish with timeout and catch all errors
+      const publishedRelays = await Promise.race([
+        publishPromise,
+        new Promise<string[]>((_, reject) => 
+          setTimeout(() => reject(new Error('Publish timeout')), 30000)
+        )
+      ]).catch(error => {
+        // Log error but don't throw - we'll mark relays as failed below
+        logger.debug({ error, eventId: event.id }, 'Error publishing event to relays');
+        return null;
+      });
+      
+      if (publishedRelays) {
+        success.push(...publishedRelays);
+      } else {
+        // If publish failed or timed out, mark all as failed
+        targetRelays.forEach(relay => {
+          failed.push({ relay, error: 'Publish failed or timed out' });
+        });
+      }
     } catch (error) {
-      // If publish failed, mark all as failed
-      // In a more sophisticated implementation, we could check individual relays
+      // Catch any synchronous errors
+      logger.debug({ error, eventId: event.id }, 'Synchronous error in publishEvent');
       targetRelays.forEach(relay => {
         failed.push({ relay, error: String(error) });
       });
