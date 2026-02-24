@@ -5290,9 +5290,9 @@
                     : (reachability.error || 'Unreachable')}
                 >
                   {#if reachability.reachable}
-                    <img src="/icons/check-circle.svg" alt="Reachable" class="icon-inline" style="color: green;" />
+                    <img src="/icons/check-circle.svg" alt="Reachable" class="icon-inline icon-success" />
                   {:else}
-                    <img src="/icons/x-circle.svg" alt="Unreachable" class="icon-inline" style="color: red;" />
+                    <img src="/icons/x-circle.svg" alt="Unreachable" class="icon-inline icon-error" />
                   {/if}
                 </span>
                 {#if reachability.serverType === 'grasp'}
@@ -7202,58 +7202,5 @@
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   }
 
-  /* Tag date styling */
-  .tag-date {
-    font-size: 0.85rem;
-    color: var(--text-muted);
-    margin-top: 0.25rem;
-  }
-
-  /* Tag detail meta styling */
-  .tag-detail-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    align-items: center;
-    margin-top: 0.5rem;
-  }
-
-  .tag-detail-meta .tag-date {
-    font-size: 0.9rem;
-    color: var(--text-muted);
-  }
-
-  /* Download tag button styling */
-  .download-tag-button {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    background: var(--button-primary);
-    color: var(--accent-text, #ffffff);
-    border: none;
-    border-radius: 4px;
-    text-decoration: none;
-    font-size: 0.9rem;
-    font-family: 'IBM Plex Serif', serif;
-    transition: background 0.2s ease;
-    cursor: pointer;
-  }
-
-  .download-tag-button:hover {
-    background: var(--button-primary-hover);
-  }
-
-  .download-tag-button .icon-inline {
-    width: 16px;
-    height: 16px;
-  }
-
-  /* Tag has release icon styling */
-  .tag-has-release-icon {
-    width: 16px;
-    height: 16px;
-    vertical-align: middle;
-    opacity: 0.8;
-  }
+  /* Tag-related styles have been moved to TagsTab.svelte component */
 </style>

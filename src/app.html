@@ -10,9 +10,7 @@
       // Use localStorage as quick fallback, layout will load proper theme from IndexedDB
       (function() {
         const savedTheme = localStorage.getItem('theme');
-        if (savedTheme === 'gitrepublic-light') {
-          document.documentElement.setAttribute('data-theme', 'light');
-        } else if (savedTheme === 'gitrepublic-black') {
+        if (savedTheme === 'gitrepublic-black') {
           document.documentElement.setAttribute('data-theme', 'black');
         } else {
           // Default to gitrepublic-dark (purple)

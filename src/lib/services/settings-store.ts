@@ -25,7 +25,7 @@ interface Settings {
   autoSave: boolean;
   userName: string;
   userEmail: string;
-  theme: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black';
+  theme: 'gitrepublic-dark' | 'gitrepublic-black';
   defaultBranch: string;
   messagingPreferences?: MessagingPreferences;
 }

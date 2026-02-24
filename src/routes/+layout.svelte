@@ -24,7 +24,7 @@
   let handleThemeChanged: ((event: Event) => void) | null = null;
 
   // Theme management - default to gitrepublic-dark (purple)
-  let theme = $state<'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black'>('gitrepublic-dark');
+  let theme = $state<'gitrepublic-dark' | 'gitrepublic-black'>('gitrepublic-dark');
   
   // User level checking state
   let checkingUserLevel = $state(false);
@@ -66,8 +66,8 @@
         console.warn('Failed to load theme from settings, using default:', err);
         // Fallback to localStorage for migration
         try {
-          const savedTheme = localStorage.getItem('theme') as 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black' | null;
-          if (savedTheme === 'gitrepublic-light' || savedTheme === 'gitrepublic-dark' || savedTheme === 'gitrepublic-black') {
+          const savedTheme = localStorage.getItem('theme') as 'gitrepublic-dark' | 'gitrepublic-black' | null;
+          if (savedTheme === 'gitrepublic-dark' || savedTheme === 'gitrepublic-black') {
             if (isMounted) {
               theme = savedTheme;
               themeLoaded = true;
@@ -76,10 +76,16 @@
               settingsStore.setSetting('theme', theme).catch(console.error);
             }
           } else if (isMounted) {
-            theme = 'gitrepublic-dark';
+            // Migrate old light theme to dark
+            if (savedTheme === 'gitrepublic-light') {
+              theme = 'gitrepublic-dark';
+            } else {
+              theme = 'gitrepublic-dark';
+            }
             themeLoaded = true;
             applyTheme(theme);
             localStorage.setItem('theme', theme);
+            settingsStore.setSetting('theme', theme).catch(console.error);
           }
         } catch {
           // Ignore localStorage errors
@@ -148,7 +154,7 @@
     handleThemeChanged = (event: Event) => {
       if (!isMounted) return;
       try {
-        const customEvent = event as CustomEvent<{ theme: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black' }>;
+        const customEvent = event as CustomEvent<{ theme: 'gitrepublic-dark' | 'gitrepublic-black' }>;
         if (customEvent.detail?.theme && isMounted) {
           theme = customEvent.detail.theme;
           // Sync to localStorage for app.html flash prevention
@@ -323,7 +329,7 @@
     pendingTransfers = pendingTransfers.filter(t => t.eventId !== eventId);
   }
 
-  function applyTheme(newTheme?: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black') {
+  function applyTheme(newTheme?: 'gitrepublic-dark' | 'gitrepublic-black') {
     const themeToApply = newTheme || theme;
     // Only run client-side
     if (typeof window === 'undefined') return;
@@ -334,9 +340,7 @@
     document.documentElement.removeAttribute('data-theme-black');
     
     // Apply the selected theme
-    if (themeToApply === 'gitrepublic-light') {
-      document.documentElement.setAttribute('data-theme', 'light');
-    } else if (themeToApply === 'gitrepublic-dark') {
+    if (themeToApply === 'gitrepublic-dark') {
       document.documentElement.setAttribute('data-theme', 'dark');
     } else if (themeToApply === 'gitrepublic-black') {
       document.documentElement.setAttribute('data-theme', 'black');
@@ -357,10 +361,8 @@
   });
 
   function toggleTheme() {
-    // Cycle through themes: gitrepublic-dark -> gitrepublic-light -> gitrepublic-black -> gitrepublic-dark
+    // Cycle between dark and black themes
     if (theme === 'gitrepublic-dark') {
-      theme = 'gitrepublic-light';
-    } else if (theme === 'gitrepublic-light') {
       theme = 'gitrepublic-black';
     } else {
       theme = 'gitrepublic-dark';

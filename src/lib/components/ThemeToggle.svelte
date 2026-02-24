@@ -4,19 +4,17 @@
 
   // Get theme and toggle function from layout context
   const themeContext = getContext<{
-    theme: { value: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black' };
+    theme: { value: 'gitrepublic-dark' | 'gitrepublic-black' };
     toggleTheme: () => void;
   }>('theme');
 
-  let currentTheme = $state<'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black'>('gitrepublic-dark');
+  let currentTheme = $state<'gitrepublic-dark' | 'gitrepublic-black'>('gitrepublic-dark');
   let dropdownOpen = $state(false);
   let buttonElement: HTMLButtonElement | null = $state(null);
 
   function updateTheme() {
     const themeAttr = document.documentElement.getAttribute('data-theme');
-    if (themeAttr === 'light') {
-      currentTheme = 'gitrepublic-light';
-    } else if (themeAttr === 'black') {
+    if (themeAttr === 'black') {
       currentTheme = 'gitrepublic-black';
     } else {
       currentTheme = 'gitrepublic-dark'; // default to dark/purple
@@ -57,12 +55,9 @@
     dropdownOpen = !dropdownOpen;
   }
 
-  function selectTheme(theme: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black') {
+  function selectTheme(theme: 'gitrepublic-dark' | 'gitrepublic-black') {
     // Set theme directly
-    if (theme === 'gitrepublic-light') {
-      document.documentElement.setAttribute('data-theme', 'light');
-      localStorage.setItem('theme', 'gitrepublic-light');
-    } else if (theme === 'gitrepublic-black') {
+    if (theme === 'gitrepublic-black') {
       document.documentElement.setAttribute('data-theme', 'black');
       localStorage.setItem('theme', 'gitrepublic-black');
     } else {
@@ -73,8 +68,7 @@
     dropdownOpen = false;
   }
 
-  function getThemeName(theme: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black'): string {
-    if (theme === 'gitrepublic-light') return 'Light';
+  function getThemeName(theme: 'gitrepublic-dark' | 'gitrepublic-black'): string {
     if (theme === 'gitrepublic-black') return 'Black';
     return 'Purple';
   }
@@ -92,14 +86,6 @@
   
   {#if dropdownOpen}
     <div class="theme-dropdown">
-      <button 
-        class="theme-option" 
-        class:active={currentTheme === 'gitrepublic-light'}
-        onclick={() => selectTheme('gitrepublic-light')}
-      >
-        <img src="/icons/sun.svg" alt="Light theme" class="theme-icon-option" />
-        <span class="theme-name">Light</span>
-      </button>
       <button 
         class="theme-option" 
         class:active={currentTheme === 'gitrepublic-dark'}
@@ -157,32 +143,8 @@
     width: 16px;
     height: 16px;
     display: block;
-    filter: brightness(0) saturate(100%) invert(1) !important; /* Default white for dark themes */
-    opacity: 1 !important;
-  }
-
-  /* Light theme: black icon */
-  :global([data-theme="light"]) .theme-toggle .theme-icon {
-    filter: brightness(0) saturate(100%) !important; /* Black in light theme */
-    opacity: 1 !important;
-  }
-
-  /* Dark themes: white icon */
-  :global([data-theme="dark"]) .theme-toggle .theme-icon,
-  :global([data-theme="black"]) .theme-toggle .theme-icon {
-    filter: brightness(0) saturate(100%) invert(1) !important; /* White in dark themes */
-    opacity: 1 !important;
-  }
-
-  /* Hover: white for visibility */
-  .theme-toggle:hover .theme-icon {
+    /* White icon for both dark themes */
     filter: brightness(0) saturate(100%) invert(1) !important;
-    opacity: 1 !important;
-  }
-
-  /* Light theme hover: keep black */
-  :global([data-theme="light"]) .theme-toggle:hover .theme-icon {
-    filter: brightness(0) saturate(100%) !important;
     opacity: 1 !important;
   }
 
@@ -241,39 +203,13 @@
     height: 18px;
     display: inline-block;
     flex-shrink: 0;
-    filter: brightness(0) saturate(100%) invert(1) !important; /* Default white for dark themes */
-    opacity: 1 !important;
-  }
-
-  /* Light theme: black icons */
-  :global([data-theme="light"]) .theme-option .theme-icon-option {
-    filter: brightness(0) saturate(100%) !important; /* Black in light theme */
-    opacity: 1 !important;
-  }
-
-  /* Dark themes: white icons */
-  :global([data-theme="dark"]) .theme-option .theme-icon-option,
-  :global([data-theme="black"]) .theme-option .theme-icon-option {
-    filter: brightness(0) saturate(100%) invert(1) !important; /* White in dark themes */
+    /* White icons for both dark themes */
+    filter: brightness(0) saturate(100%) invert(1) !important;
     opacity: 1 !important;
   }
 
   .theme-option.active .theme-icon-option {
     transform: scale(1.1);
-  }
-
-  /* Hover and active states */
-  .theme-option:hover .theme-icon-option,
-  .theme-option.active .theme-icon-option {
-    filter: brightness(0) saturate(100%) invert(1) !important; /* White for visibility */
-    opacity: 1 !important;
-  }
-
-  /* Light theme hover/active: keep black */
-  :global([data-theme="light"]) .theme-option:hover .theme-icon-option,
-  :global([data-theme="light"]) .theme-option.active .theme-icon-option {
-    filter: brightness(0) saturate(100%) !important; /* Black in light theme */
-    opacity: 1 !important;
   }
 
   .theme-name {

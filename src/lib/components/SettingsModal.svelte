@@ -18,7 +18,7 @@
   let autoSave = $state(false);
   let userName = $state('');
   let userEmail = $state('');
-  let theme = $state<'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black'>('gitrepublic-dark');
+  let theme = $state<'gitrepublic-dark' | 'gitrepublic-black'>('gitrepublic-dark');
   let defaultBranch = $state('master');
   let loading = $state(false);
   let saving = $state(false);
@@ -121,23 +121,21 @@
     }
   }
 
-  function applyTheme(newTheme: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black') {
+  function applyTheme(newTheme: 'gitrepublic-dark' | 'gitrepublic-black') {
     // Remove all theme attributes first
     document.documentElement.removeAttribute('data-theme');
     document.documentElement.removeAttribute('data-theme-light');
     document.documentElement.removeAttribute('data-theme-black');
     
     // Apply the selected theme
-    if (newTheme === 'gitrepublic-light') {
-      document.documentElement.setAttribute('data-theme', 'light');
-    } else if (newTheme === 'gitrepublic-dark') {
+    if (newTheme === 'gitrepublic-dark') {
       document.documentElement.setAttribute('data-theme', 'dark');
     } else if (newTheme === 'gitrepublic-black') {
       document.documentElement.setAttribute('data-theme', 'black');
     }
   }
 
-  function handleThemeChange(newTheme: 'gitrepublic-light' | 'gitrepublic-dark' | 'gitrepublic-black') {
+  function handleThemeChange(newTheme: 'gitrepublic-dark' | 'gitrepublic-black') {
     theme = newTheme;
     // Preview theme change immediately (don't save yet)
     applyTheme(newTheme);
@@ -232,14 +230,6 @@
                 <span class="label-text">Theme</span>
               </div>
               <div class="theme-options">
-                <button
-                  class="theme-option"
-                  class:active={theme === 'gitrepublic-light'}
-                  onclick={() => handleThemeChange('gitrepublic-light')}
-                >
-                  <img src="/icons/sun.svg" alt="Light theme" class="theme-icon" />
-                  <span>Light</span>
-                </button>
                 <button
                   class="theme-option"
                   class:active={theme === 'gitrepublic-dark'}
@@ -438,9 +428,6 @@
     filter: brightness(0) saturate(100%) invert(1);
   }
 
-  :global([data-theme="light"]) .close-icon {
-    filter: brightness(0) saturate(100%);
-  }
 
   .tabs {
     display: flex;
@@ -603,9 +590,6 @@
     filter: brightness(0) saturate(100%) invert(1);
   }
 
-  :global([data-theme="light"]) .theme-icon {
-    filter: brightness(0) saturate(100%);
-  }
 
   .loading {
     padding: 2rem;

@@ -268,6 +268,7 @@
     flex: 1;
     margin: 0;
     font-size: 1.2rem;
+    color: var(--text-primary); /* Ensure proper contrast in dark themes */
   }
 
   .create-tag-button {
@@ -298,6 +299,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
+    color: var(--text-primary); /* Ensure proper contrast in dark themes */
   }
 
   .tag-item-button:hover {
@@ -311,6 +313,7 @@
 
   .tag-name {
     font-weight: 500;
+    color: var(--text-primary); /* Ensure proper contrast in dark themes */
   }
 
   .tag-hash {
@@ -336,6 +339,7 @@
 
   .tag-detail-header h3 {
     margin: 0 0 0.5rem 0;
+    color: var(--text-primary); /* Ensure proper contrast in dark themes */
   }
 
   .tag-detail-meta {
@@ -344,6 +348,11 @@
     gap: 1rem;
     align-items: center;
     margin-top: 0.5rem;
+    color: var(--text-primary); /* Ensure proper contrast in dark themes */
+  }
+  
+  .tag-detail-meta span {
+    color: var(--text-secondary); /* Secondary text for meta info */
   }
 
   .tag-message {
@@ -408,6 +417,8 @@
     height: 16px;
     vertical-align: middle;
     opacity: 0.8;
+    /* White icon for both dark themes */
+    filter: brightness(0) saturate(100%) invert(1);
   }
 
   .error-message {

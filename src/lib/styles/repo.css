@@ -82,6 +82,10 @@
   height: 20px;
   flex-shrink: 0;
   color: var(--text-secondary);
+  /* White icon for both dark themes */
+  filter: brightness(0) saturate(100%) invert(1);
+  opacity: 0.8;
+  transition: opacity 0.2s ease, filter 0.2s ease;
 }
 
 .read-only-banner .banner-content span {
@@ -247,6 +251,15 @@
 .file-item .file-icon {
   opacity: 0.8;
   flex-shrink: 0;
+  /* Theme-aware file icon */
+  filter: brightness(0) saturate(100%);
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+
+/* File icons - white for both dark themes */
+.file-item .file-icon {
+  filter: brightness(0) saturate(100%) invert(1);
+  opacity: 0.8;
 }
 
 .file-button {
@@ -680,36 +693,17 @@
   cursor: not-allowed;
 }
 
+/* File action button icons - white for both dark themes */
 .file-action-button .icon-inline {
   width: 1rem;
   height: 1rem;
-  filter: brightness(0) saturate(100%) invert(1) !important; /* Default white for dark themes */
+  filter: brightness(0) saturate(100%) invert(1) !important;
   opacity: 1 !important;
   transition: filter 0.3s ease, opacity 0.3s ease;
 }
 
-/* Light theme: black icon */
-:global([data-theme="light"]) .file-action-button .icon-inline {
-  filter: brightness(0) saturate(100%) !important; /* Black in light theme */
-  opacity: 1 !important;
-}
-
-/* Dark themes: white icon */
-:global([data-theme="dark"]) .file-action-button .icon-inline,
-:global([data-theme="black"]) .file-action-button .icon-inline {
-  filter: brightness(0) saturate(100%) invert(1) !important; /* White in dark themes */
-  opacity: 1 !important;
-}
-
-/* Hover: white for visibility */
 .file-action-button:hover:not(:disabled) .icon-inline {
   filter: brightness(0) saturate(100%) invert(1) !important;
-  opacity: 1 !important;
-}
-
-/* Light theme hover: keep black */
-:global([data-theme="light"]) .file-action-button:hover:not(:disabled) .icon-inline {
-  filter: brightness(0) saturate(100%) !important;
   opacity: 1 !important;
 }
 
@@ -1026,6 +1020,16 @@
   .mobile-toggle-button .icon-inline {
     width: 18px;
     height: 18px;
+    /* Icons should be black in light mode (on light background) */
+    filter: brightness(0) saturate(100%) !important;
+    opacity: 1 !important;
+  }
+  
+  /* White icons for both dark themes */
+  html[data-theme="dark"] .mobile-toggle-button .icon-inline,
+  html[data-theme="black"] .mobile-toggle-button .icon-inline {
+    filter: brightness(0) saturate(100%) invert(1) !important; /* White in dark themes */
+    opacity: 1 !important;
   }
   
   .mobile-toggle-left {
@@ -1153,8 +1157,17 @@
 .clone-toggle-icon {
   width: 16px;
   height: 16px;
-  transition: transform 0.2s;
+  transition: transform 0.2s, opacity 0.2s ease, filter 0.2s ease;
   flex-shrink: 0;
+  /* Theme-aware icon styling */
+  filter: brightness(0) saturate(100%);
+  opacity: 0.8;
+}
+
+/* Clone toggle icon - white for both dark themes */
+.clone-toggle-icon {
+  filter: brightness(0) saturate(100%) invert(1);
+  opacity: 0.8;
 }
 
 .clone-toggle-icon.expanded {
@@ -1205,7 +1218,12 @@
 .copy-clone-url-button .icon-inline {
   width: 16px;
   height: 16px;
+  /* Icon filter pattern like settings button - white for dark button background */
+  filter: brightness(0) saturate(100%) invert(1) !important;
+  opacity: 1 !important;
 }
+
+/* Copy clone URL button icon - white for both dark themes */
 
 .clone-url-list.collapsed {
   max-height: 0;
@@ -1260,8 +1278,12 @@
   transition: all 0.2s ease;
   display: inline-block;
   font-weight: 500;
+  /* Ensure text is legible in all themes */
+  min-height: 2rem;
+  line-height: 1.5;
 }
 
+/* Clone more button - same styling for both dark themes */
 .clone-more:hover {
   background: var(--button-secondary-hover, var(--bg-tertiary));
   border-color: var(--accent, #007bff);
@@ -1285,17 +1307,38 @@ span.clone-more {
   margin-top: 0.25rem;
 }
 
+/* Icon inline - white for both dark themes */
 .icon-inline {
   width: 1em;
   height: 1em;
   vertical-align: middle;
   display: inline-block;
+  filter: brightness(0) saturate(100%) invert(1) !important;
+  opacity: 0.8 !important;
+  transition: opacity 0.2s ease, filter 0.2s ease;
 }
 
+/* Success/error icon colors using CSS filters for theme compatibility */
+.icon-inline.icon-success {
+  /* Green filter that works in all themes */
+  filter: brightness(0) saturate(100%) invert(64%) sepia(61%) saturate(1824%) hue-rotate(91deg) brightness(95%) contrast(87%);
+  opacity: 1;
+}
+
+.icon-inline.icon-error {
+  /* Red filter that works in all themes */
+  filter: brightness(0) saturate(100%) invert(27%) sepia(95%) saturate(7471%) hue-rotate(348deg) brightness(99%) contrast(92%);
+  opacity: 1;
+}
+
+/* Icon small - white for both dark themes */
 .icon-small {
   width: 16px;
   height: 16px;
   vertical-align: middle;
+  filter: brightness(0) saturate(100%) invert(1);
+  opacity: 0.8;
+  transition: opacity 0.2s ease, filter 0.2s ease;
 }
 
 .back-button {
@@ -1339,6 +1382,17 @@ span.clone-more {
 .create-tag-button .icon {
   width: 18px;
   height: 18px;
+  /* Theme-aware icon styling */
+  filter: brightness(0) saturate(100%);
+  opacity: 0.9;
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+
+/* Create button icons - white for both dark themes */
+.create-file-button .icon,
+.create-tag-button .icon {
+  filter: brightness(0) saturate(100%) invert(1);
+  opacity: 0.9;
 }
 
 .delete-file-button {
@@ -1755,6 +1809,20 @@ span.clone-more {
 .create-reply-button .icon {
   width: 18px;
   height: 18px;
+  /* Theme-aware icon styling */
+  filter: brightness(0) saturate(100%);
+  opacity: 0.9;
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+
+/* Create button icons - white for both dark themes */
+.create-issue-button .icon,
+.create-pr-button .icon,
+.create-patch-button .icon,
+.create-discussion-button .icon,
+.create-reply-button .icon {
+  filter: brightness(0) saturate(100%) invert(1);
+  opacity: 0.9;
 }
 
 .refresh-button {
@@ -1799,11 +1867,11 @@ span.clone-more {
 }
 
 .reachability-badge.reachable {
-  color: #22c55e; /* green-500 */
+  color: var(--success-text, #22c55e);
 }
 
 .reachability-badge.unreachable {
-  color: #ef4444; /* red-500 */
+  color: var(--error-text, #ef4444);
 }
 
 .reachability-badge.loading {
@@ -1840,6 +1908,20 @@ span.clone-more {
   height: 16px;
   flex-shrink: 0;
   color: var(--text-primary);
+  /* Theme-aware icon styling */
+  filter: brightness(0) saturate(100%);
+  opacity: 0.8;
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+
+/* Reachability refresh icon - white for both dark themes */
+.reachability-refresh-button .refresh-icon {
+  filter: brightness(0) saturate(100%) invert(1);
+  opacity: 0.8;
+}
+
+.reachability-refresh-button:hover:not(:disabled) .refresh-icon {
+  opacity: 1;
 }
 
 .server-type-badge {
@@ -1855,13 +1937,13 @@ span.clone-more {
 }
 
 .server-type-badge.grasp-badge {
-  background: #8b5cf6; /* purple-500 */
-  color: white;
+  background: var(--accent, #8b5cf6);
+  color: var(--accent-text, #ffffff);
 }
 
 .server-type-badge.git-badge {
-  background: #6b7280; /* gray-500 */
-  color: white;
+  background: var(--bg-tertiary, #6b7280);
+  color: var(--text-on-accent, #ffffff);
 }
 
 .empty {
