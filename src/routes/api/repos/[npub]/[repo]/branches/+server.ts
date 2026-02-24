@@ -244,18 +244,30 @@ export const POST: RequestHandler = createRepoPostHandler(
       }
     }
 
-    // Get default branch if fromBranch not provided
-    // If repo has no branches, use 'master' as default
+    // Check if repo has any branches first
+    let hasBranches = false;
+    try {
+      const existingBranches = await fileManager.getBranches(context.npub, context.repo);
+      hasBranches = existingBranches.length > 0;
+    } catch (err) {
+      // If getBranches fails, assume no branches exist
+      logger.debug({ error: err, npub: context.npub, repo: context.repo }, 'Failed to get branches, assuming empty repo');
+      hasBranches = false;
+    }
+
+    // Get default branch if fromBranch not provided and repo has branches
+    // If repo has no branches, don't pass fromBranch (will use --orphan)
     let sourceBranch = fromBranch;
-    if (!sourceBranch) {
+    if (!sourceBranch && hasBranches) {
       try {
         sourceBranch = await fileManager.getDefaultBranch(context.npub, context.repo);
       } catch (err) {
-        // If getDefaultBranch fails (e.g., no branches exist), use 'master' as default
-        logger.debug({ error: err, npub: context.npub, repo: context.repo }, 'No default branch found, using master');
-        sourceBranch = 'master';
+        // If getDefaultBranch fails, use 'main' as default (only if branches exist)
+        logger.debug({ error: err, npub: context.npub, repo: context.repo }, 'No default branch found, using main');
+        sourceBranch = 'main';
       }
     }
+    // If repo has no branches, sourceBranch will be undefined/null, which createBranch will handle correctly
     
     await fileManager.createBranch(context.npub, context.repo, branchName, sourceBranch);
     return json({ success: true, message: 'Branch created successfully' });

@@ -241,6 +241,20 @@
                   Create New Branch
                 </button>
               {/if}
+              {#if isMaintainer && currentBranch && currentBranch !== defaultBranch && onDeleteBranch}
+                <button 
+                  class="menu-item menu-item-danger" 
+                  onclick={() => { 
+                    if (currentBranch) {
+                      onDeleteBranch(currentBranch);
+                    }
+                    showMoreMenu = false; 
+                  }}
+                  title="Delete branch"
+                >
+                  Delete Branch
+                </button>
+              {/if}
               {#if onCopyEventId}
                 <button class="menu-item" onclick={() => { onCopyEventId(); showMoreMenu = false; }}>
                   Copy Event ID
@@ -357,13 +371,19 @@
       </div>
     {/if}
 
-    {#if currentBranch}
+    {#if branches.length === 0}
+      <div class="repo-branch">
+        <div class="branch-button" style="opacity: 0.6; cursor: not-allowed;">
+          <img src="/icons/git-branch.svg" alt="" class="icon" />
+          No branches
+        </div>
+      </div>
+    {:else if currentBranch}
       <div class="repo-branch">
         <button 
           class="branch-button"
           onclick={() => showBranchMenu = !showBranchMenu}
           aria-expanded={showBranchMenu}
-          disabled={branches.length === 0}
         >
           <img src="/icons/git-branch.svg" alt="" class="icon" />
           {currentBranch}
@@ -387,15 +407,6 @@
               </button>
             {/each}
           </div>
-        {/if}
-        {#if isMaintainer && currentBranch && currentBranch !== defaultBranch && onDeleteBranch}
-          <button 
-            class="delete-branch-button"
-            onclick={() => currentBranch && onDeleteBranch(currentBranch)}
-            title="Delete branch"
-          >
-            ×
-          </button>
         {/if}
       </div>
     {/if}

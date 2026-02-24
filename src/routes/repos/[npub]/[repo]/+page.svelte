@@ -2806,15 +2806,8 @@
             currentBranch = defaultBranch;
           }
         } else {
-          // No branches loaded yet or empty repo - set currentBranch from settings if not set
-          if (!currentBranch) {
-            try {
-              const settings = await settingsStore.getSettings();
-              currentBranch = settings.defaultBranch || 'master';
-            } catch {
-              currentBranch = 'master';
-            }
-          }
+          // No branches exist - set currentBranch to null to show "no branches" in header
+          currentBranch = null;
         }
       } else if (response.status === 404) {
         // Check if this is a "not cloned" error - API fallback might be available
@@ -3803,11 +3796,16 @@
     error = null;
 
     try {
-      // If no branches exist, use default branch from settings
-      let fromBranch = newBranchFrom || currentBranch;
-      if (!fromBranch && branches.length === 0) {
-        const settings = await settingsStore.getSettings();
-        fromBranch = settings.defaultBranch || 'master';
+      // If no branches exist, don't pass fromBranch (will use --orphan)
+      // Otherwise, use the selected branch or current branch
+      let fromBranch: string | undefined = newBranchFrom || currentBranch || undefined;
+      
+      // Only include fromBranch if repo has branches
+      const requestBody: { branchName: string; fromBranch?: string } = {
+        branchName: newBranchName
+      };
+      if (branches.length > 0 && fromBranch) {
+        requestBody.fromBranch = fromBranch;
       }
 
       const response = await fetch(`/api/repos/${npub}/${repo}/branches`, {
@@ -3816,10 +3814,7 @@
           'Content-Type': 'application/json',
           ...buildApiHeaders()
         },
-        body: JSON.stringify({
-          branchName: newBranchName,
-          fromBranch: fromBranch || 'master' // Final fallback
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {

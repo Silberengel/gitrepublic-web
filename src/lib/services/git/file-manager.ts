@@ -1765,14 +1765,11 @@ export class FileManager {
     npub: string,
     repoName: string,
     branchName: string,
-    fromBranch: string = 'main'
+    fromBranch?: string
   ): Promise<void> {
     // Security: Validate branch names to prevent path traversal
     if (!isValidBranchName(branchName)) {
       throw new Error(`Invalid branch name: ${branchName}`);
-    }
-    if (!isValidBranchName(fromBranch)) {
-      throw new Error(`Invalid source branch name: ${fromBranch}`);
     }
 
     const repoPath = this.getRepoPath(npub, repoName);
@@ -1870,8 +1867,16 @@ export class FileManager {
         await this.removeWorktree(repoPath, worktreePath);
       } else {
         // Repo has branches - use normal branch creation
+        // Validate fromBranch if provided
+        if (fromBranch && !isValidBranchName(fromBranch)) {
+          throw new Error(`Invalid source branch name: ${fromBranch}`);
+        }
+        
+        // Use default branch if fromBranch not provided
+        const sourceBranch = fromBranch || await this.getDefaultBranch(npub, repoName).catch(() => 'main');
+        
         // Use git worktree instead of cloning (much more efficient)
-        const workDir = await this.getWorktree(repoPath, fromBranch, npub, repoName);
+        const workDir = await this.getWorktree(repoPath, sourceBranch, npub, repoName);
         const workGit: SimpleGit = simpleGit(workDir);
 
         // Create and checkout new branch
