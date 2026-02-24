@@ -4565,22 +4565,37 @@
     error = null;
 
     try {
+      // Get current branch for repo-specific search
+      const branchParam = codeSearchScope === 'repo' && currentBranch 
+        ? `&branch=${encodeURIComponent(currentBranch)}` 
+        : '';
+      
+      // For "All Repositories", don't pass repo filter - let it search all repos
       const url = codeSearchScope === 'repo' 
-        ? `/api/repos/${npub}/${repo}/code-search?q=${encodeURIComponent(codeSearchQuery.trim())}`
-        : `/api/code-search?q=${encodeURIComponent(codeSearchQuery.trim())}&repo=${encodeURIComponent(`${npub}/${repo}`)}`;
+        ? `/api/repos/${npub}/${repo}/code-search?q=${encodeURIComponent(codeSearchQuery.trim())}${branchParam}`
+        : `/api/code-search?q=${encodeURIComponent(codeSearchQuery.trim())}`;
       
       const response = await fetch(url, {
         headers: buildApiHeaders()
       });
 
       if (response.ok) {
-        codeSearchResults = await response.json();
+        const data = await response.json();
+        codeSearchResults = Array.isArray(data) ? data : [];
       } else {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to search code');
+        let errorMessage = 'Failed to search code';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorMessage;
+        } catch {
+          errorMessage = `Search failed: ${response.status} ${response.statusText}`;
+        }
+        throw new Error(errorMessage);
       }
     } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to search code';
+      const errorMessage = err instanceof Error ? err.message : 'Failed to search code';
+      console.error('[Code Search] Error:', err);
+      error = errorMessage;
       codeSearchResults = [];
     } finally {
       loadingCodeSearch = false;
@@ -6097,7 +6112,11 @@
               </div>
             {:else if codeSearchQuery.trim() && !loadingCodeSearch}
               <div class="empty-state">
-                <p>No results found</p>
+                {#if error}
+                  <p class="error-message">Error: {error}</p>
+                {:else}
+                  <p>No results found</p>
+                {/if}
               </div>
             {/if}
           </div>

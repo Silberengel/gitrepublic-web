@@ -13,6 +13,7 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import logger from '$lib/services/logger.js';
 import { simpleGit } from 'simple-git';
+import { readFile } from 'fs/promises';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
@@ -48,80 +49,155 @@ export const GET: RequestHandler = createRepoGetHandler(
       const git = simpleGit(repoPath);
       const results: CodeSearchResult[] = [];
 
-      // Use git grep to search file contents
-      // git grep -n -I --break --heading -i "query" branch
-      // -n: show line numbers
-      // -I: ignore binary files
-      // --break: add blank line between matches from different files
-      // --heading: show filename before matches
-      // -i: case-insensitive (optional, we'll make it configurable)
-      
-      const searchQuery = query.trim();
-      const gitArgs = ['grep', '-n', '-I', '--break', '--heading', searchQuery, branch];
-      
+      // For bare repositories, we need to use a worktree or search the index
+      // First, try to get or create a worktree for the branch
+      let worktreePath: string | null = null;
       try {
-        const grepOutput = await git.raw(gitArgs);
-        
-        if (!grepOutput || !grepOutput.trim()) {
-          return json([]);
+        // Get the actual branch name (resolve HEAD if needed)
+        let actualBranch = branch;
+        if (branch === 'HEAD') {
+          try {
+            const branchInfo = await git.branch(['-a']);
+            actualBranch = branchInfo.current || 'main';
+            // If no current branch, try common defaults
+            if (!actualBranch || actualBranch === 'HEAD') {
+              const allBranches = branchInfo.all.map(b => b.replace(/^remotes\/origin\//, '').replace(/^remotes\//, ''));
+              actualBranch = allBranches.find(b => b === 'main') || allBranches.find(b => b === 'master') || allBranches[0] || 'main';
+            }
+          } catch {
+            actualBranch = 'main';
+          }
         }
 
-        // Parse git grep output
-        // Format:
-        // filename
-        // line:content
-        // line:content
-        // 
-        // filename2
-        // line:content
-        
-        const lines = grepOutput.split('\n');
-        let currentFile = '';
-        
-        for (const line of lines) {
-          if (!line.trim()) {
-            continue; // Skip empty lines
-          }
+        // Get or create worktree
+        worktreePath = await fileManager.getWorktree(repoPath, actualBranch, context.npub, context.repo);
+      } catch (worktreeError) {
+        logger.debug({ error: worktreeError, npub: context.npub, repo: context.repo, branch }, 'Could not create worktree, trying git grep with --cached');
+        // Fall back to searching the index
+      }
+
+      const searchQuery = query.trim();
+      
+      // If we have a worktree, search in the worktree
+      if (worktreePath && existsSync(worktreePath)) {
+        try {
+          const worktreeGit = simpleGit(worktreePath);
+          const gitArgs = ['grep', '-n', '-I', '--break', '--heading', searchQuery];
+          const grepOutput = await worktreeGit.raw(gitArgs);
           
-          // Check if this is a filename (no colon, or starts with a path)
-          if (!line.includes(':') || line.startsWith('/') || line.match(/^[a-zA-Z0-9_\-./]+$/)) {
-            // This might be a filename
-            // Git grep with --heading shows filename on its own line
-            // But we need to be careful - it could also be content with a colon
-            // If it doesn't have a colon and looks like a path, it's a filename
+          if (!grepOutput || !grepOutput.trim()) {
+            return json([]);
+          }
+
+          // Parse git grep output
+          const lines = grepOutput.split('\n');
+          let currentFile = '';
+          
+          for (const line of lines) {
+            if (!line.trim()) {
+              continue;
+            }
+            
+            // Check if this is a filename (no colon)
             if (!line.includes(':')) {
               currentFile = line.trim();
               continue;
             }
-          }
-          
-          // Parse line:content format
-          const colonIndex = line.indexOf(':');
-          if (colonIndex > 0 && currentFile) {
-            const lineNumber = parseInt(line.substring(0, colonIndex), 10);
-            const content = line.substring(colonIndex + 1);
             
-            if (!isNaN(lineNumber) && content) {
-              results.push({
-                file: currentFile,
-                line: lineNumber,
-                content: content.trim(),
-                branch: branch === 'HEAD' ? 'HEAD' : branch
-              });
+            // Parse line:content format
+            const colonIndex = line.indexOf(':');
+            if (colonIndex > 0 && currentFile) {
+              const lineNumber = parseInt(line.substring(0, colonIndex), 10);
+              const content = line.substring(colonIndex + 1);
               
-              if (results.length >= limit) {
-                break;
+              if (!isNaN(lineNumber) && content) {
+                // Make file path relative to repo root
+                const relativeFile = currentFile.replace(worktreePath + '/', '').replace(/^\.\//, '');
+                results.push({
+                  file: relativeFile,
+                  line: lineNumber,
+                  content: content.trim(),
+                  branch: branch === 'HEAD' ? 'HEAD' : branch
+                });
+                
+                if (results.length >= limit) {
+                  break;
+                }
               }
             }
           }
+        } catch (grepError: any) {
+          // git grep returns exit code 1 when no matches found
+          if (grepError.message && grepError.message.includes('exit code 1')) {
+            return json([]);
+          }
+          throw grepError;
         }
-      } catch (grepError: any) {
-        // git grep returns exit code 1 when no matches found, which is not an error
-        if (grepError.message && grepError.message.includes('exit code 1')) {
-          // No matches found, return empty array
-          return json([]);
+      } else {
+        // Fallback: search in the index using git grep --cached
+        try {
+          // Get the tree for the branch
+          let treeRef = branch;
+          if (branch === 'HEAD') {
+            try {
+              const branchInfo = await git.branch(['-a']);
+              treeRef = branchInfo.current || 'HEAD';
+            } catch {
+              treeRef = 'HEAD';
+            }
+          }
+
+          // Use git grep with --cached to search the index
+          // For bare repos, we can search a specific tree
+          const gitArgs = ['grep', '-n', '-I', '--break', '--heading', searchQuery, treeRef];
+          const grepOutput = await git.raw(gitArgs);
+          
+          if (!grepOutput || !grepOutput.trim()) {
+            return json([]);
+          }
+
+          // Parse git grep output
+          const lines = grepOutput.split('\n');
+          let currentFile = '';
+          
+          for (const line of lines) {
+            if (!line.trim()) {
+              continue;
+            }
+            
+            // Check if this is a filename (no colon)
+            if (!line.includes(':')) {
+              currentFile = line.trim();
+              continue;
+            }
+            
+            // Parse line:content format
+            const colonIndex = line.indexOf(':');
+            if (colonIndex > 0 && currentFile) {
+              const lineNumber = parseInt(line.substring(0, colonIndex), 10);
+              const content = line.substring(colonIndex + 1);
+              
+              if (!isNaN(lineNumber) && content) {
+                results.push({
+                  file: currentFile,
+                  line: lineNumber,
+                  content: content.trim(),
+                  branch: branch === 'HEAD' ? 'HEAD' : branch
+                });
+                
+                if (results.length >= limit) {
+                  break;
+                }
+              }
+            }
+          }
+        } catch (grepError: any) {
+          // git grep returns exit code 1 when no matches found
+          if (grepError.message && grepError.message.includes('exit code 1')) {
+            return json([]);
+          }
+          throw grepError;
         }
-        throw grepError;
       }
 
       return json(results);

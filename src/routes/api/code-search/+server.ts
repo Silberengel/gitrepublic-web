@@ -17,6 +17,7 @@ import { readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { simpleGit } from 'simple-git';
+import { fileManager } from '$lib/services/service-registry.js';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
@@ -168,60 +169,156 @@ async function searchInRepo(
     try {
       const branches = await git.branchLocal();
       branch = branches.current || 'HEAD';
+      // If no current branch, try common defaults
+      if (!branch || branch === 'HEAD') {
+        const allBranches = branches.all.map(b => b.replace(/^remotes\/origin\//, '').replace(/^remotes\//, ''));
+        branch = allBranches.find(b => b === 'main') || allBranches.find(b => b === 'master') || allBranches[0] || 'main';
+      }
     } catch {
-      // Use HEAD if we can't get branch
+      branch = 'main';
+    }
+
+    // For bare repositories, we need to use a worktree or search the index
+    let worktreePath: string | null = null;
+    try {
+      // Get the actual branch name (resolve HEAD if needed)
+      let actualBranch = branch;
+      if (branch === 'HEAD') {
+        actualBranch = 'main';
+      }
+
+      // Get or create worktree
+      worktreePath = await fileManager.getWorktree(repoPath, actualBranch, npub, repo);
+    } catch (worktreeError) {
+      logger.debug({ error: worktreeError, npub, repo, branch }, 'Could not create worktree, trying git grep with tree reference');
+      // Fall back to searching the index
     }
 
     const searchQuery = query.trim();
-    const gitArgs = ['grep', '-n', '-I', '--break', '--heading', searchQuery, branch];
     
-    try {
-      const grepOutput = await git.raw(gitArgs);
-      
-      if (!grepOutput || !grepOutput.trim()) {
-        return [];
-      }
+    // If we have a worktree, search in the worktree
+    if (worktreePath && existsSync(worktreePath)) {
+      try {
+        const worktreeGit = simpleGit(worktreePath);
+        const gitArgs = ['grep', '-n', '-I', '--break', '--heading', searchQuery];
+        const grepOutput = await worktreeGit.raw(gitArgs);
+        
+        if (!grepOutput || !grepOutput.trim()) {
+          return [];
+        }
 
-      const lines = grepOutput.split('\n');
-      let currentFile = '';
-      
-      for (const line of lines) {
-        if (!line.trim()) {
-          continue;
-        }
+        // Parse git grep output
+        const lines = grepOutput.split('\n');
+        let currentFile = '';
         
-        if (!line.includes(':')) {
-          currentFile = line.trim();
-          continue;
-        }
-        
-        const colonIndex = line.indexOf(':');
-        if (colonIndex > 0 && currentFile) {
-          const lineNumber = parseInt(line.substring(0, colonIndex), 10);
-          const content = line.substring(colonIndex + 1);
+        for (const line of lines) {
+          if (!line.trim()) {
+            continue;
+          }
           
-          if (!isNaN(lineNumber) && content) {
-            results.push({
-              repo,
-              npub,
-              file: currentFile,
-              line: lineNumber,
-              content: content.trim(),
-              branch: branch === 'HEAD' ? 'HEAD' : branch
-            });
+          // Check if this is a filename (no colon)
+          if (!line.includes(':')) {
+            currentFile = line.trim();
+            continue;
+          }
+          
+          // Parse line:content format
+          const colonIndex = line.indexOf(':');
+          if (colonIndex > 0 && currentFile) {
+            const lineNumber = parseInt(line.substring(0, colonIndex), 10);
+            const content = line.substring(colonIndex + 1);
             
-            if (results.length >= limit) {
-              break;
+            if (!isNaN(lineNumber) && content) {
+              // Make file path relative to repo root
+              const relativeFile = currentFile.replace(worktreePath + '/', '').replace(/^\.\//, '');
+              results.push({
+                repo,
+                npub,
+                file: relativeFile,
+                line: lineNumber,
+                content: content.trim(),
+                branch: branch === 'HEAD' ? 'HEAD' : branch
+              });
+              
+              if (results.length >= limit) {
+                break;
+              }
             }
           }
         }
+      } catch (grepError: any) {
+        // git grep returns exit code 1 when no matches found
+        if (grepError.message && grepError.message.includes('exit code 1')) {
+          return [];
+        }
+        throw grepError;
       }
-    } catch (grepError: any) {
-      // git grep returns exit code 1 when no matches found
-      if (grepError.message && grepError.message.includes('exit code 1')) {
-        return [];
+    } else {
+      // Fallback: search in the index using git grep with tree reference
+      try {
+        // Get the tree for the branch
+        let treeRef = branch;
+        if (branch === 'HEAD') {
+          try {
+            const branchInfo = await git.branch(['-a']);
+            treeRef = branchInfo.current || 'HEAD';
+          } catch {
+            treeRef = 'HEAD';
+          }
+        }
+
+        // Use git grep with tree reference for bare repos
+        const gitArgs = ['grep', '-n', '-I', '--break', '--heading', searchQuery, treeRef];
+        const grepOutput = await git.raw(gitArgs);
+        
+        if (!grepOutput || !grepOutput.trim()) {
+          return [];
+        }
+
+        // Parse git grep output
+        const lines = grepOutput.split('\n');
+        let currentFile = '';
+        
+        for (const line of lines) {
+          if (!line.trim()) {
+            continue;
+          }
+          
+          // Check if this is a filename (no colon)
+          if (!line.includes(':')) {
+            currentFile = line.trim();
+            continue;
+          }
+          
+          // Parse line:content format
+          const colonIndex = line.indexOf(':');
+          if (colonIndex > 0 && currentFile) {
+            const lineNumber = parseInt(line.substring(0, colonIndex), 10);
+            const content = line.substring(colonIndex + 1);
+            
+            if (!isNaN(lineNumber) && content) {
+              results.push({
+                repo,
+                npub,
+                file: currentFile,
+                line: lineNumber,
+                content: content.trim(),
+                branch: branch === 'HEAD' ? 'HEAD' : branch
+              });
+              
+              if (results.length >= limit) {
+                break;
+              }
+            }
+          }
+        }
+      } catch (grepError: any) {
+        // git grep returns exit code 1 when no matches found
+        if (grepError.message && grepError.message.includes('exit code 1')) {
+          return [];
+        }
+        throw grepError;
       }
-      throw grepError;
     }
   } catch (err) {
     logger.debug({ error: err, npub, repo, query }, 'Error searching in repo');
