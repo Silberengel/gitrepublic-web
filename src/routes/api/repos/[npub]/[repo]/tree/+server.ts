@@ -41,7 +41,13 @@ export const GET: RequestHandler = createRepoGetHandler(
           
           const apiData = await tryApiFetch(announcement, context.npub, context.repo);
           
-          if (apiData && apiData.files && apiData.files.length > 0) {
+          if (apiData && apiData.files !== undefined) {
+            // Return empty array if no files (legitimate for empty repos)
+            // Only proceed if we have files to filter
+            if (apiData.files.length === 0) {
+              logger.debug({ npub: context.npub, repo: context.repo, path: context.path }, 'API fallback returned empty files array (repo may be empty)');
+              return json([]);
+            }
             logger.debug({ npub: context.npub, repo: context.repo, fileCount: apiData.files.length }, 'Successfully fetched files via API fallback');
             // Return API data directly without cloning
             const path = context.path || '';

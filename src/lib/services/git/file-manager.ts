@@ -1626,7 +1626,24 @@ export class FileManager {
         }
       }
       
-      const branchList = Array.from(allBranches).sort();
+      // Sort branches: default branch first, then alphabetically
+      let branchList = Array.from(allBranches);
+      try {
+        const defaultBranch = await this.getDefaultBranch(npub, repoName);
+        if (defaultBranch) {
+          branchList.sort((a, b) => {
+            if (a === defaultBranch) return -1;
+            if (b === defaultBranch) return 1;
+            return a.localeCompare(b);
+          });
+        } else {
+          // No default branch found, just sort alphabetically
+          branchList.sort();
+        }
+      } catch {
+        // If we can't get default branch, just sort alphabetically
+        branchList.sort();
+      }
       
       // Cache the result (cache for 2 minutes)
       repoCache.set(cacheKey, branchList, 2 * 60 * 1000);

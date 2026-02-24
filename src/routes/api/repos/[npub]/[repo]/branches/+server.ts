@@ -84,8 +84,18 @@ export const GET: RequestHandler = createRepoGetHandler(
           
           if (apiData && apiData.branches && apiData.branches.length > 0) {
             logger.debug({ npub: context.npub, repo: context.repo, branchCount: apiData.branches.length }, 'Successfully fetched branches via API fallback');
-            // Return API data directly without cloning
-            return json(apiData.branches);
+            // Sort branches: default branch first, then alphabetically
+            const sortedBranches = [...apiData.branches];
+            if (apiData.defaultBranch) {
+              sortedBranches.sort((a: any, b: any) => {
+                const aName = typeof a === 'string' ? a : a.name;
+                const bName = typeof b === 'string' ? b : b.name;
+                if (aName === apiData.defaultBranch) return -1;
+                if (bName === apiData.defaultBranch) return 1;
+                return aName.localeCompare(bName);
+              });
+            }
+            return json(sortedBranches);
           }
           
           // API fetch failed - repo is not cloned and API fetch didn't work
@@ -183,7 +193,18 @@ export const GET: RequestHandler = createRepoGetHandler(
             
             if (apiData && apiData.branches && apiData.branches.length > 0) {
               logger.info({ npub: context.npub, repo: context.repo, branchCount: apiData.branches.length }, 'Successfully fetched branches via API fallback for empty repo');
-              return json(apiData.branches);
+              // Sort branches: default branch first, then alphabetically
+              const sortedBranches = [...apiData.branches];
+              if (apiData.defaultBranch) {
+                sortedBranches.sort((a: any, b: any) => {
+                  const aName = typeof a === 'string' ? a : a.name;
+                  const bName = typeof b === 'string' ? b : b.name;
+                  if (aName === apiData.defaultBranch) return -1;
+                  if (bName === apiData.defaultBranch) return 1;
+                  return aName.localeCompare(bName);
+                });
+              }
+              return json(sortedBranches);
             }
           }
         } catch (apiErr) {
@@ -191,7 +212,36 @@ export const GET: RequestHandler = createRepoGetHandler(
         }
       }
       
-      return json(branches);
+      // Sort branches: default branch first, then alphabetically
+      let sortedBranches = [...branches];
+      try {
+        const defaultBranch = await fileManager.getDefaultBranch(context.npub, context.repo);
+        if (defaultBranch) {
+          sortedBranches.sort((a: any, b: any) => {
+            const aName = typeof a === 'string' ? a : a.name;
+            const bName = typeof b === 'string' ? b : b.name;
+            if (aName === defaultBranch) return -1;
+            if (bName === defaultBranch) return 1;
+            return aName.localeCompare(bName);
+          });
+        } else {
+          // No default branch found, just sort alphabetically
+          sortedBranches.sort((a: any, b: any) => {
+            const aName = typeof a === 'string' ? a : a.name;
+            const bName = typeof b === 'string' ? b : b.name;
+            return aName.localeCompare(bName);
+          });
+        }
+      } catch {
+        // If we can't get default branch, just sort alphabetically
+        sortedBranches.sort((a: any, b: any) => {
+          const aName = typeof a === 'string' ? a : a.name;
+          const bName = typeof b === 'string' ? b : b.name;
+          return aName.localeCompare(bName);
+        });
+      }
+      
+      return json(sortedBranches);
     } catch (err) {
       // Log the actual error for debugging
       logger.error({ error: err, npub: context.npub, repo: context.repo }, '[Branches] Error getting branches');

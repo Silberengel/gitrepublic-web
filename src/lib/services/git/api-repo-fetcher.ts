@@ -275,11 +275,55 @@ async function fetchFromGitHub(owner: string, repo: string): Promise<Partial<Api
     // Fetch branches, commits, tags, and tree in parallel
     // Use SHA if available, otherwise fall back to branch name
     const treeRef = defaultBranchSha || defaultBranch;
-    const [branchesResponse, commitsResponse, tagsResponse, treeResponse] = await Promise.all([
-      fetch(`https://api.github.com/repos/${owner}/${repo}/branches`, { headers }).catch((err) => {
+    
+    // Fetch all branches with pagination (GitHub API defaults to 30 per page, max 100)
+    const fetchAllBranches = async (): Promise<Response | null> => {
+      try {
+        let allBranches: any[] = [];
+        let page = 1;
+        let hasMore = true;
+        const perPage = 100; // Maximum per page for GitHub API
+        
+        while (hasMore) {
+          const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/branches?per_page=${perPage}&page=${page}`, { headers });
+          if (!response.ok) {
+            if (page === 1) {
+              // Only return null on first page failure
+              return null;
+            }
+            // If later pages fail, break and return what we have
+            break;
+          }
+          
+          const pageBranches = await response.json();
+          allBranches = allBranches.concat(pageBranches);
+          
+          // Check if there are more pages (GitHub API returns Link header)
+          const linkHeader = response.headers.get('Link');
+          hasMore = linkHeader?.includes('rel="next"') || pageBranches.length === perPage;
+          page++;
+          
+          // Safety limit: don't fetch more than 10 pages (1000 branches)
+          if (page > 10) {
+            logger.warn({ owner, repo, branchCount: allBranches.length }, 'Reached pagination limit for branches (1000), some branches may be missing');
+            break;
+          }
+        }
+        
+        // Return a mock Response object with the combined branches
+        return {
+          ok: true,
+          json: async () => allBranches,
+          headers: new Headers()
+        } as Response;
+      } catch (err) {
         logger.debug({ error: err, owner, repo }, 'Failed to fetch branches from GitHub');
         return null;
-      }),
+      }
+    };
+    
+    const [branchesResponse, commitsResponse, tagsResponse, treeResponse] = await Promise.all([
+      fetchAllBranches(),
       fetch(`https://api.github.com/repos/${owner}/${repo}/commits?per_page=10`, { headers }).catch((err) => {
         logger.debug({ error: err, owner, repo }, 'Failed to fetch commits from GitHub');
         return null;
@@ -305,6 +349,15 @@ async function fetchFromGitHub(owner: string, repo: string): Promise<Partial<Api
           }
         }))
       : [];
+    
+    // Sort branches: default branch first, then alphabetically
+    if (branches.length > 0 && defaultBranch) {
+      branches.sort((a, b) => {
+        if (a.name === defaultBranch) return -1;
+        if (b.name === defaultBranch) return 1;
+        return a.name.localeCompare(b.name);
+      });
+    }
 
     const commits: ApiCommit[] = commitsResponse?.ok
       ? (await commitsResponse.json()).map((c: any) => ({
@@ -421,13 +474,61 @@ async function fetchFromGitLab(owner: string, repo: string, baseUrl: string): Pr
     const repoData = await repoResponse.json();
     const defaultBranch = repoData.default_branch || 'master';
 
+    // Fetch all branches with pagination (GitLab API defaults to 20 per page, max 100)
+    const fetchAllBranches = async (): Promise<Response | null> => {
+      try {
+        let allBranches: any[] = [];
+        let page = 1;
+        let hasMore = true;
+        const perPage = 100; // Maximum per page for GitLab API
+        
+        while (hasMore) {
+          const response = await fetch(getApiBaseUrl(
+            `projects/${projectPath}/repository/branches`,
+            baseUrl,
+            new URLSearchParams({ per_page: String(perPage), page: String(page) })
+          ));
+          
+          if (!response.ok) {
+            if (page === 1) {
+              return null;
+            }
+            break;
+          }
+          
+          const pageBranches = await response.json();
+          if (!Array.isArray(pageBranches)) {
+            break;
+          }
+          
+          allBranches = allBranches.concat(pageBranches);
+          
+          // Check if there are more pages
+          const linkHeader = response.headers.get('Link');
+          hasMore = linkHeader?.includes('rel="next"') || pageBranches.length === perPage;
+          page++;
+          
+          // Safety limit: don't fetch more than 10 pages (1000 branches)
+          if (page > 10) {
+            logger.warn({ owner, repo, branchCount: allBranches.length }, 'Reached pagination limit for branches (1000), some branches may be missing');
+            break;
+          }
+        }
+        
+        return {
+          ok: true,
+          json: async () => allBranches,
+          headers: new Headers()
+        } as Response;
+      } catch (err) {
+        logger.debug({ error: err, owner, repo }, 'Failed to fetch branches from GitLab');
+        return null;
+      }
+    };
+    
     // Fetch branches, commits, and tags in parallel
     const [branchesResponse, commitsResponse, tagsResponse] = await Promise.all([
-      fetch(getApiBaseUrl(
-        `projects/${projectPath}/repository/branches`,
-        baseUrl,
-        new URLSearchParams()
-      )).catch(() => null),
+      fetchAllBranches(),
       fetch(getApiBaseUrl(
         `projects/${projectPath}/repository/commits`,
         baseUrl,
@@ -468,6 +569,15 @@ async function fetchFromGitLab(owner: string, repo: string, baseUrl: string): Pr
         date: b.commit.committed_date
       }
     }));
+    
+    // Sort branches: default branch first, then alphabetically
+    if (branches.length > 0 && defaultBranch) {
+      branches.sort((a, b) => {
+        if (a.name === defaultBranch) return -1;
+        if (b.name === defaultBranch) return 1;
+        return a.name.localeCompare(b.name);
+      });
+    }
 
     const commits: ApiCommit[] = commitsData.map((c: any) => ({
       sha: c.id,
@@ -590,12 +700,59 @@ async function fetchFromGitea(owner: string, repo: string, baseUrl: string): Pro
     
     const defaultBranch = repoData.default_branch || 'master';
     
+    // Fetch all branches with pagination (Gitea API defaults to 30 per page, max 50)
+    const fetchAllBranches = async (): Promise<Response | null> => {
+      try {
+        let allBranches: any[] = [];
+        let page = 1;
+        let hasMore = true;
+        const perPage = 50; // Maximum per page for Gitea API
+        
+        while (hasMore) {
+          const response = await fetch(getApiBaseUrl(
+            `repos/${encodedOwner}/${encodedRepo}/branches`,
+            baseUrl,
+            new URLSearchParams({ limit: String(perPage), page: String(page) })
+          ));
+          
+          if (!response.ok) {
+            if (page === 1) {
+              return null;
+            }
+            break;
+          }
+          
+          const pageBranches = await response.json();
+          if (!Array.isArray(pageBranches)) {
+            break;
+          }
+          
+          allBranches = allBranches.concat(pageBranches);
+          
+          // Gitea doesn't use Link headers, check if we got a full page
+          hasMore = pageBranches.length === perPage;
+          page++;
+          
+          // Safety limit: don't fetch more than 20 pages (1000 branches)
+          if (page > 20) {
+            logger.warn({ owner, repo, branchCount: allBranches.length }, 'Reached pagination limit for branches (1000), some branches may be missing');
+            break;
+          }
+        }
+        
+        return {
+          ok: true,
+          json: async () => allBranches,
+          headers: new Headers()
+        } as Response;
+      } catch (err) {
+        logger.debug({ error: err, owner, repo }, 'Failed to fetch branches from Gitea');
+        return null;
+      }
+    };
+    
     const [branchesResponse, commitsResponse, tagsResponse] = await Promise.all([
-      fetch(getApiBaseUrl(
-        `repos/${encodedOwner}/${encodedRepo}/branches`,
-        baseUrl,
-        new URLSearchParams()
-      )).catch(() => null),
+      fetchAllBranches(),
       fetch(getApiBaseUrl(
         `repos/${encodedOwner}/${encodedRepo}/commits`,
         baseUrl,
@@ -652,6 +809,15 @@ async function fetchFromGitea(owner: string, repo: string, baseUrl: string): Pro
         }
       };
     });
+    
+    // Sort branches: default branch first, then alphabetically
+    if (branches.length > 0 && defaultBranch) {
+      branches.sort((a, b) => {
+        if (a.name === defaultBranch) return -1;
+        if (b.name === defaultBranch) return 1;
+        return a.name.localeCompare(b.name);
+      });
+    }
 
     const commits: ApiCommit[] = commitsData.map((c: any) => {
       const commitObj = c.commit || {};

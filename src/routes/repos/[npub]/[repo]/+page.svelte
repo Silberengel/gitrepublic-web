@@ -3044,8 +3044,10 @@
           : 'master');
       }
       
-      // Final validation: ensure branchName is a valid string and doesn't contain invalid characters
-      if (!branchName || typeof branchName !== 'string' || branchName.includes('#') || branchName.trim() === '') {
+      // Final validation: ensure branchName is a valid string
+      // Note: We allow '#' in branch names for existing branches (they'll be URL-encoded)
+      // Only reject if it's empty or not a string
+      if (!branchName || typeof branchName !== 'string' || branchName.trim() === '') {
         console.warn('[loadFile] Invalid branch name detected, using fallback:', branchName);
         branchName = defaultBranch || (branches.length > 0 
           ? (typeof branches[0] === 'string' ? branches[0] : branches[0].name)
@@ -3943,9 +3945,27 @@
       if (response.ok) {
         diffData = await response.json();
         showDiff = true;
+      } else {
+        // Handle 404 or other errors
+        const errorText = await response.text().catch(() => response.statusText);
+        if (response.status === 404) {
+          // Check if this is an API fallback commit (repo not cloned or empty)
+          if (isRepoCloned === false || (isRepoCloned === true && apiFallbackAvailable)) {
+            error = 'Diffs are not available for commits viewed via API fallback. Please clone the repository to view diffs.';
+          } else {
+            error = `Commit not found: ${errorText || 'The commit may not exist in the repository'}`;
+          }
+        } else {
+          error = `Failed to load diff: ${errorText || response.statusText}`;
+        }
       }
     } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to load diff';
+      // Handle network errors
+      if (err instanceof TypeError && err.message.includes('NetworkError')) {
+        error = 'Network error: Unable to fetch diff. Please check your connection and try again.';
+      } else {
+        error = err instanceof Error ? err.message : 'Failed to load diff';
+      }
     } finally {
       loadingCommits = false;
     }

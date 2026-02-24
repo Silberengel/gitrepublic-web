@@ -87,7 +87,6 @@
     topics = []
   }: Props = $props();
 
-  let showCloneMenu = $state(false);
   let showMoreMenu = $state(false);
   let showBranchMenu = $state(false);
   let showOwnerMenu = $state(false);
@@ -342,34 +341,6 @@
         </div>
       {/if}
     </div>
-    
-    {#if cloneUrls.length > 0}
-      <div class="repo-clone">
-        <button 
-          class="clone-button"
-          onclick={() => showCloneMenu = !showCloneMenu}
-          aria-expanded={showCloneMenu}
-        >
-          <img src="/icons/git-branch.svg" alt="" class="icon" />
-          Clone
-        </button>
-        {#if showCloneMenu}
-          <div class="clone-menu">
-            {#each cloneUrls as url}
-              <button 
-                class="clone-url-item"
-                onclick={() => {
-                  navigator.clipboard.writeText(url);
-                  showCloneMenu = false;
-                }}
-              >
-                {url}
-              </button>
-            {/each}
-          </div>
-        {/if}
-      </div>
-    {/if}
 
     {#if branches.length === 0}
       <div class="repo-branch">
