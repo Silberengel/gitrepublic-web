@@ -49,6 +49,7 @@ export async function tryApiFetch(
   defaultBranch: string;
   files?: Array<{ name: string; path: string; type: 'file' | 'dir'; size?: number }>;
   commits?: Array<{ sha: string; message: string; author: string; date: string }>;
+  tags?: Array<{ name: string; sha: string; message?: string; date?: string }>;
 } | null> {
   try {
     const cloneUrls = extractCloneUrls(announcementEvent);
@@ -126,7 +127,8 @@ export async function tryApiFetch(
             branches: metadata.branches || [],
             defaultBranch: metadata.defaultBranch || 'main',
             files: metadata.files || [],
-            commits: metadata.commits || []
+            commits: metadata.commits || [],
+            tags: metadata.tags || []
           };
         } else {
           logger.warn({ url, npub, repoName, attempt: i + 1, total: sortedUrls.length }, `[${i + 1}/${sortedUrls.length}] fetchRepoMetadata returned null, trying next URL`);

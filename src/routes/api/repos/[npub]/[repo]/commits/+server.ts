@@ -90,8 +90,51 @@ export const GET: RequestHandler = createRepoGetHandler(
     
     try {
       const commits = await fileManager.getCommitHistory(context.npub, context.repo, branch, limit, path);
+      
+      // If repo exists but has no commits (empty repo), try API fallback
+      if (commits.length === 0) {
+        logger.debug({ npub: context.npub, repo: context.repo, branch }, 'Repo exists but is empty, attempting API fallback for commits');
+        
+        try {
+          const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, context.repoOwnerPubkey, eventCache);
+          const announcement = findRepoAnnouncement(allEvents, context.repo);
+          
+          if (announcement) {
+            const { tryApiFetch } = await import('$lib/utils/api-repo-helper.js');
+            const apiData = await tryApiFetch(announcement, context.npub, context.repo);
+            
+            if (apiData && apiData.commits && apiData.commits.length > 0) {
+              logger.info({ npub: context.npub, repo: context.repo, commitCount: apiData.commits.length }, 'Successfully fetched commits via API fallback for empty repo');
+              return json(apiData.commits.slice(0, limit));
+            }
+          }
+        } catch (apiErr) {
+          logger.debug({ error: apiErr, npub: context.npub, repo: context.repo }, 'API fallback failed for empty repo, returning empty commits');
+        }
+      }
+      
       return json(commits);
     } catch (err) {
+      // If error occurs, try API fallback before giving up
+      logger.debug({ error: err, npub: context.npub, repo: context.repo }, '[Commits] Error getting commit history, attempting API fallback');
+      
+      try {
+        const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, context.repoOwnerPubkey, eventCache);
+        const announcement = findRepoAnnouncement(allEvents, context.repo);
+        
+        if (announcement) {
+          const { tryApiFetch } = await import('$lib/utils/api-repo-helper.js');
+          const apiData = await tryApiFetch(announcement, context.npub, context.repo);
+          
+          if (apiData && apiData.commits && apiData.commits.length > 0) {
+            logger.info({ npub: context.npub, repo: context.repo, commitCount: apiData.commits.length }, 'Successfully fetched commits via API fallback after error');
+            return json(apiData.commits.slice(0, limit));
+          }
+        }
+      } catch (apiErr) {
+        logger.debug({ error: apiErr, npub: context.npub, repo: context.repo }, 'API fallback failed after error');
+      }
+      
       // Log the actual error for debugging
       logger.error({ error: err, npub: context.npub, repo: context.repo }, '[Commits] Error getting commit history');
       // Check if it's a "not found" error

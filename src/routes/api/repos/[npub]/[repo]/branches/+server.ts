@@ -17,6 +17,7 @@ import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS } from '$lib/config.j
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { eventCache } from '$lib/services/nostr/event-cache.js';
 import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
+import { isGraspUrl } from '$lib/services/git/api-repo-fetcher.js';
 import logger from '$lib/services/logger.js';
 
 /**
@@ -90,11 +91,26 @@ export const GET: RequestHandler = createRepoGetHandler(
           // API fetch failed - repo is not cloned and API fetch didn't work
           // Check if we have clone URLs to provide better error message
           const hasCloneUrls = cloneUrls.length > 0;
-          logger.warn({ npub: context.npub, repo: context.repo, hasCloneUrls, cloneUrlCount: cloneUrls.length }, 'API fallback failed for branches');
+          logger.warn({ 
+            npub: context.npub, 
+            repo: context.repo, 
+            hasCloneUrls, 
+            cloneUrlCount: cloneUrls.length,
+            cloneUrls: cloneUrls.slice(0, 3) // Log first 3 URLs for debugging
+          }, 'API fallback failed for branches - repo not cloned and API fetch unsuccessful');
+          
+          // Provide more detailed error message
+          const cloneUrlTypes = cloneUrls.map(url => {
+            if (url.includes('github.com')) return 'GitHub';
+            if (url.includes('gitlab.com') || url.includes('gitlab')) return 'GitLab';
+            if (url.includes('gitea')) return 'Gitea';
+            if (isGraspUrl(url)) return 'GRASP';
+            return 'Unknown';
+          });
           
           throw handleNotFoundError(
             hasCloneUrls
-              ? 'Repository is not cloned locally and could not be fetched via API from external clone URLs. Privileged users can clone this repository using the "Clone to Server" button.'
+              ? `Repository is not cloned locally and could not be fetched via API from external clone URLs (${cloneUrlTypes.join(', ')}). This may be due to API rate limits, network issues, or the repository being private. Privileged users can clone this repository using the "Clone to Server" button.`
               : 'Repository is not cloned locally and has no external clone URLs for API fallback. Privileged users can clone this repository using the "Clone to Server" button.',
             { operation: 'getBranches', npub: context.npub, repo: context.repo }
           );
@@ -136,6 +152,45 @@ export const GET: RequestHandler = createRepoGetHandler(
 
     try {
       const branches = await fileManager.getBranches(context.npub, context.repo);
+      
+      // If repo exists but has no branches (empty repo), try API fallback
+      if (branches.length === 0) {
+        logger.debug({ npub: context.npub, repo: context.repo }, 'Repo exists but is empty, attempting API fallback');
+        
+        try {
+          // Fetch repository announcement for API fallback
+          let allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, context.repoOwnerPubkey, eventCache);
+          let announcement = findRepoAnnouncement(allEvents, context.repo);
+          
+          // If no events found in cache/default relays, try all relays (default + search)
+          if (!announcement) {
+            const allRelays = [...new Set([...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS])];
+            if (allRelays.length > DEFAULT_NOSTR_RELAYS.length) {
+              const allRelaysClient = new NostrClient(allRelays);
+              allEvents = await fetchRepoAnnouncementsWithCache(allRelaysClient, context.repoOwnerPubkey, eventCache);
+              announcement = findRepoAnnouncement(allEvents, context.repo);
+            }
+          }
+          
+          if (announcement) {
+            const { tryApiFetch } = await import('$lib/utils/api-repo-helper.js');
+            const { extractCloneUrls } = await import('$lib/utils/nostr-utils.js');
+            const cloneUrls = extractCloneUrls(announcement);
+            
+            logger.debug({ npub: context.npub, repo: context.repo, cloneUrlCount: cloneUrls.length }, 'Attempting API fallback for empty repo');
+            
+            const apiData = await tryApiFetch(announcement, context.npub, context.repo);
+            
+            if (apiData && apiData.branches && apiData.branches.length > 0) {
+              logger.info({ npub: context.npub, repo: context.repo, branchCount: apiData.branches.length }, 'Successfully fetched branches via API fallback for empty repo');
+              return json(apiData.branches);
+            }
+          }
+        } catch (apiErr) {
+          logger.debug({ error: apiErr, npub: context.npub, repo: context.repo }, 'API fallback failed for empty repo, returning empty branches');
+        }
+      }
+      
       return json(branches);
     } catch (err) {
       // Log the actual error for debugging

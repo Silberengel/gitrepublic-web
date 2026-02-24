@@ -159,6 +159,67 @@ export const GET: RequestHandler = createRepoGetHandler(
     
     try {
       const files = await fileManager.listFiles(context.npub, context.repo, ref, path);
+      
+      // If repo exists but has no files (empty repo), try API fallback
+      if (files.length === 0) {
+        logger.debug({ npub: context.npub, repo: context.repo, path, ref }, 'Repo exists but is empty, attempting API fallback for tree');
+        
+        try {
+          // Fetch repository announcement for API fallback
+          const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, context.repoOwnerPubkey, eventCache);
+          const announcement = findRepoAnnouncement(allEvents, context.repo);
+          
+          if (announcement) {
+            const { tryApiFetch } = await import('$lib/utils/api-repo-helper.js');
+            const apiData = await tryApiFetch(announcement, context.npub, context.repo);
+            
+            if (apiData && apiData.files && apiData.files.length > 0) {
+              logger.info({ npub: context.npub, repo: context.repo, fileCount: apiData.files.length }, 'Successfully fetched files via API fallback for empty repo');
+              
+              // Filter files by path if specified (same logic as above)
+              let filteredFiles: typeof apiData.files;
+              if (path) {
+                const normalizedPath = path.endsWith('/') ? path : `${path}/`;
+                filteredFiles = apiData.files.filter(f => {
+                  if (!f.path.startsWith(normalizedPath)) {
+                    return false;
+                  }
+                  const relativePath = f.path.slice(normalizedPath.length);
+                  if (!relativePath) {
+                    return false;
+                  }
+                  const cleanRelativePath = relativePath.endsWith('/') ? relativePath.slice(0, -1) : relativePath;
+                  return !cleanRelativePath.includes('/');
+                });
+              } else {
+                filteredFiles = apiData.files.filter(f => {
+                  const cleanPath = f.path.endsWith('/') ? f.path.slice(0, -1) : f.path;
+                  const pathParts = cleanPath.split('/');
+                  return pathParts.length === 1;
+                });
+              }
+              
+              // Normalize type and name
+              const normalizedFiles = filteredFiles.map(f => {
+                const cleanPath = f.path.endsWith('/') ? f.path.slice(0, -1) : f.path;
+                const pathParts = cleanPath.split('/');
+                const displayName = pathParts[pathParts.length - 1] || f.name;
+                return {
+                  name: displayName,
+                  path: f.path,
+                  type: (f.type === 'dir' ? 'directory' : 'file') as 'file' | 'directory',
+                  size: f.size
+                };
+              });
+              
+              return json(normalizedFiles);
+            }
+          }
+        } catch (apiErr) {
+          logger.debug({ error: apiErr, npub: context.npub, repo: context.repo }, 'API fallback failed for empty repo, returning empty files');
+        }
+      }
+      
       // Debug logging to help diagnose missing files
       logger.debug({ 
         npub: context.npub, 
@@ -170,6 +231,58 @@ export const GET: RequestHandler = createRepoGetHandler(
       }, '[Tree] Returning files from fileManager.listFiles');
       return json(files);
     } catch (err) {
+      // If error occurs, try API fallback before giving up
+      logger.debug({ error: err, npub: context.npub, repo: context.repo }, '[Tree] Error listing files, attempting API fallback');
+      
+      try {
+        const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, context.repoOwnerPubkey, eventCache);
+        const announcement = findRepoAnnouncement(allEvents, context.repo);
+        
+        if (announcement) {
+          const { tryApiFetch } = await import('$lib/utils/api-repo-helper.js');
+          const apiData = await tryApiFetch(announcement, context.npub, context.repo);
+          
+          if (apiData && apiData.files && apiData.files.length > 0) {
+            logger.info({ npub: context.npub, repo: context.repo, fileCount: apiData.files.length }, 'Successfully fetched files via API fallback after error');
+            
+            // Filter and normalize files (same logic as above)
+            const path = context.path || '';
+            let filteredFiles: typeof apiData.files;
+            if (path) {
+              const normalizedPath = path.endsWith('/') ? path : `${path}/`;
+              filteredFiles = apiData.files.filter(f => {
+                if (!f.path.startsWith(normalizedPath)) return false;
+                const relativePath = f.path.slice(normalizedPath.length);
+                if (!relativePath) return false;
+                const cleanRelativePath = relativePath.endsWith('/') ? relativePath.slice(0, -1) : relativePath;
+                return !cleanRelativePath.includes('/');
+              });
+            } else {
+              filteredFiles = apiData.files.filter(f => {
+                const cleanPath = f.path.endsWith('/') ? f.path.slice(0, -1) : f.path;
+                return cleanPath.split('/').length === 1;
+              });
+            }
+            
+            const normalizedFiles = filteredFiles.map(f => {
+              const cleanPath = f.path.endsWith('/') ? f.path.slice(0, -1) : f.path;
+              const pathParts = cleanPath.split('/');
+              const displayName = pathParts[pathParts.length - 1] || f.name;
+              return {
+                name: displayName,
+                path: f.path,
+                type: (f.type === 'dir' ? 'directory' : 'file') as 'file' | 'directory',
+                size: f.size
+              };
+            });
+            
+            return json(normalizedFiles);
+          }
+        }
+      } catch (apiErr) {
+        logger.debug({ error: apiErr, npub: context.npub, repo: context.repo }, 'API fallback failed after error');
+      }
+      
       // Log the actual error for debugging
       logger.error({ error: err, npub: context.npub, repo: context.repo }, '[Tree] Error listing files');
       // Check if it's a "not found" error

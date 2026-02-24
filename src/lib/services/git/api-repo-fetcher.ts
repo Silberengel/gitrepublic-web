@@ -45,6 +45,7 @@ export interface ApiRepoInfo {
   branches: ApiBranch[];
   commits: ApiCommit[];
   files: ApiFile[];
+  tags?: ApiTag[];
   readme?: {
     path: string;
     content: string;
@@ -52,6 +53,13 @@ export interface ApiRepoInfo {
   };
   platform: 'github' | 'gitlab' | 'gitea' | 'grasp' | 'unknown';
   isCloned: boolean; // Whether repo exists locally
+}
+
+export interface ApiTag {
+  name: string;
+  sha: string;
+  message?: string;
+  date?: string;
 }
 
 export interface ApiBranch {
@@ -264,16 +272,20 @@ async function fetchFromGitHub(owner: string, repo: string): Promise<Partial<Api
       logger.debug({ error: err, owner, repo, branch: defaultBranch }, 'Failed to get default branch SHA, will try branch name');
     }
 
-    // Fetch branches, commits, and tree in parallel
+    // Fetch branches, commits, tags, and tree in parallel
     // Use SHA if available, otherwise fall back to branch name
     const treeRef = defaultBranchSha || defaultBranch;
-    const [branchesResponse, commitsResponse, treeResponse] = await Promise.all([
+    const [branchesResponse, commitsResponse, tagsResponse, treeResponse] = await Promise.all([
       fetch(`https://api.github.com/repos/${owner}/${repo}/branches`, { headers }).catch((err) => {
         logger.debug({ error: err, owner, repo }, 'Failed to fetch branches from GitHub');
         return null;
       }),
       fetch(`https://api.github.com/repos/${owner}/${repo}/commits?per_page=10`, { headers }).catch((err) => {
         logger.debug({ error: err, owner, repo }, 'Failed to fetch commits from GitHub');
+        return null;
+      }),
+      fetch(`https://api.github.com/repos/${owner}/${repo}/tags?per_page=100`, { headers }).catch((err) => {
+        logger.debug({ error: err, owner, repo }, 'Failed to fetch tags from GitHub');
         return null;
       }),
       fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${treeRef}?recursive=1`, { headers }).catch((err) => {
@@ -300,6 +312,15 @@ async function fetchFromGitHub(owner: string, repo: string): Promise<Partial<Api
           message: c.commit?.message?.split('\n')[0] || 'No commit message',
           author: c.commit?.author?.name || 'Unknown',
           date: c.commit?.author?.date || new Date().toISOString()
+        }))
+      : [];
+
+    const tags: ApiTag[] = tagsResponse?.ok
+      ? (await tagsResponse.json()).map((t: any) => ({
+          name: t.name,
+          sha: t.commit?.sha || '',
+          message: t.commit?.commit?.message?.split('\n')[0],
+          date: t.commit?.commit?.author?.date
         }))
       : [];
 
@@ -364,6 +385,7 @@ async function fetchFromGitHub(owner: string, repo: string): Promise<Partial<Api
       branches,
       commits,
       files,
+      tags,
       readme,
       platform: 'github'
     };
@@ -399,8 +421,8 @@ async function fetchFromGitLab(owner: string, repo: string, baseUrl: string): Pr
     const repoData = await repoResponse.json();
     const defaultBranch = repoData.default_branch || 'master';
 
-    // Fetch branches and commits in parallel
-    const [branchesResponse, commitsResponse] = await Promise.all([
+    // Fetch branches, commits, and tags in parallel
+    const [branchesResponse, commitsResponse, tagsResponse] = await Promise.all([
       fetch(getApiBaseUrl(
         `projects/${projectPath}/repository/branches`,
         baseUrl,
@@ -410,6 +432,11 @@ async function fetchFromGitLab(owner: string, repo: string, baseUrl: string): Pr
         `projects/${projectPath}/repository/commits`,
         baseUrl,
         new URLSearchParams({ per_page: '10' })
+      )).catch(() => null),
+      fetch(getApiBaseUrl(
+        `projects/${projectPath}/repository/tags`,
+        baseUrl,
+        new URLSearchParams({ per_page: '100' })
       )).catch(() => null)
     ]);
 
@@ -447,6 +474,22 @@ async function fetchFromGitLab(owner: string, repo: string, baseUrl: string): Pr
       message: c.message.split('\n')[0],
       author: c.author_name,
       date: c.committed_date
+    }));
+
+    let tagsData: any[] = [];
+    if (tagsResponse && tagsResponse.ok) {
+      tagsData = await tagsResponse.json();
+      if (!Array.isArray(tagsData)) {
+        logger.warn({ owner, repo }, 'GitLab tags response is not an array');
+        tagsData = [];
+      }
+    }
+
+    const tags: ApiTag[] = tagsData.map((t: any) => ({
+      name: t.name,
+      sha: t.commit?.id || '',
+      message: t.message,
+      date: t.commit?.created_at
     }));
 
     // Fetch file tree (simplified - GitLab tree API is more complex)
@@ -507,6 +550,7 @@ async function fetchFromGitLab(owner: string, repo: string, baseUrl: string): Pr
       branches,
       commits,
       files,
+      tags,
       readme,
       platform: 'gitlab'
     };
@@ -546,7 +590,7 @@ async function fetchFromGitea(owner: string, repo: string, baseUrl: string): Pro
     
     const defaultBranch = repoData.default_branch || 'master';
     
-    const [branchesResponse, commitsResponse] = await Promise.all([
+    const [branchesResponse, commitsResponse, tagsResponse] = await Promise.all([
       fetch(getApiBaseUrl(
         `repos/${encodedOwner}/${encodedRepo}/branches`,
         baseUrl,
@@ -556,6 +600,11 @@ async function fetchFromGitea(owner: string, repo: string, baseUrl: string): Pro
         `repos/${encodedOwner}/${encodedRepo}/commits`,
         baseUrl,
         new URLSearchParams({ limit: '10' })
+      )).catch(() => null),
+      fetch(getApiBaseUrl(
+        `repos/${encodedOwner}/${encodedRepo}/tags`,
+        baseUrl,
+        new URLSearchParams({ limit: '100' })
       )).catch(() => null)
     ]);
     
@@ -582,6 +631,15 @@ async function fetchFromGitea(owner: string, repo: string, baseUrl: string): Pro
       logger.warn({ status: commitsResponse?.status, owner, repo }, 'Gitea API error for commits');
     }
 
+    let tagsData: any[] = [];
+    if (tagsResponse && tagsResponse.ok) {
+      tagsData = await tagsResponse.json();
+      if (!Array.isArray(tagsData)) {
+        logger.warn({ owner, repo }, 'Gitea tags response is not an array');
+        tagsData = [];
+      }
+    }
+
     const branches: ApiBranch[] = branchesData.map((b: any) => {
       const commitObj = b.commit || {};
       return {
@@ -604,6 +662,13 @@ async function fetchFromGitea(owner: string, repo: string, baseUrl: string): Pro
         date: commitObj.timestamp || commitObj.created || new Date().toISOString()
       };
     });
+
+    const tags: ApiTag[] = tagsData.map((t: any) => ({
+      name: t.name || '',
+      sha: t.commit?.sha || t.sha || '',
+      message: t.message,
+      date: t.commit?.created || t.created
+    }));
 
     // Fetch file tree - Gitea uses /git/trees API endpoint
     let files: ApiFile[] = [];

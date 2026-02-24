@@ -198,10 +198,69 @@ export const GET: RequestHandler = async (event) => {
             fileContent = await fileManager.getFileContent(npub, repo, filePath, 'HEAD');
             ref = 'HEAD'; // Update ref for logging
           } catch (headErr) {
-            // If HEAD also fails, throw the original error
+            // If HEAD also fails, try API fallback before throwing
+            logger.debug({ error: headErr, npub, repo, filePath }, 'Failed to read file from local repo, attempting API fallback');
+            
+            try {
+              const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoOwnerPubkey, eventCache);
+              const announcement = findRepoAnnouncement(allEvents, repo);
+              
+              if (announcement) {
+                const { tryApiFetchFile } = await import('$lib/utils/api-repo-helper.js');
+                // Use the original ref, or 'main' as fallback
+                const apiRef = url.searchParams.get('ref') || 'main';
+                const apiFileContent = await tryApiFetchFile(announcement, npub, repo, filePath, apiRef);
+                
+                if (apiFileContent && apiFileContent.content) {
+                  logger.info({ npub, repo, filePath, ref: apiRef }, 'Successfully fetched file via API fallback for empty repo');
+                  auditLogger.logFileOperation(
+                    userPubkeyHex || null,
+                    requestContext.clientIp,
+                    'read',
+                    `${npub}/${repo}`,
+                    filePath,
+                    'success'
+                  );
+                  return json(apiFileContent);
+                }
+              }
+            } catch (apiErr) {
+              logger.debug({ error: apiErr, npub, repo, filePath }, 'API fallback failed for file');
+            }
+            
+            // If API fallback also fails, throw the original error
             throw firstErr;
           }
         } else {
+          // Try API fallback before throwing
+          logger.debug({ error: firstErr, npub, repo, filePath }, 'Failed to read file from local repo, attempting API fallback');
+          
+          try {
+            const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoOwnerPubkey, eventCache);
+            const announcement = findRepoAnnouncement(allEvents, repo);
+            
+            if (announcement) {
+              const { tryApiFetchFile } = await import('$lib/utils/api-repo-helper.js');
+              const apiRef = ref === 'HEAD' ? 'main' : ref;
+              const apiFileContent = await tryApiFetchFile(announcement, npub, repo, filePath, apiRef);
+              
+              if (apiFileContent && apiFileContent.content) {
+                logger.info({ npub, repo, filePath, ref: apiRef }, 'Successfully fetched file via API fallback for empty repo');
+                auditLogger.logFileOperation(
+                  userPubkeyHex || null,
+                  requestContext.clientIp,
+                  'read',
+                  `${npub}/${repo}`,
+                  filePath,
+                  'success'
+                );
+                return json(apiFileContent);
+              }
+            }
+          } catch (apiErr) {
+            logger.debug({ error: apiErr, npub, repo, filePath }, 'API fallback failed for file');
+          }
+          
           throw firstErr;
         }
       }
