@@ -3353,12 +3353,12 @@
         } else {
           branchName = defaultBranch || (branches.length > 0 
             ? (typeof branches[0] === 'string' ? branches[0] : branches[0].name)
-            : 'master');
+            : 'HEAD');
         }
       } else {
         branchName = defaultBranch || (branches.length > 0 
           ? (typeof branches[0] === 'string' ? branches[0] : branches[0].name)
-          : 'master');
+          : 'HEAD');
       }
       
       const url = `/api/repos/${npub}/${repo}/tree?ref=${encodeURIComponent(branchName)}&path=${encodeURIComponent(path)}`;
@@ -3513,7 +3513,7 @@
           // currentBranch is set but not in branches list, use defaultBranch or fallback
           branchName = defaultBranch || (branches.length > 0 
             ? (typeof branches[0] === 'string' ? branches[0] : branches[0].name)
-            : 'master');
+            : 'HEAD');
         }
       } else if (typeof currentBranch === 'object' && currentBranch !== null && 'name' in currentBranch) {
         branchName = (currentBranch as { name: string }).name;
@@ -3521,7 +3521,7 @@
         // currentBranch is null, undefined, or invalid - use defaultBranch or fallback
         branchName = defaultBranch || (branches.length > 0 
           ? (typeof branches[0] === 'string' ? branches[0] : branches[0].name)
-          : 'master');
+          : 'HEAD');
       }
       
       // Final validation: ensure branchName is a valid string
@@ -3531,7 +3531,7 @@
         console.warn('[loadFile] Invalid branch name detected, using fallback:', branchName);
         branchName = defaultBranch || (branches.length > 0 
           ? (typeof branches[0] === 'string' ? branches[0] : branches[0].name)
-          : 'master');
+          : 'HEAD');
       }
       
       // Determine language from file extension first to check if it's an image
