@@ -209,7 +209,9 @@ export const POST: RequestHandler = createRepoPostHandler(
 
     // Determine which relays to publish to based on visibility
     const { getRelaysForEventPublishing } = await import('$lib/utils/repo-visibility.js');
-    const relaysToPublish = getRelaysForEventPublishing(signedEvent, userRelays);
+    const visibilityRelays = getRelaysForEventPublishing(signedEvent);
+    // Combine visibility relays with user relays
+    const relaysToPublish = visibilityRelays.length > 0 ? combineRelays([...visibilityRelays, ...userRelays]) : [];
 
     // Publish to relays (if not private)
     if (relaysToPublish.length > 0) {
@@ -221,10 +223,12 @@ export const POST: RequestHandler = createRepoPostHandler(
     }
 
     // Save to repository (via announcement manager)
-    const { announcementManager } = await import('$lib/services/git/announcement-manager.js');
-    const repoPath = `${process.env.GIT_REPO_ROOT || '/repos'}/${context.npub}/${context.repo}.git`;
+    const { AnnouncementManager } = await import('$lib/services/git/announcement-manager.js');
+    const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
+    const repoPath = `${repoRoot}/${context.npub}/${context.repo}.git`;
+    const announcementManager = new AnnouncementManager(repoRoot);
     try {
-      await announcementManager.saveEvent(signedEvent, repoPath);
+      await announcementManager.ensureAnnouncementInRepo(repoPath, signedEvent);
     } catch (err) {
       logger.error({ error: err, npub: context.npub, repo: context.repo }, 'Failed to save settings update to repository');
       // Don't fail the request - event was published to relays

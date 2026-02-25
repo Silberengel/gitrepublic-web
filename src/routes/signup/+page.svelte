@@ -1026,7 +1026,8 @@
             }
             
             // Public and unlisted repos are always visible
-            if (repoVisibility === 'public' || repoVisibility === 'unlisted') return event;
+            // Use array includes to avoid TypeScript narrowing issues
+            if (['public', 'unlisted'].includes(repoVisibility)) return event;
             
             // Restricted and private repos: only show if user is owner
             if (userPubkeyHex && event.pubkey === userPubkeyHex) {
@@ -2970,7 +2971,7 @@
 
       {#if visibility === 'unlisted' || visibility === 'restricted' || visibility === 'private'}
         <div class="form-group">
-          <label>
+          <div class="label">
             Project Relay(s) {#if visibility === 'unlisted' || visibility === 'restricted'}*{/if}
             <small>
               {#if visibility === 'unlisted' || visibility === 'restricted'}
@@ -2979,7 +2980,7 @@
                 Optional for private repositories. If provided, events will be published to these relays (otherwise git-only).
               {/if}
             </small>
-          </label>
+          </div>
           {#each projectRelays as projectRelay, index}
             <div class="input-group">
               <input

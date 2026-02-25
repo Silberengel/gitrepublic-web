@@ -50,112 +50,117 @@ git add -A
 if [ -n "$(git status --porcelain)" ]; then
     echo "Changes detected, committing..."
     COMMIT_MSG="Sync from gitrepublic-web monorepo - $(date '+%Y-%m-%d %H:%M:%S')"
-    git commit -m "$COMMIT_MSG"
+    
+    # Check if GitRepublic commit-msg hook is installed
+    HOOK_INSTALLED=false
+    HOOK_PATH=""
+    
+    # Check for local hook
+    if [ -f ".git/hooks/commit-msg" ]; then
+        # Check if it's the GitRepublic hook
+        if grep -q "git-commit-msg-hook\|gitrepublic" .git/hooks/commit-msg 2>/dev/null; then
+            HOOK_INSTALLED=true
+            HOOK_PATH=".git/hooks/commit-msg"
+        fi
+    fi
+    
+    # Check for global hook
+    if [ "$HOOK_INSTALLED" = false ]; then
+        GLOBAL_HOOKS_PATH="$(git config --global --get core.hooksPath 2>/dev/null || echo "$HOME/.git-hooks")"
+        if [ -f "$GLOBAL_HOOKS_PATH/commit-msg" ]; then
+            if grep -q "git-commit-msg-hook\|gitrepublic" "$GLOBAL_HOOKS_PATH/commit-msg" 2>/dev/null; then
+                HOOK_INSTALLED=true
+                HOOK_PATH="$GLOBAL_HOOKS_PATH/commit-msg"
+            fi
+        fi
+    fi
+    
+    # Try to find and install the hook if not installed
+    if [ "$HOOK_INSTALLED" = false ]; then
+        # Look for gitrepublic-cli hook script
+        POSSIBLE_HOOK_PATHS=(
+            "$CLI_DIR/scripts/git-commit-msg-hook.js"
+            "$REPO_ROOT/gitrepublic-cli/scripts/git-commit-msg-hook.js"
+            "$(dirname "$(command -v gitrep 2>/dev/null || command -v gitrepublic 2>/dev/null || echo '')")/../scripts/git-commit-msg-hook.js"
+        )
+        
+        for hook_script in "${POSSIBLE_HOOK_PATHS[@]}"; do
+            if [ -f "$hook_script" ]; then
+                echo "Installing GitRepublic commit signing hook..."
+                mkdir -p .git/hooks
+                # Create symlink to the hook script
+                if ln -sf "$hook_script" .git/hooks/commit-msg 2>/dev/null; then
+                    HOOK_INSTALLED=true
+                    HOOK_PATH=".git/hooks/commit-msg"
+                    echo "✅ Commit signing hook installed"
+                    break
+                fi
+            fi
+        done
+    fi
+    
+    # Make commit (hook will be called automatically by git if installed)
+    if [ "$HOOK_INSTALLED" = true ]; then
+        echo "Committing with GitRepublic Nostr signing..."
+        git commit -m "$COMMIT_MSG"
+    else
+        echo "⚠️  Warning: GitRepublic commit signing hook not found"
+        echo "   Commits will not be signed with Nostr keys"
+        echo "   Install gitrepublic-cli and run 'gitrep setup' to enable commit signing"
+        git commit -m "$COMMIT_MSG"
+    fi
     echo "✅ Committed changes"
 else
     echo "✅ No changes to commit (files are up to date)"
 fi
 
-# Get all remotes and push to each one
-REMOTES="$(git remote)"
+# Get current branch
 CURRENT_BRANCH="$(git branch --show-current || echo 'master')"
 
-if [ -z "$REMOTES" ]; then
-    echo "ℹ️  No remotes configured"
-    exit 0
-fi
-
-echo ""
-echo "Pushing to remotes..."
-
-# Fetch from all remotes first
-for remote in $REMOTES; do
-    echo "Fetching from $remote..."
-    git fetch "$remote" 2>/dev/null || true
-done
-
-# Check if remotes have commits local doesn't have (diverged history)
-echo ""
-echo "Checking for diverged history..."
-for remote in $REMOTES; do
-    REMOTE_BRANCH="${remote}/${CURRENT_BRANCH}"
-    if git rev-parse --verify "$REMOTE_BRANCH" >/dev/null 2>&1; then
-        BEHIND=$(git rev-list --count HEAD.."$REMOTE_BRANCH" 2>/dev/null || echo "0")
-        AHEAD=$(git rev-list --count "$REMOTE_BRANCH"..HEAD 2>/dev/null || echo "0")
-        if [ "$BEHIND" -gt 0 ]; then
-            echo "⚠️  $remote has $BEHIND commit(s) that local doesn't have"
-            echo "   Local has $AHEAD commit(s) that $remote doesn't have"
-            echo "   Histories have diverged - need to merge or rebase"
-        fi
-    fi
-done
-
-# Push to all remotes
-for remote in $REMOTES; do
+# Check if gitrep is available
+if ! command -v gitrep >/dev/null 2>&1 && ! command -v gitrepublic >/dev/null 2>&1; then
+    echo "⚠️  Warning: gitrep command not found. Falling back to git push."
+    echo "   Install gitrepublic-cli to use 'gitrep push-all' for better multi-remote support."
     echo ""
-    echo "Pushing to $remote ($CURRENT_BRANCH)..."
     
-    # Check if local is ahead of remote
-    REMOTE_BRANCH="${remote}/${CURRENT_BRANCH}"
-    if git rev-parse --verify "$REMOTE_BRANCH" >/dev/null 2>&1; then
-        AHEAD=$(git rev-list --count "$REMOTE_BRANCH"..HEAD 2>/dev/null || echo "0")
-        if [ "$AHEAD" -gt 0 ]; then
-            echo "   Local is $AHEAD commit(s) ahead of $remote"
-        fi
+    # Fallback to old behavior
+    REMOTES="$(git remote)"
+    if [ -z "$REMOTES" ]; then
+        echo "ℹ️  No remotes configured"
+        exit 0
     fi
     
-    # Try to push current branch (master) - don't use timeout as it might interfere with SSH
-    PUSH_OUTPUT=$(git push "$remote" "$CURRENT_BRANCH" 2>&1)
-    PUSH_EXIT=$?
-    
-    if [ $PUSH_EXIT -eq 0 ]; then
-        # Check if output says "already up to date"
-        if echo "$PUSH_OUTPUT" | grep -qi "already up to date\|Everything up-to-date"; then
-            echo "ℹ️  $remote is already up to date"
-        else
+    echo "Pushing to remotes using git push..."
+    for remote in $REMOTES; do
+        echo "Pushing to $remote ($CURRENT_BRANCH)..."
+        if git push "$remote" "$CURRENT_BRANCH" 2>&1; then
             echo "✅ Successfully pushed to $remote"
-            echo "$PUSH_OUTPUT" | grep -v "^$" | head -3
+        else
+            echo "⚠️  Failed to push to $remote"
         fi
-    else
-        # Push failed - show the full error
-        echo "⚠️  Push to $remote failed:"
-        echo "$PUSH_OUTPUT" | sed 's/^/   /'
-        
-        # Check if it's a non-fast-forward (diverged history)
-        if echo "$PUSH_OUTPUT" | grep -qi "non-fast-forward\|behind.*remote\|diverged"; then
-            REMOTE_BRANCH="${remote}/${CURRENT_BRANCH}"
-            BEHIND=$(git rev-list --count HEAD.."$REMOTE_BRANCH" 2>/dev/null || echo "0")
-            AHEAD=$(git rev-list --count "$REMOTE_BRANCH"..HEAD 2>/dev/null || echo "0")
-            
-            if [ "$BEHIND" -gt 0 ]; then
-                echo ""
-                echo "   Histories have diverged:"
-                echo "   - Remote has $BEHIND commit(s) you don't have"
-                echo "   - You have $AHEAD commit(s) remote doesn't have"
-                echo ""
-                echo "   For sync script, attempting force push to overwrite remote with local..."
-                echo "   (This makes remote match the monorepo - monorepo is source of truth)"
-                
-                # Force push to make remote match local (monorepo is source of truth)
-                if FORCE_PUSH_OUTPUT=$(git push -f "$remote" "$CURRENT_BRANCH" 2>&1); then
-                    echo "✅ Successfully force-pushed to $remote"
-                    echo "$FORCE_PUSH_OUTPUT" | grep -v "^$" | head -2 | sed 's/^/   /'
-                else
-                    echo "⚠️  Force push also failed:"
-                    echo "$FORCE_PUSH_OUTPUT" | sed 's/^/   /'
-                fi
-            fi
-        elif echo "$PUSH_OUTPUT" | grep -qi "refspec\|branch.*not found\|no such branch"; then
-            # Branch doesn't exist on remote - set upstream
-            echo "   Attempting to set upstream and push..."
-            if git push -u "$remote" "$CURRENT_BRANCH" 2>&1; then
-                echo "✅ Successfully pushed to $remote (with upstream set)"
-            else
-                echo "   Still failed after setting upstream"
-            fi
-        fi
+    done
+else
+    # Use gitrep push-all
+    GITREP_CMD=""
+    if command -v gitrep >/dev/null 2>&1; then
+        GITREP_CMD="gitrep"
+    elif command -v gitrepublic >/dev/null 2>&1; then
+        GITREP_CMD="gitrepublic"
     fi
-done
+    
+    echo ""
+    echo "Pushing to all remotes using $GITREP_CMD push-all..."
+    
+    # Use gitrep push-all to push to all remotes
+    # This handles reachability checks, error handling, and provides better output
+    if $GITREP_CMD push-all "$CURRENT_BRANCH" 2>&1; then
+        echo "✅ Successfully pushed to all remotes"
+    else
+        PUSH_EXIT=$?
+        echo "⚠️  Push to some remotes may have failed (exit code: $PUSH_EXIT)"
+        # Don't exit with error - gitrep push-all may have succeeded for some remotes
+    fi
+fi
 
 echo ""
 echo "✅ Sync complete!"
