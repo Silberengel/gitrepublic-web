@@ -504,6 +504,11 @@
   } | null>(null);
   let showVerificationDialog = $state(false);
   let verificationFileContent = $state<string | null>(null);
+  
+  // Clone URL verification dialog
+  let showCloneUrlVerificationDialog = $state(false);
+  let verifyingCloneUrl = $state(false);
+  let selectedCloneUrlForVerification = $state<string | null>(null);
   let loadingVerification = $state(false);
 
   // Deletion request
@@ -3085,6 +3090,55 @@
     });
   }
 
+  // Verify clone URL by committing announcement
+  async function verifyCloneUrl() {
+    if (!selectedCloneUrlForVerification || !userPubkey || !userPubkeyHex) {
+      error = 'Unable to verify: missing information';
+      return;
+    }
+
+    if (!isMaintainer && userPubkeyHex !== repoOwnerPubkeyDerived) {
+      error = 'Only repository owners and maintainers can verify clone URLs';
+      return;
+    }
+
+    verifyingCloneUrl = true;
+    error = null;
+
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/verify`, {
+        method: 'POST',
+        headers: buildApiHeaders()
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || `Failed to verify: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      // Close dialog
+      showCloneUrlVerificationDialog = false;
+      selectedCloneUrlForVerification = null;
+
+      // Reload verification status after a short delay
+      setTimeout(() => {
+        checkVerification().catch((err: unknown) => {
+          console.warn('Failed to reload verification status:', err);
+        });
+      }, 1000);
+
+      // Show success message
+      alert(data.message || 'Repository verification initiated. The verification status will update shortly.');
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to verify repository';
+      console.error('Error verifying clone URL:', err);
+    } finally {
+      verifyingCloneUrl = false;
+    }
+  }
+
   async function deleteAnnouncement() {
     if (!userPubkey || !userPubkeyHex) {
       alert('Please connect your NIP-07 extension');
@@ -5527,26 +5581,68 @@
                   <span style="opacity: 0.5;">⋯</span>
                 </span>
               {:else if cloneVerification !== undefined}
-                <span 
-                  class="verification-badge" 
-                  class:verified={cloneVerification.verified} 
-                  class:unverified={!cloneVerification.verified}
-                  title={cloneVerification.verified ? 'Verified ownership' : (cloneVerification.error || 'Unverified')}
-                >
-                  {#if cloneVerification.verified}
+                {#if cloneVerification.verified}
+                  <span 
+                    class="verification-badge verified" 
+                    title="Verified ownership"
+                  >
                     <img src="/icons/check-circle.svg" alt="Verified" class="icon-inline" />
+                  </span>
+                {:else}
+                  {#if userPubkey && (isMaintainer || userPubkeyHex === repoOwnerPubkeyDerived) && isRepoCloned === true}
+                    <button
+                      class="verification-badge unverified clickable"
+                      title="Click to verify this repository by committing the repo announcement event"
+                      onclick={() => {
+                        selectedCloneUrlForVerification = cloneUrl;
+                        showCloneUrlVerificationDialog = true;
+                      }}
+                    >
+                      <img src="/icons/alert-triangle.svg" alt="Unverified" class="icon-inline" />
+                    </button>
                   {:else}
-                    <img src="/icons/alert-triangle.svg" alt="Unverified" class="icon-inline" />
+                    <span 
+                      class="verification-badge unverified" 
+                      title={cloneVerification.error || 'Unverified'}
+                    >
+                      <img src="/icons/alert-triangle.svg" alt="Unverified" class="icon-inline" />
+                    </span>
                   {/if}
-                </span>
+                {/if}
               {:else if verificationStatus}
-                <span class="verification-badge unverified" title="Verification status unknown">
-                  <img src="/icons/alert-triangle.svg" alt="Unknown" class="icon-inline" />
-                </span>
+                {#if userPubkey && (isMaintainer || userPubkeyHex === repoOwnerPubkeyDerived) && isRepoCloned === true}
+                  <button
+                    class="verification-badge unverified clickable"
+                    title="Click to verify this repository by committing the repo announcement event"
+                    onclick={() => {
+                      selectedCloneUrlForVerification = cloneUrl;
+                      showCloneUrlVerificationDialog = true;
+                    }}
+                  >
+                    <img src="/icons/alert-triangle.svg" alt="Unknown" class="icon-inline" />
+                  </button>
+                {:else}
+                  <span class="verification-badge unverified" title="Verification status unknown">
+                    <img src="/icons/alert-triangle.svg" alt="Unknown" class="icon-inline" />
+                  </span>
+                {/if}
               {:else}
-                <span class="verification-badge unverified" title="Verification not checked">
-                  <img src="/icons/alert-triangle.svg" alt="Not checked" class="icon-inline" />
-                </span>
+                {#if userPubkey && (isMaintainer || userPubkeyHex === repoOwnerPubkeyDerived) && isRepoCloned === true}
+                  <button
+                    class="verification-badge unverified clickable"
+                    title="Click to verify this repository by committing the repo announcement event"
+                    onclick={() => {
+                      selectedCloneUrlForVerification = cloneUrl;
+                      showCloneUrlVerificationDialog = true;
+                    }}
+                  >
+                    <img src="/icons/alert-triangle.svg" alt="Not checked" class="icon-inline" />
+                  </button>
+                {:else}
+                  <span class="verification-badge unverified" title="Verification not checked">
+                    <img src="/icons/alert-triangle.svg" alt="Not checked" class="icon-inline" />
+                  </span>
+                {/if}
               {/if}
               {#if isChecking || loadingReachability}
                 <span class="reachability-badge loading" title="Checking reachability...">
@@ -7582,6 +7678,76 @@
         </div>
         <div class="modal-actions">
           <button onclick={() => showVerificationDialog = false} class="cancel-button">Close</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Clone URL Verification Dialog -->
+  {#if showCloneUrlVerificationDialog}
+    <div 
+      class="modal-overlay" 
+      role="dialog"
+      aria-modal="true"
+      aria-label="Verify repository"
+      onclick={() => showCloneUrlVerificationDialog = false}
+      onkeydown={(e) => e.key === 'Escape' && (showCloneUrlVerificationDialog = false)}
+      tabindex="-1"
+    >
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div 
+        class="modal verification-modal" 
+        role="document"
+        onclick={(e) => e.stopPropagation()}
+      >
+        <div class="modal-header">
+          <h3>Verify Repository</h3>
+        </div>
+        <div class="modal-body">
+          <p class="verification-instructions">
+            Verify this repository by committing the repo announcement event to it.
+          </p>
+          {#if selectedCloneUrlForVerification}
+            <p style="margin: 1rem 0;">
+              <strong>Clone URL:</strong> <code>{selectedCloneUrlForVerification}</code>
+            </p>
+          {/if}
+          {#if isRepoCloned !== true}
+            <div class="error-message" style="margin: 1rem 0; padding: 0.75rem; background: var(--bg-warning, #fff3cd); border-left: 4px solid var(--text-warning, #856404); border-radius: 4px; color: var(--text-warning, #856404);">
+              <strong>Repository must be cloned first.</strong> Please clone this repository to the server before verifying ownership.
+            </div>
+          {:else}
+            <p style="margin: 1rem 0; color: var(--text-secondary);">
+              This will commit the repository announcement event to <code>nostr/repo-events.jsonl</code> in the default branch, which verifies that you control this repository.
+            </p>
+          {/if}
+          {#if error}
+            <div class="error-message" style="margin: 1rem 0; padding: 0.75rem; background: var(--bg-error, #fee); border-left: 4px solid var(--accent-error, #f00); border-radius: 4px;">
+              {error}
+            </div>
+          {/if}
+        </div>
+        <div class="modal-footer">
+          <button 
+            onclick={verifyCloneUrl} 
+            class="primary-button"
+            disabled={verifyingCloneUrl || !isRepoCloned}
+            title={!isRepoCloned ? 'Repository must be cloned first' : ''}
+          >
+            {verifyingCloneUrl ? 'Verifying...' : 'Verify Repository'}
+          </button>
+          <button 
+            onclick={() => {
+              showCloneUrlVerificationDialog = false;
+              selectedCloneUrlForVerification = null;
+              error = null;
+            }} 
+            class="cancel-button"
+            disabled={verifyingCloneUrl}
+          >
+            Cancel
+          </button>
         </div>
       </div>
     </div>

@@ -13,11 +13,18 @@ import { KIND } from '$lib/types/nostr.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { decodeNpubToHex } from '$lib/utils/npub-utils.js';
-import { createRepoGetHandler } from '$lib/utils/api-handlers.js';
-import type { RepoRequestContext } from '$lib/utils/api-context.js';
-import { handleApiError } from '$lib/utils/error-handler.js';
+import { createRepoGetHandler, createRepoPostHandler } from '$lib/utils/api-handlers.js';
+import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
+import { handleApiError, handleValidationError } from '$lib/utils/error-handler.js';
 import { eventCache } from '$lib/services/nostr/event-cache.js';
 import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
+import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
+import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
+import { AnnouncementManager } from '$lib/services/git/announcement-manager.js';
+import { extractRequestContext } from '$lib/utils/api-context.js';
+import { fetchUserEmail, fetchUserName } from '$lib/utils/user-profile.js';
+import simpleGit from 'simple-git';
+import logger from '$lib/services/logger.js';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
@@ -162,4 +169,107 @@ export const GET: RequestHandler = createRepoGetHandler(
     }
   },
   { operation: 'verifyRepo', requireRepoExists: false, requireRepoAccess: false } // Verification is public, doesn't need repo to exist
+);
+
+const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
+const announcementManager = new AnnouncementManager(repoRoot);
+
+export const POST: RequestHandler = createRepoPostHandler(
+  async (context: RepoRequestContext, event: RequestEvent) => {
+    const requestContext = extractRequestContext(event);
+    const userPubkeyHex = requestContext.userPubkeyHex;
+
+    if (!userPubkeyHex) {
+      return error(401, 'Authentication required. Please provide userPubkey.');
+    }
+
+    // Check if user is a maintainer
+    const isMaintainer = await maintainerService.isMaintainer(userPubkeyHex, context.repoOwnerPubkey, context.repo);
+    if (!isMaintainer) {
+      return error(403, 'Only repository maintainers can verify clone URLs.');
+    }
+
+    // Check if repository is cloned
+    const repoPath = join(repoRoot, context.npub, `${context.repo}.git`);
+    if (!existsSync(repoPath)) {
+      return error(404, 'Repository is not cloned locally. Please clone the repository first.');
+    }
+
+    // Fetch the repository announcement
+    const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, context.repoOwnerPubkey, eventCache);
+    const announcement = findRepoAnnouncement(allEvents, context.repo);
+
+    if (!announcement) {
+      return error(404, 'Repository announcement not found');
+    }
+
+    try {
+      // Get default branch
+      const defaultBranch = await fileManager.getDefaultBranch(context.npub, context.repo);
+      
+      // Get worktree for the default branch
+      const worktreePath = await fileManager.getWorktree(repoPath, defaultBranch, context.npub, context.repo);
+      
+      // Check if announcement already exists
+      const hasAnnouncement = await announcementManager.hasAnnouncementInRepo(worktreePath, announcement.id);
+      
+      if (hasAnnouncement) {
+        // Announcement already exists, but we'll update it anyway to ensure it's the latest
+        logger.debug({ npub: context.npub, repo: context.repo, eventId: announcement.id }, 'Announcement already exists, updating anyway');
+      }
+      
+      // Save announcement to worktree
+      const saved = await announcementManager.saveRepoEventToWorktree(worktreePath, announcement, 'announcement', false);
+      
+      if (!saved) {
+        return error(500, 'Failed to save announcement to repository');
+      }
+
+      // Stage the file
+      const workGit = simpleGit(worktreePath);
+      await workGit.add('nostr/repo-events.jsonl');
+
+      // Get author info
+      let authorName = await fetchUserName(userPubkeyHex, requestContext.userPubkey || '', DEFAULT_NOSTR_RELAYS);
+      let authorEmail = await fetchUserEmail(userPubkeyHex, requestContext.userPubkey || '', DEFAULT_NOSTR_RELAYS);
+      
+      if (!authorName) {
+        const { nip19 } = await import('nostr-tools');
+        const npub = requestContext.userPubkey || nip19.npubEncode(userPubkeyHex);
+        authorName = npub.substring(0, 20);
+      }
+      if (!authorEmail) {
+        const { nip19 } = await import('nostr-tools');
+        const npub = requestContext.userPubkey || nip19.npubEncode(userPubkeyHex);
+        authorEmail = `${npub.substring(0, 20)}@gitrepublic.web`;
+      }
+
+      // Commit the announcement
+      const commitMessage = `Verify repository ownership by committing repo announcement event\n\nEvent ID: ${announcement.id}`;
+      await workGit.commit(commitMessage, ['nostr/repo-events.jsonl'], {
+        '--author': `${authorName} <${authorEmail}>`
+      });
+
+      // Push to default branch (if there's a remote)
+      try {
+        await workGit.push('origin', defaultBranch);
+      } catch (pushErr) {
+        // Push might fail if there's no remote, that's okay
+        logger.debug({ error: pushErr, npub: context.npub, repo: context.repo }, 'Push failed (may not have remote)');
+      }
+
+      // Clean up worktree
+      await fileManager.removeWorktree(repoPath, worktreePath);
+
+      return json({
+        success: true,
+        message: 'Repository announcement committed successfully. Verification should update shortly.',
+        announcementId: announcement.id
+      });
+    } catch (err) {
+      logger.error({ error: err, npub: context.npub, repo: context.repo }, 'Failed to commit announcement for verification');
+      return handleApiError(err, { operation: 'verifyRepoCommit', npub: context.npub, repo: context.repo }, 'Failed to commit announcement');
+    }
+  },
+  { operation: 'verifyRepoCommit', requireRepoExists: true, requireRepoAccess: true }
 );

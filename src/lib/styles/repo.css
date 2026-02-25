@@ -2182,6 +2182,22 @@ span.clone-more {
   color: var(--error-text);
 }
 
+.verification-badge.clickable {
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.verification-badge.clickable:hover {
+  background: var(--bg-warning, rgba(255, 193, 7, 0.2));
+  border-color: var(--error-text);
+  transform: scale(1.05);
+}
+
+.verification-badge.clickable:active {
+  transform: scale(0.98);
+}
+
 .reachability-badge {
   display: inline-flex;
   align-items: center;
