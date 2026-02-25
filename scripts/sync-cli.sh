@@ -30,8 +30,17 @@ if [ ! -d "$SEPARATE_REPO" ]; then
     echo "   git remote add origin <your-repo-url>"
 fi
 
-# Change to separate repo directory
+# Change to separate repo directory and verify we're in a git repo
 cd "$SEPARATE_REPO" || exit 1
+
+# Verify we're in the correct git repository
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+    echo "Error: $SEPARATE_REPO is not a git repository"
+    exit 1
+fi
+
+# Store the absolute path to ensure we stay in this directory
+SEPARATE_REPO_ABS="$(cd "$SEPARATE_REPO" && pwd)"
 
 # Copy files using rsync
 rsync -av --delete \
@@ -114,8 +123,48 @@ else
     echo "✅ No changes to commit (files are up to date)"
 fi
 
-# Get current branch
-CURRENT_BRANCH="$(git branch --show-current || echo 'master')"
+# Get current branch - try multiple methods to detect the actual branch
+CURRENT_BRANCH=""
+if CURRENT_BRANCH=$(git branch --show-current 2>/dev/null); then
+    # Successfully got branch name
+    :
+elif CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null); then
+    # Alternative method
+    :
+elif CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null); then
+    # Another alternative
+    :
+else
+    # Try to detect from existing branches
+    if MAIN_BRANCH=$(git branch -l | grep -E '^\*?\s+(main|master|develop)' | head -1 | sed 's/^\*\?\s*//' | sed 's/^.*\s//'); then
+        CURRENT_BRANCH="$MAIN_BRANCH"
+    else
+        # Last resort: try main, then master
+        if git show-ref --verify --quiet refs/heads/main 2>/dev/null; then
+            CURRENT_BRANCH="main"
+        elif git show-ref --verify --quiet refs/heads/master 2>/dev/null; then
+            CURRENT_BRANCH="master"
+        else
+            echo "⚠️  Warning: Could not detect current branch, defaulting to 'main'"
+            CURRENT_BRANCH="main"
+        fi
+    fi
+fi
+
+if [ -z "$CURRENT_BRANCH" ]; then
+    echo "⚠️  Warning: Could not detect current branch, defaulting to 'main'"
+    CURRENT_BRANCH="main"
+fi
+
+echo "Detected branch: $CURRENT_BRANCH"
+
+# Verify the branch actually exists
+if ! git show-ref --verify --quiet "refs/heads/$CURRENT_BRANCH" 2>/dev/null; then
+    echo "⚠️  Error: Branch '$CURRENT_BRANCH' does not exist locally"
+    echo "   Available branches:"
+    git branch -l | sed 's/^/     /'
+    exit 1
+fi
 
 # Check if gitrep is available
 if ! command -v gitrep >/dev/null 2>&1 && ! command -v gitrepublic >/dev/null 2>&1; then
@@ -150,16 +199,97 @@ else
     
     echo ""
     echo "Pushing to all remotes using $GITREP_CMD push-all..."
+    echo "Working directory: $SEPARATE_REPO_ABS"
+    echo "Git directory: $(git rev-parse --git-dir)"
+    echo "Git remotes:"
+    git remote -v | sed 's/^/  /'
     
-    # Use gitrep push-all to push to all remotes
-    # This handles reachability checks, error handling, and provides better output
-    if $GITREP_CMD push-all "$CURRENT_BRANCH" 2>&1; then
-        echo "✅ Successfully pushed to all remotes"
-    else
-        PUSH_EXIT=$?
-        echo "⚠️  Push to some remotes may have failed (exit code: $PUSH_EXIT)"
-        # Don't exit with error - gitrep push-all may have succeeded for some remotes
-    fi
+    # Ensure we're in the separate repo directory when calling gitrep push-all
+    # Use a subshell with explicit directory change to ensure all git commands run correctly
+    # Clear any GIT_DIR or GIT_WORK_TREE that might interfere
+    (
+        # Change to the separate repo directory
+        cd "$SEPARATE_REPO_ABS" || { echo "Error: Failed to change to $SEPARATE_REPO_ABS"; exit 1; }
+        
+        # Clear environment variables that might interfere
+        unset GIT_DIR
+        unset GIT_WORK_TREE
+        
+        # Verify we're in the correct directory and using the correct git config
+        ACTUAL_GIT_DIR="$(git rev-parse --show-toplevel 2>/dev/null)"
+        if [ "$ACTUAL_GIT_DIR" != "$SEPARATE_REPO_ABS" ]; then
+            echo "⚠️  Warning: Git directory mismatch!"
+            echo "   Expected: $SEPARATE_REPO_ABS"
+            echo "   Actual: $ACTUAL_GIT_DIR"
+        fi
+        
+        echo "Using git config from: $ACTUAL_GIT_DIR"
+        echo "Verifying remotes before push:"
+        git remote -v | sed 's/^/  /'
+        
+        # Verify remotes point to gitrepublic-cli, not gitrepublic-web
+        WRONG_REMOTE=false
+        for remote in $(git remote); do
+            REMOTE_URL="$(git remote get-url "$remote" 2>/dev/null)"
+            if echo "$REMOTE_URL" | grep -q "gitrepublic-web\.git"; then
+                echo "⚠️  Error: Remote '$remote' points to gitrepublic-web instead of gitrepublic-cli!"
+                echo "   URL: $REMOTE_URL"
+                WRONG_REMOTE=true
+            fi
+        done
+        
+        if [ "$WRONG_REMOTE" = true ]; then
+            echo "❌ Cannot push: Remotes are pointing to the wrong repository"
+            exit 1
+        fi
+        
+        # Double-check we're in the right directory
+        if [ "$(pwd)" != "$SEPARATE_REPO_ABS" ]; then
+            echo "❌ Error: Not in the correct directory!"
+            echo "   Expected: $SEPARATE_REPO_ABS"
+            echo "   Actual: $(pwd)"
+            exit 1
+        fi
+        
+        # Get list of remotes to push to
+        REMOTES="$(git remote)"
+        if [ -z "$REMOTES" ]; then
+            echo "ℹ️  No remotes configured"
+            exit 0
+        fi
+        
+        # Push to each remote using regular git push
+        # This ensures we use the correct git config from this directory
+        SUCCESS_COUNT=0
+        FAIL_COUNT=0
+        
+        for remote in $REMOTES; do
+            echo ""
+            echo "Pushing to $remote ($CURRENT_BRANCH)..."
+            REMOTE_URL="$(git remote get-url "$remote" 2>/dev/null)"
+            echo "  Remote URL: $REMOTE_URL"
+            
+            if git push "$remote" "$CURRENT_BRANCH" 2>&1; then
+                echo "✅ Successfully pushed to $remote"
+                SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            else
+                echo "⚠️  Failed to push to $remote"
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+            fi
+        done
+        
+        echo ""
+        echo "======================================================================"
+        echo "Push Summary: $SUCCESS_COUNT succeeded, $FAIL_COUNT failed out of $(echo "$REMOTES" | wc -l) remotes"
+        echo "======================================================================"
+        
+        if [ $FAIL_COUNT -gt 0 ]; then
+            exit 1
+        else
+            exit 0
+        fi
+    )
+    PUSH_EXIT=$?
 fi
 
 echo ""

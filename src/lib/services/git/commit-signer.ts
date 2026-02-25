@@ -88,10 +88,15 @@ export function decodeNostrId(id: string): string {
 /**
  * Create a Nostr event for commit signing
  * This creates a kind 1640 (commit signature) event that can be used to sign commits
+ * 
+ * Note: The commit hash is not included in the event because:
+ * - For commit-msg hooks: The hook runs before the commit is created, so the hash doesn't exist yet
+ * - Nostr events are immutable: Once created and signed, they cannot be modified
+ * 
+ * Verification matches events to commits by comparing the commit message.
  */
 export function createCommitSignatureEvent(
   privateKey: string,
-  commitHash: string,
   commitMessage: string,
   authorName: string,
   authorEmail: string,
@@ -107,11 +112,10 @@ export function createCommitSignatureEvent(
     pubkey,
     created_at: timestamp,
       tags: [
-        ['commit', commitHash],
         ['author', authorName, authorEmail],
         ['message', commitMessage]
       ],
-      content: `Signed commit`
+      content: `Signed commit: ${commitMessage}`
   };
 
   // Finalize and sign the event
@@ -257,42 +261,15 @@ export async function createGitCommitSignature(
 }
 
 /**
- * Update commit signature with actual commit hash after commit is created
- */
-export function updateCommitSignatureWithHash(
-  signatureEvent: NostrEvent,
-  commitHash: string
-): NostrEvent {
-  // Add commit hash tag
-  const commitTag = signatureEvent.tags.find(t => t[0] === 'commit');
-  if (!commitTag) {
-    signatureEvent.tags.push(['commit', commitHash]);
-  } else {
-    commitTag[1] = commitHash;
-  }
-
-  // Recalculate event ID with updated tags
-  const serialized = JSON.stringify([
-    0,
-    signatureEvent.pubkey,
-    signatureEvent.created_at,
-    signatureEvent.kind,
-    signatureEvent.tags,
-    signatureEvent.content
-  ]);
-  signatureEvent.id = createHash('sha256').update(serialized).digest('hex');
-
-  // Note: Re-signing would require the private key, which we don't have here
-  // The signature in the original event is still valid for the commit hash tag
-  return signatureEvent;
-}
-
-/**
  * Verify a commit signature from a Nostr event and return original information
+ * 
+ * Verification matches events to commits by comparing the commit message,
+ * since commit signature events don't include the commit hash (the hook runs
+ * before the commit is created, and Nostr events are immutable).
  */
 export function verifyCommitSignature(
   signatureEvent: NostrEvent,
-  commitHash: string
+  commitMessage: string
 ): { 
   valid: boolean; 
   error?: string;
@@ -308,10 +285,17 @@ export function verifyCommitSignature(
     return { valid: false, error: `Invalid event kind for commit signature. Expected ${KIND.COMMIT_SIGNATURE}, got ${signatureEvent.kind}` };
   }
 
-  // Check commit hash tag
-  const commitTag = signatureEvent.tags.find(t => t[0] === 'commit');
-  if (!commitTag || commitTag[1] !== commitHash) {
-    return { valid: false, error: 'Commit hash mismatch' };
+  // Verify by matching the commit message
+  const messageTag = signatureEvent.tags.find(t => t[0] === 'message');
+  if (!messageTag || !messageTag[1]) {
+    return { valid: false, error: 'Commit signature event missing message tag' };
+  }
+  
+  // Compare commit message (normalize whitespace for comparison)
+  const eventMessage = messageTag[1].trim();
+  const actualMessage = commitMessage.replace(/Nostr-Signature:.*$/s, '').trim();
+  if (eventMessage !== actualMessage) {
+    return { valid: false, error: 'Commit message mismatch - signature event message does not match actual commit message' };
   }
 
   // Verify event signature cryptographically
@@ -327,7 +311,6 @@ export function verifyCommitSignature(
 
   // Extract original information from tags
   const authorTag = signatureEvent.tags.find(t => t[0] === 'author');
-  const messageTag = signatureEvent.tags.find(t => t[0] === 'message');
 
   return {
     valid: true,
@@ -444,8 +427,8 @@ export async function verifyCommitFromMessage(
     signatureEvent = events[0] as NostrEvent;
   }
 
-  // Verify the signature
-  const verification = verifyCommitSignature(signatureEvent, commitHash);
+  // Verify the signature by matching the commit message
+  const verification = verifyCommitSignature(signatureEvent, commitMessage);
   
   if (!verification.valid) {
     return { ...verification, hasSignature: true };

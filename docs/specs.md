@@ -112,11 +112,12 @@ GitRepublic uses custom event kinds not defined in any standard NIP:
 Cryptographically sign git commits using Nostr keys.
 
 **Tags**:
-- `commit`: Final commit hash
 - `author`: Author name (first occurrence)
 - `author`: Author email (second occurrence)
 - `message`: Commit message
 - `e`: Optional reference to NIP-98 auth event
+
+**Note:** Commit signature events do not include the commit hash because the commit-msg hook runs before the commit is created. Verification matches events to commits by comparing the commit message.
 
 **Status**: Custom implementation (may be proposed as NIP in future)
 

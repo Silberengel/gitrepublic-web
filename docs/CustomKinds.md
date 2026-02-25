@@ -17,7 +17,6 @@ Git commit signature events are used to cryptographically sign git commits using
   "created_at": 1234567890,
   "content": "Signed commit: <commit-message>\n\n<optional-additional-info>",
   "tags": [
-    ["commit", "abc123def456..."], // Final commit hash (added after commit is created)
     ["author", "John Doe"],        // Author name
     ["author", "john@example.com"], // Author email (second author tag)
     ["message", "Fix bug in feature"], // Commit message
@@ -30,10 +29,14 @@ Git commit signature events are used to cryptographically sign git commits using
 
 ### Tag Descriptions
 
-- **`commit`** (required): The final commit hash after the commit is created. This tag is added after the commit is created, as the hash is not known beforehand.
 - **`author`** (required, appears twice): First occurrence contains the author name, second contains the author email.
-- **`message`** (required): The commit message text.
+- **`message`** (required): The commit message text. Used for verification by matching with the actual commit message.
 - **`e`** (optional): Reference to a NIP-98 authentication event if the commit was made via HTTP git operations.
+
+**Note:** Commit signature events do not include the commit hash because:
+- The commit-msg hook runs **before** the commit is created, so the hash doesn't exist yet
+- Nostr events are **immutable** - once created and signed, they cannot be modified
+- Verification matches events to commits by comparing the commit message instead
 
 ### Usage in GitRepublic
 
@@ -47,8 +50,8 @@ Git commit signature events are used to cryptographically sign git commits using
    ```
 
 4. **Verification**: Commit signatures can be verified by:
-   - Checking the event signature
-   - Verifying the commit hash matches
+   - Checking the event signature (cryptographic verification)
+   - Matching the commit message in the `message` tag with the actual commit message
    - Confirming the author information matches the commit
 
 ### Rationale

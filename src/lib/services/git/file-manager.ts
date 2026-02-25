@@ -1318,12 +1318,8 @@ export class FileManager {
             signatureEvent = event;
           }
           
-          // Update signature event with actual commit hash
-          const { updateCommitSignatureWithHash } = await import('./commit-signer.js');
-          const updatedEvent = updateCommitSignatureWithHash(signatureEvent, commitHash);
-          
           // Save to nostr/commit-signatures.jsonl (use workDir since we have it)
-          await this.saveCommitSignatureEventToWorktree(workDir, updatedEvent);
+          await this.saveCommitSignatureEventToWorktree(workDir, signatureEvent);
           
           // Check if repo is private - only publish to relays if public
           const isPrivate = await this.isRepoPrivate(npub, repoName);
