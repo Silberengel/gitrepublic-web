@@ -26,11 +26,35 @@ function execGitWithEnv(
       // Security: Only use whitelisted env vars, don't spread process.env
       // The env parameter should already contain only safe, whitelisted variables
       env: env,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Ensure detached process group to prevent zombie processes
+      detached: false
     });
 
     let stdout = '';
     let stderr = '';
+    let resolved = false;
+
+    // Set a timeout to prevent hanging processes (30 minutes for long operations)
+    const timeoutMs = 30 * 60 * 1000;
+    const timeoutId = setTimeout(() => {
+      if (!resolved && !gitProcess.killed) {
+        resolved = true;
+        // Kill the process tree to prevent zombies
+        try {
+          gitProcess.kill('SIGTERM');
+          // Force kill after grace period
+          setTimeout(() => {
+            if (!gitProcess.killed) {
+              gitProcess.kill('SIGKILL');
+            }
+          }, 5000);
+        } catch (err) {
+          // Process might already be dead
+        }
+        reject(new Error(`Git command timeout after ${timeoutMs}ms: ${args.join(' ')}`));
+      }
+    }, timeoutMs);
 
     gitProcess.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -40,16 +64,49 @@ function execGitWithEnv(
       stderr += chunk.toString();
     });
 
-    gitProcess.on('close', (code) => {
+    gitProcess.on('close', (code, signal) => {
+      clearTimeout(timeoutId);
+      if (resolved) return;
+      resolved = true;
+      
+      // Ensure process is fully cleaned up
+      if (gitProcess.pid && !gitProcess.killed) {
+        try {
+          // Wait for any remaining child processes
+          process.kill(gitProcess.pid, 0); // Check if process exists
+        } catch {
+          // Process already dead, that's fine
+        }
+      }
+      
       if (code === 0) {
         resolve({ stdout, stderr });
       } else {
-        reject(new Error(`Git command failed with code ${code}: ${stderr || stdout}`));
+        const errorMsg = signal 
+          ? `Git command terminated by signal ${signal}: ${stderr || stdout}`
+          : `Git command failed with code ${code}: ${stderr || stdout}`;
+        reject(new Error(errorMsg));
       }
     });
 
     gitProcess.on('error', (err) => {
+      clearTimeout(timeoutId);
+      if (resolved) return;
+      resolved = true;
       reject(err);
+    });
+
+    // Handle process exit (backup to 'close' event)
+    gitProcess.on('exit', (code, signal) => {
+      // This is handled by 'close' event, but ensures we catch all cases
+      if (!resolved && code !== null && code !== 0) {
+        clearTimeout(timeoutId);
+        resolved = true;
+        const errorMsg = signal 
+          ? `Git command terminated by signal ${signal}: ${stderr || stdout}`
+          : `Git command failed with code ${code}: ${stderr || stdout}`;
+        reject(new Error(errorMsg));
+      }
     });
   });
 }
