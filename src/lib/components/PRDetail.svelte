@@ -384,35 +384,44 @@
 
 <div class="pr-detail-view">
   <div class="pr-header">
-    <h2>{pr.subject}</h2>
+    <div class="pr-header-top">
+      <h2>{pr.subject}</h2>
+      {#if isMaintainer && userPubkeyHex}
+        <select
+          value={pr.status}
+          onchange={(e) => {
+            const target = e.target as HTMLSelectElement;
+            if (target) updatePRStatus(target.value as 'open' | 'merged' | 'closed' | 'draft');
+          }}
+          disabled={updatingStatus}
+          class="status-dropdown"
+          class:open={pr.status === 'open'}
+          class:closed={pr.status === 'closed'}
+          class:merged={pr.status === 'merged'}
+          class:draft={pr.status === 'draft'}
+        >
+          <option value="open">Open</option>
+          <option value="merged">Merged</option>
+          <option value="closed">Closed</option>
+          <option value="draft">Draft</option>
+        </select>
+      {:else}
+        <span class="pr-status" class:open={pr.status === 'open'} class:closed={pr.status === 'closed'} class:merged={pr.status === 'merged'}>
+          {pr.status}
+        </span>
+      {/if}
+    </div>
     <div class="pr-meta">
-      <span class="pr-status" class:open={pr.status === 'open'} class:closed={pr.status === 'closed'} class:merged={pr.status === 'merged'}>
-        {pr.status}
-      </span>
       {#if pr.commitId}
         <span>Commit: {pr.commitId.slice(0, 7)}</span>
       {/if}
       <span>Created {new Date(pr.created_at * 1000).toLocaleString()}</span>
     </div>
-    {#if isMaintainer && userPubkeyHex}
+    {#if isMaintainer && userPubkeyHex && pr.status === 'open' && pr.commitId}
       <div class="pr-actions">
-        {#if pr.status === 'open'}
-          <button onclick={() => showMergeDialog = true} disabled={merging || !pr.commitId} class="action-btn merge-btn">
-            {merging ? 'Merging...' : 'Merge'}
-          </button>
-          <button onclick={() => updatePRStatus('closed')} disabled={updatingStatus} class="action-btn close-btn">
-            {updatingStatus ? 'Closing...' : 'Close'}
-          </button>
-        {:else if pr.status === 'closed'}
-          <button onclick={() => updatePRStatus('open')} disabled={updatingStatus} class="action-btn reopen-btn">
-            {updatingStatus ? 'Reopening...' : 'Reopen'}
-          </button>
-        {/if}
-        {#if pr.status !== 'draft'}
-          <button onclick={() => updatePRStatus('draft')} disabled={updatingStatus} class="action-btn draft-btn">
-            {updatingStatus ? 'Updating...' : 'Mark as Draft'}
-          </button>
-        {/if}
+        <button onclick={() => showMergeDialog = true} disabled={merging} class="action-btn merge-btn">
+          {merging ? 'Merging...' : 'Merge'}
+        </button>
       </div>
     {/if}
   </div>

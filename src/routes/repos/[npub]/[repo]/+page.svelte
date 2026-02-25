@@ -577,7 +577,8 @@
   });
 
   // Patches
-  let patches = $state<Array<{ id: string; subject: string; content: string; author: string; created_at: number; kind: number; description?: string; tags?: string[][] }>>([]);
+  let patches = $state<Array<{ id: string; subject: string; content: string; status: string; author: string; created_at: number; kind: number; description?: string; tags?: string[][] }>>([]);
+  let updatingPatchStatus = $state<Record<string, boolean>>({});
   let loadingPatches = $state(false);
   let selectedPatch = $state<string | null>(null);
   let showCreatePatchDialog = $state(false);
@@ -1938,7 +1939,7 @@
       }
       const repoOwnerPubkey = decoded.data as string;
 
-      // Fetch repo announcement to get chat-relay tags and announcement ID
+      // Fetch repo announcement to get project-relay tags and announcement ID
       const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
       const events = await client.fetchEvents([
         {
@@ -1956,7 +1957,7 @@
 
       const announcement = events[0];
       const chatRelays = announcement.tags
-        .filter(t => t[0] === 'chat-relay')
+        .filter(t => t[0] === 'project-relay')
         .flatMap(t => t.slice(1))
         .filter(url => url && typeof url === 'string') as string[];
 
@@ -1985,7 +1986,7 @@
       ])];
       
       console.log('[Discussions] Using all available relays for threads:', allRelays);
-      console.log('[Discussions] Chat relays from announcement:', chatRelays);
+      console.log('[Discussions] Project relays from announcement:', chatRelays);
 
       const discussionsService = new DiscussionsService(allRelays);
       const discussionEntries = await discussionsService.getDiscussions(
@@ -2089,9 +2090,9 @@
       const announcement = events[0];
       const repoAddress = `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkey}:${repo}`;
 
-      // Get chat relays from announcement, or use default relays
+      // Get project relays from announcement, or use default relays
       const chatRelays = announcement.tags
-        .filter(t => t[0] === 'chat-relay')
+        .filter(t => t[0] === 'project-relay')
         .flatMap(t => t.slice(1))
         .filter(url => url && typeof url === 'string') as string[];
 
@@ -2190,9 +2191,9 @@
 
       const announcement = events[0];
       
-      // Get chat relays from announcement, or use default relays
+      // Get project relays from announcement, or use default relays
       const chatRelays = announcement.tags
-        .filter(t => t[0] === 'chat-relay')
+        .filter(t => t[0] === 'project-relay')
         .flatMap(t => t.slice(1))
         .filter(url => url && typeof url === 'string') as string[];
 
@@ -4831,6 +4832,44 @@
     }
   }
 
+  async function updatePatchStatus(patchId: string, patchAuthor: string, status: string) {
+    if (!userPubkey || !userPubkeyHex) {
+      error = 'Please log in to update patch status';
+      return;
+    }
+
+    updatingPatchStatus[patchId] = true;
+    error = null;
+
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/patches`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildApiHeaders()
+        },
+        body: JSON.stringify({
+          patchId,
+          patchAuthor,
+          status
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Failed to update patch status: ${response.statusText}`);
+      }
+
+      // Reload patches to get updated status
+      await loadPatches();
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to update patch status';
+      console.error('Error updating patch status:', err);
+    } finally {
+      updatingPatchStatus[patchId] = false;
+    }
+  }
+
   async function updateIssueStatus(issueId: string, issueAuthor: string, status: 'open' | 'closed' | 'resolved' | 'draft') {
     if (!userPubkeyHex) {
       alert('Please connect your NIP-07 extension');
@@ -5037,7 +5076,7 @@
       });
       if (response.ok) {
         const data = await response.json();
-        patches = data.map((patch: { id: string; tags: string[][]; content: string; pubkey: string; created_at: number; kind?: number }) => {
+        patches = data.map((patch: { id: string; tags: string[][]; content: string; pubkey: string; created_at: number; kind?: number; status?: string }) => {
           // Extract subject/title from various sources
           let subject = patch.tags.find((t: string[]) => t[0] === 'subject')?.[1];
           const description = patch.tags.find((t: string[]) => t[0] === 'description')?.[1];
@@ -5069,6 +5108,7 @@
             id: patch.id,
             subject: subject || 'Untitled',
             content: patch.content,
+            status: patch.status || 'open',
             author: patch.pubkey,
             created_at: patch.created_at,
             kind: patch.kind || KIND.PATCH,
@@ -6067,6 +6107,9 @@
                   class="patch-item-button"
                 >
                   <div class="patch-header">
+                    <span class="patch-status" class:open={patch.status === 'open'} class:closed={patch.status === 'closed'} class:applied={patch.status === 'applied'} class:draft={patch.status === 'draft'}>
+                      {patch.status}
+                    </span>
                     <span class="patch-subject">{patch.subject}</span>
                   </div>
                   <div class="patch-meta">
@@ -6503,11 +6546,34 @@
               {@const issue = issues.find(i => i.id === selectedIssue)}
               {#if issue}
                 <div class="issue-detail">
-                  <h3>{issue.subject}</h3>
+                  <div class="issue-detail-header">
+                    <h3>{issue.subject}</h3>
+                    {#if userPubkeyHex && (isMaintainer || userPubkeyHex === repoOwnerPubkeyDerived || userPubkeyHex === issue.author)}
+                      <select
+                        value={issue.status}
+                        onchange={(e) => {
+                          const target = e.target as HTMLSelectElement;
+                          if (target) updateIssueStatus(issue.id, issue.author, target.value as 'open' | 'closed' | 'resolved' | 'draft');
+                        }}
+                        disabled={updatingIssueStatus[issue.id]}
+                        class="status-dropdown"
+                        class:open={issue.status === 'open'}
+                        class:closed={issue.status === 'closed'}
+                        class:resolved={issue.status === 'resolved'}
+                        class:draft={issue.status === 'draft'}
+                      >
+                        <option value="open">Open</option>
+                        <option value="resolved">Resolved</option>
+                        <option value="closed">Closed</option>
+                        <option value="draft">Draft</option>
+                      </select>
+                    {:else}
+                      <span class="issue-status" class:open={issue.status === 'open'} class:closed={issue.status === 'closed'} class:resolved={issue.status === 'resolved'}>
+                        {issue.status}
+                      </span>
+                    {/if}
+                  </div>
                   <div class="issue-meta-detail">
-                    <span class="issue-status" class:open={issue.status === 'open'} class:closed={issue.status === 'closed'} class:resolved={issue.status === 'resolved'}>
-                      {issue.status}
-                    </span>
                     <span>#{issue.id.slice(0, 7)}</span>
                     <span>Created {new Date(issue.created_at * 1000).toLocaleString()}</span>
                     <EventCopyButton eventId={issue.id} kind={issue.kind} pubkey={issue.author} />
@@ -6516,22 +6582,6 @@
                     {@html issue.content.replace(/\n/g, '<br>')}
                   </div>
                   
-                  {#if userPubkeyHex && (isMaintainer || userPubkeyHex === issue.author)}
-                    <div class="issue-actions">
-                      {#if issue.status === 'open'}
-                        <button onclick={() => updateIssueStatus(issue.id, issue.author, 'closed')} disabled={updatingIssueStatus[issue.id]} class="issue-action-btn close-btn">
-                          {updatingIssueStatus[issue.id] ? 'Closing...' : 'Close'}
-                        </button>
-                        <button onclick={() => updateIssueStatus(issue.id, issue.author, 'resolved')} disabled={updatingIssueStatus[issue.id]} class="issue-action-btn resolve-btn">
-                          {updatingIssueStatus[issue.id] ? 'Resolving...' : 'Resolve'}
-                        </button>
-                      {:else if issue.status === 'closed' || issue.status === 'resolved'}
-                        <button onclick={() => updateIssueStatus(issue.id, issue.author, 'open')} disabled={updatingIssueStatus[issue.id]} class="issue-action-btn reopen-btn">
-                          {updatingIssueStatus[issue.id] ? 'Reopening...' : 'Reopen'}
-                        </button>
-                      {/if}
-                    </div>
-                  {/if}
                   
                   <div class="issue-replies">
                     <h4>Replies ({issueReplies.length})</h4>
@@ -6649,7 +6699,33 @@
             {:else if selectedPatch}
               {#each patches.filter(p => p.id === selectedPatch) as patch}
                 <div class="patch-detail">
-                  <h3>{patch.subject}</h3>
+                  <div class="patch-detail-header">
+                    <h3>{patch.subject}</h3>
+                    {#if userPubkey && (isMaintainer || userPubkeyHex === repoOwnerPubkeyDerived || userPubkeyHex === patch.author)}
+                      <select
+                        value={patch.status}
+                        onchange={(e) => {
+                          const target = e.target as HTMLSelectElement;
+                          if (target) updatePatchStatus(patch.id, patch.author, target.value);
+                        }}
+                        disabled={updatingPatchStatus[patch.id]}
+                        class="status-dropdown"
+                        class:open={patch.status === 'open'}
+                        class:closed={patch.status === 'closed'}
+                        class:applied={patch.status === 'applied'}
+                        class:draft={patch.status === 'draft'}
+                      >
+                        <option value="open">Open</option>
+                        <option value="applied">Applied</option>
+                        <option value="closed">Closed</option>
+                        <option value="draft">Draft</option>
+                      </select>
+                    {:else}
+                      <span class="patch-status" class:open={patch.status === 'open'} class:closed={patch.status === 'closed'} class:applied={patch.status === 'applied'} class:draft={patch.status === 'draft'}>
+                        {patch.status}
+                      </span>
+                    {/if}
+                  </div>
                   <div class="patch-meta-detail">
                     <span>#{patch.id.slice(0, 7)}</span>
                     <span>Created {new Date(patch.created_at * 1000).toLocaleString()}</span>

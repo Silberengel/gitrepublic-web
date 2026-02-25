@@ -77,7 +77,7 @@ export class DiscussionsService {
   }
 
   /**
-   * Fetch kind 11 discussion threads from chat relays
+   * Fetch kind 11 discussion threads from project relays
    * Threads should reference the repo announcement via an 'a' tag
    */
   async getThreads(

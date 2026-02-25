@@ -2087,17 +2087,95 @@ span.clone-more {
 }
 
 .issue-status,
-.pr-status {
+.pr-status,
+.patch-status {
   padding: 0.125rem 0.5rem;
   border-radius: 0.25rem;
   font-size: 0.75rem;
   font-weight: 500;
+  text-transform: capitalize;
 }
 
 .issue-status.open,
-.pr-status.open {
+.pr-status.open,
+.patch-status.open {
   background: var(--accent);
   color: var(--accent-text, #ffffff);
+}
+
+.issue-status.closed,
+.pr-status.closed,
+.patch-status.closed {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+
+.issue-status.resolved,
+.pr-status.merged,
+.patch-status.applied {
+  background: var(--success-bg, #d4edda);
+  color: var(--success-text, #155724);
+}
+
+.issue-status.draft,
+.pr-status.draft,
+.patch-status.draft {
+  background: var(--bg-tertiary, #e9ecef);
+  color: var(--text-secondary);
+}
+
+/* Status dropdown */
+.status-dropdown {
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.25rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.status-dropdown.open {
+  background: var(--accent);
+  color: var(--accent-text, #ffffff);
+  border-color: var(--accent);
+}
+
+.status-dropdown.closed {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+
+.status-dropdown.resolved,
+.status-dropdown.merged,
+.status-dropdown.applied {
+  background: var(--success-bg, #d4edda);
+  color: var(--success-text, #155724);
+}
+
+.status-dropdown.draft {
+  background: var(--bg-tertiary, #e9ecef);
+  color: var(--text-secondary);
+}
+
+/* Detail headers with status */
+.issue-detail-header,
+.patch-detail-header,
+.pr-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.issue-detail-header h3,
+.patch-detail-header h3,
+.pr-header-top h2 {
+  margin: 0;
+  flex: 1;
 }
 
 .create-issue-button,
