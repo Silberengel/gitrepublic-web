@@ -17,6 +17,7 @@ import { verifyEvent } from 'nostr-tools';
 import { validatePubkey } from '$lib/utils/input-validation.js';
 import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 import { eventCache } from '$lib/services/nostr/event-cache.js';
+import { getRelaysForEventPublishing } from '$lib/utils/repo-visibility.js';
 
 export const GET: RequestHandler = createRepoGetHandler(
   async (context: RepoRequestContext) => {
@@ -107,8 +108,17 @@ export const POST: RequestHandler = withRepoValidation(
       throw handleValidationError('Invalid event: missing required fields, invalid format, or invalid signature', { operation: 'createIssue', npub: repoContext.npub, repo: repoContext.repo });
     }
 
-    // Publish the event to relays
-    const result = await nostrClient.publishEvent(issueEvent, DEFAULT_NOSTR_RELAYS);
+    // Get repository announcement to determine visibility and relay publishing
+    const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoContext.repoOwnerPubkey, eventCache);
+    const announcement = findRepoAnnouncement(allEvents, repoContext.repo);
+    
+    // Determine which relays to publish to based on visibility
+    const relaysToPublish = announcement ? getRelaysForEventPublishing(announcement) : DEFAULT_NOSTR_RELAYS;
+    
+    // Publish the event to relays (empty array means no relay publishing, but event is still saved to repo)
+    const result = relaysToPublish.length > 0 
+      ? await nostrClient.publishEvent(issueEvent, relaysToPublish)
+      : { success: [], failed: [] };
     
     if (result.failed.length > 0 && result.success.length === 0) {
       throw handleApiError(new Error('Failed to publish issue to all relays'), { operation: 'createIssue', npub: repoContext.npub, repo: repoContext.repo }, 'Failed to publish issue to all relays');
@@ -190,13 +200,21 @@ export const PATCH: RequestHandler = withRepoValidation(
       throw handleApiError(new Error('Only repository owners, maintainers, or issue authors can update issue status'), { operation: 'updateIssueStatus', npub: repoContext.npub, repo: repoContext.repo }, 'Unauthorized');
     }
 
-    // Update issue status
+    // Get repository announcement to determine visibility and relay publishing
+    const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoContext.repoOwnerPubkey, eventCache);
+    const announcement = findRepoAnnouncement(allEvents, repoContext.repo);
+    
+    // Determine which relays to publish to based on visibility
+    const relaysToPublish = announcement ? getRelaysForEventPublishing(announcement) : DEFAULT_NOSTR_RELAYS;
+    
+    // Update issue status with visibility-based relays
     const statusEvent = await issuesService.updateIssueStatus(
       issueId,
       issueAuthor,
       repoContext.repoOwnerPubkey,
       repoContext.repo,
-      status
+      status,
+      relaysToPublish
     );
 
     return json({ success: true, event: statusEvent });

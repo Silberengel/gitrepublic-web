@@ -8,6 +8,7 @@ import { DEFAULT_NOSTR_RELAYS, combineRelays, getGitUrl } from '$lib/config.js';
 import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { KIND, type NostrEvent } from '$lib/types/nostr.js';
+import { getVisibility, getProjectRelays } from '$lib/utils/repo-visibility.js';
 import { nip19 } from 'nostr-tools';
 import { signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
 import { requireNpubHex, decodeNpubToHex } from '$lib/utils/npub-utils.js';
@@ -235,6 +236,10 @@ export const POST: RequestHandler = async ({ params, request }) => {
       return error(400, 'Cannot create fork with only localhost. The original repository must have at least one public clone URL, or you need to configure a Tor .onion address.');
     }
 
+    // Preserve visibility and project-relay from original repo
+    const originalVisibility = getVisibility(originalAnnouncement);
+    const originalProjectRelays = getProjectRelays(originalAnnouncement);
+    
     // Build fork announcement tags
     // Use standardized fork tag: ['fork', '30617:pubkey:d-tag']
     const originalRepoTag = `${KIND.REPO_ANNOUNCEMENT}:${originalOwnerPubkey}:${repo}`;
@@ -247,6 +252,16 @@ export const POST: RequestHandler = async ({ params, request }) => {
       ['fork', originalRepoTag], // Standardized fork tag format
       ['p', originalOwnerPubkey], // Original owner
     ];
+    
+    // Preserve visibility from original repo (defaults to public if not set)
+    if (originalVisibility !== 'public') {
+      tags.push(['visibility', originalVisibility]);
+    }
+    
+    // Preserve project-relay tags from original repo
+    for (const relay of originalProjectRelays) {
+      tags.push(['project-relay', relay]);
+    }
 
     // Add earliest unique commit if available
     if (earliestCommit) {

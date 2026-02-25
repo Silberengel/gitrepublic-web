@@ -150,7 +150,8 @@ export class PRsService {
     repoOwnerPubkey: string,
     repoId: string,
     status: 'open' | 'merged' | 'closed' | 'draft',
-    mergeCommitId?: string
+    mergeCommitId?: string,
+    relays?: string[]
   ): Promise<StatusEvent> {
     const repoAddress = this.getRepoAddress(repoOwnerPubkey, repoId);
     
@@ -193,8 +194,14 @@ export class PRsService {
       pubkey: ''
     });
 
-    const result = await this.nostrClient.publishEvent(event, this.relays);
-    if (result.failed.length > 0 && result.success.length === 0) {
+    const targetRelays = relays || this.relays;
+    // If relays array is empty, don't publish (private visibility)
+    const result = targetRelays.length > 0 
+      ? await this.nostrClient.publishEvent(event, targetRelays)
+      : { success: [], failed: [] };
+    
+    // Only throw error if we tried to publish and all failed
+    if (targetRelays.length > 0 && result.failed.length > 0 && result.success.length === 0) {
       throw new Error('Failed to publish status update to all relays');
     }
 

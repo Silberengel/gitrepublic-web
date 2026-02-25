@@ -12,6 +12,9 @@ import { handleValidationError, handleApiError } from '$lib/utils/error-handler.
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
 import { forwardEventIfEnabled } from '$lib/services/messaging/event-forwarder.js';
 import logger from '$lib/services/logger.js';
+import { getRelaysForEventPublishing } from '$lib/utils/repo-visibility.js';
+import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
 
 export const GET: RequestHandler = createRepoGetHandler(
   async (context: RepoRequestContext) => {
@@ -35,8 +38,17 @@ export const POST: RequestHandler = withRepoValidation(
       throw handleValidationError('Invalid event: missing signature or ID', { operation: 'createPR', npub: repoContext.npub, repo: repoContext.repo });
     }
 
-    // Publish the event to relays
-    const result = await nostrClient.publishEvent(prEvent, DEFAULT_NOSTR_RELAYS);
+    // Get repository announcement to determine visibility and relay publishing
+    const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoContext.repoOwnerPubkey, eventCache);
+    const announcement = findRepoAnnouncement(allEvents, repoContext.repo);
+    
+    // Determine which relays to publish to based on visibility
+    const relaysToPublish = announcement ? getRelaysForEventPublishing(announcement) : DEFAULT_NOSTR_RELAYS;
+    
+    // Publish the event to relays (empty array means no relay publishing, but event is still saved to repo)
+    const result = relaysToPublish.length > 0 
+      ? await nostrClient.publishEvent(prEvent, relaysToPublish)
+      : { success: [], failed: [] };
     
     if (result.failed.length > 0 && result.success.length === 0) {
       throw handleApiError(new Error('Failed to publish pull request to all relays'), { operation: 'createPR', npub: repoContext.npub, repo: repoContext.repo }, 'Failed to publish pull request to all relays');
@@ -74,14 +86,22 @@ export const PATCH: RequestHandler = withRepoValidation(
       throw handleApiError(new Error('Only repository owners and maintainers can update PR status'), { operation: 'updatePRStatus', npub: repoContext.npub, repo: repoContext.repo }, 'Unauthorized');
     }
 
-    // Update PR status
+    // Get repository announcement to determine visibility and relay publishing
+    const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoContext.repoOwnerPubkey, eventCache);
+    const announcement = findRepoAnnouncement(allEvents, repoContext.repo);
+    
+    // Determine which relays to publish to based on visibility
+    const relaysToPublish = announcement ? getRelaysForEventPublishing(announcement) : DEFAULT_NOSTR_RELAYS;
+    
+    // Update PR status with visibility-based relays
     const statusEvent = await prsService.updatePRStatus(
       prId,
       prAuthor,
       repoContext.repoOwnerPubkey,
       repoContext.repo,
       status,
-      mergeCommitId
+      mergeCommitId,
+      relaysToPublish
     );
 
     return json({ success: true, event: statusEvent });

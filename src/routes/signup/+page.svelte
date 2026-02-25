@@ -30,7 +30,8 @@
   let imageUrl = $state('');
   let bannerUrl = $state('');
   let earliestCommit = $state('');
-  let isPrivate = $state(false);
+  let visibility = $state<'public' | 'unlisted' | 'restricted' | 'private'>('public');
+  let projectRelays = $state<string[]>(['']);
   let isFork = $state(false);
   let forkOriginalRepo = $state(''); // Original repo identifier: npub/repo, naddr, or 30617:owner:repo format
   let addClientTag = $state(true); // Add ["client", "gitrepublic-web"] tag
@@ -261,11 +262,30 @@
             // Check if client tag exists
             addClientTag = !event.tags.some(t => t[0] === 'client' && t[1] === 'gitrepublic-web');
             
+            // Read visibility tag (defaults to 'public')
+            const visibilityTag = event.tags.find(t => t[0] === 'visibility' && t[1]);
+            if (visibilityTag && visibilityTag[1]) {
+              const vis = visibilityTag[1].toLowerCase();
+              if (['public', 'unlisted', 'restricted', 'private'].includes(vis)) {
+                visibility = vis as typeof visibility;
+              }
+            }
+            
+            // Read project-relay tags
+            const projectRelayTags = event.tags.filter(t => t[0] === 'project-relay');
+            if (projectRelayTags.length > 0) {
+              projectRelays = projectRelayTags.flatMap(t => t.slice(1)).filter(r => r && typeof r === 'string');
+              if (projectRelays.length === 0) projectRelays = [''];
+            }
+            
+            // Backward compatibility: check for old private tag
             const isPrivateTag = event.tags.find(t => 
               (t[0] === 'private' && t[1] === 'true') || 
               (t[0] === 't' && t[1] === 'private')
             );
-            if (isPrivateTag) isPrivate = true;
+            if (isPrivateTag && !visibilityTag) {
+              visibility = 'restricted'; // Map old private to restricted
+            }
             
             // Set existing repo ref for updating
             existingRepoRef = event.id;
@@ -490,11 +510,30 @@
             // Check if client tag exists
             addClientTag = !event.tags.some(t => t[0] === 'client' && t[1] === 'gitrepublic-web');
             
+            // Read visibility tag (defaults to 'public')
+            const visibilityTag = event.tags.find(t => t[0] === 'visibility' && t[1]);
+            if (visibilityTag && visibilityTag[1]) {
+              const vis = visibilityTag[1].toLowerCase();
+              if (['public', 'unlisted', 'restricted', 'private'].includes(vis)) {
+                visibility = vis as typeof visibility;
+              }
+            }
+            
+            // Read project-relay tags
+            const projectRelayTags = event.tags.filter(t => t[0] === 'project-relay');
+            if (projectRelayTags.length > 0) {
+              projectRelays = projectRelayTags.flatMap(t => t.slice(1)).filter(r => r && typeof r === 'string');
+              if (projectRelays.length === 0) projectRelays = [''];
+            }
+            
+            // Backward compatibility: check for old private tag
             const isPrivateTag = event.tags.find(t => 
               (t[0] === 'private' && t[1] === 'true') || 
               (t[0] === 't' && t[1] === 'private')
             );
-            if (isPrivateTag) isPrivate = true;
+            if (isPrivateTag && !visibilityTag) {
+              visibility = 'restricted'; // Map old private to restricted
+            }
             
             // Set existing repo ref for updating
             existingRepoRef = event.id;
@@ -964,18 +1003,32 @@
           }
         }
         
-        // Filter private repos
+        // Filter repos by visibility
         const filteredPrivateEvents = await Promise.all(
           filteredEvents.map(async (event): Promise<NostrEvent | null> => {
-            const isPrivate = event.tags.some(t => 
-              (t[0] === 'private' && t[1] === 'true') || 
-              (t[0] === 't' && t[1] === 'private')
-            );
+            // Check visibility tag
+            const visibilityTag = event.tags.find(t => t[0] === 'visibility' && t[1]);
+            let repoVisibility: 'public' | 'unlisted' | 'restricted' | 'private' = 'public';
+            if (visibilityTag && visibilityTag[1]) {
+              const vis = visibilityTag[1].toLowerCase();
+              if (['public', 'unlisted', 'restricted', 'private'].includes(vis)) {
+                repoVisibility = vis as typeof repoVisibility;
+              }
+            }
             
-            // Public repos are always visible
-            if (!isPrivate) return event;
+            // Backward compatibility: check for old private tag
+            if (!visibilityTag) {
+              const isPrivate = event.tags.some(t => 
+                (t[0] === 'private' && t[1] === 'true') || 
+                (t[0] === 't' && t[1] === 'private')
+              );
+              if (isPrivate) repoVisibility = 'restricted';
+            }
             
-            // Private repos: only show if user is owner
+            // Public and unlisted repos are always visible
+            if (repoVisibility === 'public' || repoVisibility === 'unlisted') return event;
+            
+            // Restricted and private repos: only show if user is owner
             if (userPubkeyHex && event.pubkey === userPubkeyHex) {
               return event;
             }
@@ -1257,13 +1310,32 @@
       const descTag = event.tags.find(t => t[0] === 'description')?.[1] || '';
       const imageTag = event.tags.find(t => t[0] === 'image')?.[1] || '';
       const bannerTag = event.tags.find(t => t[0] === 'banner')?.[1] || '';
+      // Read visibility tag (defaults to 'public')
+      const visibilityTag = event.tags.find(t => t[0] === 'visibility' && t[1]);
+      if (visibilityTag && visibilityTag[1]) {
+        const vis = visibilityTag[1].toLowerCase();
+        if (['public', 'unlisted', 'restricted', 'private'].includes(vis)) {
+          visibility = vis as typeof visibility;
+        }
+      }
+      
+      // Read project-relay tags
+      const projectRelayTags = event.tags.filter(t => t[0] === 'project-relay');
+      if (projectRelayTags.length > 0) {
+        projectRelays = projectRelayTags.flatMap(t => t.slice(1)).filter(r => r && typeof r === 'string');
+        if (projectRelays.length === 0) projectRelays = [''];
+      }
+      
+      // Backward compatibility: check for old private tag
       const privateTag = event.tags.find(t => (t[0] === 'private' && t[1] === 'true') || (t[0] === 't' && t[1] === 'private'));
+      if (privateTag && !visibilityTag) {
+        visibility = 'restricted'; // Map old private to restricted
+      }
 
       repoName = nameTag || dTag;
       description = descTag;
       imageUrl = imageTag;
       bannerUrl = bannerTag;
-      isPrivate = !!privateTag;
 
       // Extract clone URLs - handle both formats: separate tags and multiple values in one tag
       const urls: string[] = [];
@@ -2008,9 +2080,25 @@
         }
       }
 
-      // Add private tag if enabled
-      if (isPrivate) {
-        eventTags.push(['private', 'true']);
+      // Add visibility tag
+      if (visibility !== 'public') {
+        eventTags.push(['visibility', visibility]);
+      }
+      
+      // Add project-relay tags (required for unlisted/restricted, optional for others)
+      const normalizedProjectRelays = projectRelays
+        .map(r => r.trim())
+        .filter(r => r && (r.startsWith('ws://') || r.startsWith('wss://')));
+      
+      for (const relay of normalizedProjectRelays) {
+        eventTags.push(['project-relay', relay]);
+      }
+      
+      // Warn if unlisted/restricted but no project-relay
+      if ((visibility === 'unlisted' || visibility === 'restricted') && normalizedProjectRelays.length === 0) {
+        error = 'Project relay is required for unlisted and restricted repositories. Please add at least one project-relay.';
+        loading = false;
+        return;
       }
 
       // Remove any existing client tags (from other clients) and ensure only our client tag exists
@@ -2858,18 +2946,78 @@
       {/if}
 
       <div class="form-group">
-        <label class="checkbox-label">
-          <input
-            type="checkbox"
-            bind:checked={isPrivate}
-            disabled={loading}
-          />
-          <div>
-            <span>Private Repository</span>
-            <small>Private repositories are hidden from public listings and can only be accessed by the owner and maintainers. Git clone/fetch operations require authentication.</small>
-          </div>
+        <label for="visibility">
+          Repository Visibility *
+          <small>
+            <strong>Public:</strong> Repository and events are published to all relays and project relay.<br/>
+            <strong>Unlisted:</strong> Repository is public but events are only published to project relay.<br/>
+            <strong>Restricted:</strong> Repository is private, events are only published to project relay.<br/>
+            <strong>Private:</strong> Repository is private, events are not published to relays (git-only).
+          </small>
         </label>
+        <select
+          id="visibility"
+          bind:value={visibility}
+          disabled={loading}
+          required
+        >
+          <option value="public">Public</option>
+          <option value="unlisted">Unlisted</option>
+          <option value="restricted">Restricted</option>
+          <option value="private">Private</option>
+        </select>
       </div>
+
+      {#if visibility === 'unlisted' || visibility === 'restricted' || visibility === 'private'}
+        <div class="form-group">
+          <label>
+            Project Relay(s) {#if visibility === 'unlisted' || visibility === 'restricted'}*{/if}
+            <small>
+              {#if visibility === 'unlisted' || visibility === 'restricted'}
+                Required for unlisted and restricted repositories. Events will be published to these relays only.
+              {:else}
+                Optional for private repositories. If provided, events will be published to these relays (otherwise git-only).
+              {/if}
+            </small>
+          </label>
+          {#each projectRelays as projectRelay, index}
+            <div class="input-group">
+              <input
+                type="text"
+                value={projectRelay}
+                oninput={(e) => {
+                  projectRelays[index] = e.currentTarget.value;
+                  projectRelays = [...projectRelays];
+                }}
+                placeholder="wss://relay.example.com"
+                disabled={loading}
+                required={visibility === 'unlisted' || visibility === 'restricted'}
+              />
+              {#if projectRelays.length > 1}
+                <button
+                  type="button"
+                  onclick={() => {
+                    projectRelays = projectRelays.filter((_, i) => i !== index);
+                  }}
+                  disabled={loading}
+                >
+                  Remove
+                </button>
+              {/if}
+            </div>
+          {/each}
+          <button
+            type="button"
+            onclick={() => {
+              projectRelays = [...projectRelays, ''];
+            }}
+            disabled={loading}
+            class="add-button"
+          >
+            + Add Project Relay
+          </button>
+        </div>
+      {/if}
 
       <div class="form-group">
         <label class="checkbox-label">

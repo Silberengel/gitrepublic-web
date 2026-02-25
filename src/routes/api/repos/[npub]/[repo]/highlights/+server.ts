@@ -10,6 +10,9 @@ import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import { verifyEvent } from 'nostr-tools';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import { KIND } from '$lib/types/nostr.js';
+import { getRelaysForEventPublishing } from '$lib/utils/repo-visibility.js';
+import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
 import { createRepoGetHandler, withRepoValidation } from '$lib/utils/api-handlers.js';
 import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
 import { handleApiError, handleValidationError } from '$lib/utils/error-handler.js';
@@ -110,13 +113,31 @@ export const POST: RequestHandler = withRepoValidation(
       throw handleValidationError('Invalid event signature', { operation: 'createHighlight', npub: repoContext.npub, repo: repoContext.repo });
     }
 
-    // Get user's relays and publish
+    // Get repository announcement to determine visibility and relay publishing
+    const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoContext.repoOwnerPubkey, eventCache);
+    const announcement = findRepoAnnouncement(allEvents, repoContext.repo);
+    
+    // Determine which relays to publish to based on visibility
+    const visibilityRelays = announcement ? getRelaysForEventPublishing(announcement) : DEFAULT_NOSTR_RELAYS;
+    
+    // For highlights/comments, also include user's relays if visibility allows publishing
+    let relaysToPublish: string[] = [];
+    if (visibilityRelays.length > 0) {
+      try {
+        const { outbox } = await getUserRelays(userPubkey, nostrClient);
+        relaysToPublish = combineRelays([...visibilityRelays, ...outbox]);
+      } catch {
+        // If user relays fail, use visibility relays only
+        relaysToPublish = visibilityRelays;
+      }
+    }
+    
+    // Publish the event to relays (empty array means no relay publishing, but event is still saved to repo)
     let result;
     try {
-      const { outbox } = await getUserRelays(userPubkey, nostrClient);
-      const combinedRelays = combineRelays(outbox);
-
-      result = await nostrClient.publishEvent(highlightEvent as NostrEvent, combinedRelays);
+      result = relaysToPublish.length > 0 
+        ? await nostrClient.publishEvent(highlightEvent as NostrEvent, relaysToPublish)
+        : { success: [], failed: [] };
     } catch (err) {
       // Log error but don't fail - some relays may have succeeded
       logger.warn({ error: err, npub: repoContext.npub, repo: repoContext.repo, eventId: highlightEvent.id }, 'Error publishing highlight event, some relays may have succeeded');

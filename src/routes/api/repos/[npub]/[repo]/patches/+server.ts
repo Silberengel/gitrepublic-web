@@ -13,6 +13,9 @@ import { forwardEventIfEnabled } from '$lib/services/messaging/event-forwarder.j
 import logger from '$lib/services/logger.js';
 import { KIND, type NostrEvent } from '$lib/types/nostr.js';
 import { signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
+import { getRelaysForEventPublishing } from '$lib/utils/repo-visibility.js';
+import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
 
 function getRepoAddress(repoOwnerPubkey: string, repoId: string): string {
   return `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkey}:${repoId}`;
@@ -91,8 +94,17 @@ export const POST: RequestHandler = withRepoValidation(
       throw handleValidationError('Invalid event: missing signature or ID', { operation: 'createPatch', npub: repoContext.npub, repo: repoContext.repo });
     }
 
-    // Publish the event to relays
-    const result = await nostrClient.publishEvent(patchEvent, DEFAULT_NOSTR_RELAYS);
+    // Get repository announcement to determine visibility and relay publishing
+    const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoContext.repoOwnerPubkey, eventCache);
+    const announcement = findRepoAnnouncement(allEvents, repoContext.repo);
+    
+    // Determine which relays to publish to based on visibility
+    const relaysToPublish = announcement ? getRelaysForEventPublishing(announcement) : DEFAULT_NOSTR_RELAYS;
+    
+    // Publish the event to relays (empty array means no relay publishing, but event is still saved to repo)
+    const result = relaysToPublish.length > 0 
+      ? await nostrClient.publishEvent(patchEvent, relaysToPublish)
+      : { success: [], failed: [] };
     
     if (result.failed.length > 0 && result.success.length === 0) {
       throw handleApiError(new Error('Failed to publish patch to all relays'), { operation: 'createPatch', npub: repoContext.npub, repo: repoContext.repo }, 'Failed to publish patch to all relays');
@@ -169,8 +181,17 @@ export const PATCH: RequestHandler = withRepoValidation(
       pubkey: ''
     });
 
-    // Publish status event
-    const result = await nostrClient.publishEvent(statusEvent, DEFAULT_NOSTR_RELAYS);
+    // Get repository announcement to determine visibility and relay publishing
+    const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoContext.repoOwnerPubkey, eventCache);
+    const announcement = findRepoAnnouncement(allEvents, repoContext.repo);
+    
+    // Determine which relays to publish to based on visibility
+    const relaysToPublish = announcement ? getRelaysForEventPublishing(announcement) : DEFAULT_NOSTR_RELAYS;
+    
+    // Publish status event (empty array means no relay publishing, but event is still saved to repo)
+    const result = relaysToPublish.length > 0 
+      ? await nostrClient.publishEvent(statusEvent, relaysToPublish)
+      : { success: [], failed: [] };
     
     if (result.failed.length > 0 && result.success.length === 0) {
       throw handleApiError(new Error('Failed to publish status event to all relays'), { operation: 'updatePatchStatus', npub: repoContext.npub, repo: repoContext.repo }, 'Failed to publish status event');
