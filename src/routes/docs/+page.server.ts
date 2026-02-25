@@ -16,21 +16,21 @@ export const load: PageServerLoad = async () => {
   // List of paths to try
   const pathsToTry = [
     // Method 1: process.cwd() (works in most cases)
-    () => join(process.cwd(), 'docs', 'tutorial.md'),
+    () => join(process.cwd(), 'docs', 'about.md'),
     // Method 2: process.cwd() from build directory
-    () => join(process.cwd(), '..', 'docs', 'tutorial.md'),
+    () => join(process.cwd(), '..', 'docs', 'about.md'),
     // Method 3: import.meta.url - go up from route file to project root
     () => {
       const __filename = fileURLToPath(import.meta.url);
-      return join(__filename, '..', '..', '..', '..', 'docs', 'tutorial.md');
+      return join(__filename, '..', '..', '..', '..', 'docs', 'about.md');
     },
     // Method 4: import.meta.url - alternative path calculation
     () => {
       const __filename = fileURLToPath(import.meta.url);
-      return join(__filename, '..', '..', '..', '..', '..', 'docs', 'tutorial.md');
+      return join(__filename, '..', '..', '..', '..', '..', 'docs', 'about.md');
     },
     // Method 5: Check if running from build directory
-    () => join(process.cwd(), 'build', 'docs', 'tutorial.md'),
+    () => join(process.cwd(), 'build', 'docs', 'about.md'),
   ];
 
   for (const getPath of pathsToTry) {

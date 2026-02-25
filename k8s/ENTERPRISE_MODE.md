@@ -28,8 +28,17 @@ cd k8s
 ./deploy-tenant.sh npub1abc123... \
   --domain git.example.com \
   --storage-class fast-ssd \
-  --storage-size 50Gi
+  --storage-size 50Gi \
+  --subdomain user1 \
+  --relays wss://relay1.com,wss://relay2.com
 ```
+
+**Options:**
+- `--domain`: Domain for git repositories (default: `git.example.com`)
+- `--storage-class`: Kubernetes storage class (default: `standard`)
+- `--storage-size`: Volume size per tenant (default: `100Gi`)
+- `--subdomain`: Subdomain for tenant (default: first 16 chars of npub)
+- `--relays`: Comma-separated Nostr relays (default: `wss://theforest.nostr1.com,wss://nostr.land`)
 
 ### Check Status
 
@@ -79,10 +88,20 @@ Kubernetes Cluster
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `ENTERPRISE_MODE` | Enable enterprise mode | `false` |
+| `GIT_REPO_ROOT` | Path to store git repositories | `/repos` |
 | `GIT_DOMAIN` | Domain for git repositories | `localhost:6543` |
 | `NOSTR_RELAYS` | Comma-separated Nostr relays | `wss://theforest.nostr1.com,...` |
+| `NOSTR_SEARCH_RELAYS` | Comma-separated search relays | Multiple defaults |
+| `MAX_REPOS_PER_USER` | Maximum repositories per user | `100` |
+| `MAX_DISK_QUOTA_PER_USER` | Maximum disk quota per user (bytes) | `10737418240` (10GB) |
+| `RATE_LIMIT_ENABLED` | Enable rate limiting | `true` |
+| `AUDIT_LOGGING_ENABLED` | Enable audit logging | `true` |
 | `STORAGE_CLASS` | Kubernetes storage class | `standard` |
 | `STORAGE_SIZE` | Volume size per tenant | `100Gi` |
+| `TOR_SOCKS_PROXY` | Tor SOCKS proxy (optional) | `127.0.0.1:9050` |
+| `TOR_ONION_ADDRESS` | Tor .onion address (optional) | Auto-detected |
+
+**Note**: Additional environment variables can be added to `k8s/base/deployment.yaml` in the `env` section. The deployment template currently includes `GIT_REPO_ROOT`, `GIT_DOMAIN`, `NOSTR_RELAYS`, and `ENTERPRISE_MODE` by default.
 
 ### Resource Limits (per tenant)
 

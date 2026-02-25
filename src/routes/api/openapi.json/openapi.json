@@ -1544,6 +1544,108 @@
         }
       }
     },
+    "/api/repos/{npub}/{repo}/settings": {
+      "get": {
+        "summary": "Get repository settings",
+        "description": "Get repository settings including description, visibility, and project relays",
+        "tags": ["Repositories"],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Repository settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "owner": {"type": "string"},
+                    "description": {"type": "string"},
+                    "visibility": {
+                      "type": "string",
+                      "enum": ["public", "unlisted", "restricted", "private"]
+                    },
+                    "projectRelays": {
+                      "type": "array",
+                      "items": {"type": "string"}
+                    },
+                    "private": {
+                      "type": "boolean",
+                      "description": "Backward compatibility field (maps to visibility)"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Update repository settings",
+        "description": "Update repository settings. Requires maintainer access. Supports visibility levels: public, unlisted, restricted, private. Unlisted and restricted require project-relay.",
+        "tags": ["Repositories"],
+        "security": [{"NIP98": []}],
+        "parameters": [
+          {
+            "name": "npub",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "description": {"type": "string"},
+                  "visibility": {
+                    "type": "string",
+                    "enum": ["public", "unlisted", "restricted", "private"]
+                  },
+                  "projectRelays": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                  },
+                  "private": {
+                    "type": "boolean",
+                    "description": "Deprecated: Use visibility instead"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Settings updated successfully"
+          },
+          "403": {
+            "description": "Not authorized (requires maintainer access)"
+          }
+        }
+      }
+    },
     "/api/repos/{npub}/{repo}/access": {
       "get": {
         "summary": "Check repository access",
