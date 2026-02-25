@@ -6,7 +6,7 @@
  * - Direct nsec/hex keys (for server-side signing)
  */
 
-import { nip19, getPublicKey, finalizeEvent } from 'nostr-tools';
+import { nip19, getPublicKey, finalizeEvent, verifyEvent, getEventHash } from 'nostr-tools';
 import { createHash } from 'crypto';
 import type { NostrEvent } from '../../types/nostr.js';
 import { KIND } from '../../types/nostr.js';
@@ -106,12 +106,12 @@ export function createCommitSignatureEvent(
     kind: KIND.COMMIT_SIGNATURE,
     pubkey,
     created_at: timestamp,
-    tags: [
-      ['commit', commitHash],
-      ['author', authorName, authorEmail],
-      ['message', commitMessage]
-    ],
-    content: `Signed commit: ${commitHash}\n\n${commitMessage}`
+      tags: [
+        ['commit', commitHash],
+        ['author', authorName, authorEmail],
+        ['message', commitMessage]
+      ],
+      content: `Signed commit`
   };
 
   // Finalize and sign the event
@@ -183,7 +183,7 @@ export async function createGitCommitSignature(
         ['author', authorName, authorEmail],
         ['message', commitMessage]
       ],
-      content: `Signed commit: ${commitMessage}`
+      content: `Signed commit`
     };
     signedEvent = await signEventWithNIP07(eventTemplate);
   }
@@ -203,7 +203,7 @@ export async function createGitCommitSignature(
         ['message', commitMessage],
         ['e', options.nip98Event.id, '', 'nip98-auth'] // Reference the NIP-98 auth event
       ],
-      content: `Signed commit: ${commitMessage}\n\nAuthenticated via NIP-98 event: ${options.nip98Event.id}`
+      content: `Signed commit (NIP-98: ${options.nip98Event.id})`
     };
     
     // Create event ID without signature (will need client to sign)
@@ -239,7 +239,7 @@ export async function createGitCommitSignature(
         ['author', authorName, authorEmail],
         ['message', commitMessage]
       ],
-      content: `Signed commit: ${commitMessage}`
+      content: `Signed commit`
     };
 
     signedEvent = finalizeEvent(eventTemplate, keyBytes);
@@ -288,12 +288,21 @@ export function updateCommitSignatureWithHash(
 }
 
 /**
- * Verify a commit signature from a Nostr event
+ * Verify a commit signature from a Nostr event and return original information
  */
 export function verifyCommitSignature(
   signatureEvent: NostrEvent,
   commitHash: string
-): { valid: boolean; error?: string } {
+): { 
+  valid: boolean; 
+  error?: string;
+  pubkey?: string;
+  authorName?: string;
+  authorEmail?: string;
+  message?: string;
+  timestamp?: number;
+  eventId?: string;
+} {
   // Check event kind
   if (signatureEvent.kind !== KIND.COMMIT_SIGNATURE) {
     return { valid: false, error: `Invalid event kind for commit signature. Expected ${KIND.COMMIT_SIGNATURE}, got ${signatureEvent.kind}` };
@@ -305,13 +314,30 @@ export function verifyCommitSignature(
     return { valid: false, error: 'Commit hash mismatch' };
   }
 
-  // Verify event signature (would need to import verifyEvent from nostr-tools)
-  // For now, we'll just check the structure
-  if (!signatureEvent.sig || !signatureEvent.id) {
-    return { valid: false, error: 'Missing signature or event ID' };
+  // Verify event signature cryptographically
+  if (!verifyEvent(signatureEvent)) {
+    return { valid: false, error: 'Invalid event signature - event may be forged or corrupted' };
   }
 
-  return { valid: true };
+  // Verify event ID matches computed hash (prevents ID tampering)
+  const computedId = getEventHash(signatureEvent);
+  if (computedId !== signatureEvent.id) {
+    return { valid: false, error: 'Event ID does not match computed hash - event may be tampered with' };
+  }
+
+  // Extract original information from tags
+  const authorTag = signatureEvent.tags.find(t => t[0] === 'author');
+  const messageTag = signatureEvent.tags.find(t => t[0] === 'message');
+
+  return {
+    valid: true,
+    pubkey: signatureEvent.pubkey,
+    authorName: authorTag?.[1] || undefined,
+    authorEmail: authorTag?.[2] || undefined,
+    message: messageTag?.[1] || undefined,
+    timestamp: signatureEvent.created_at,
+    eventId: signatureEvent.id
+  };
 }
 
 /**
@@ -339,5 +365,103 @@ export function extractCommitSignature(commitMessage: string): {
       eventId,
       timestamp: Math.floor(Date.now() / 1000) // Would need to extract from event
     }
+  };
+}
+
+/**
+ * Verify a commit by extracting signature from commit message and verifying it
+ * This function checks the repo's .jsonl file first, then falls back to Nostr relays
+ */
+export async function verifyCommitFromMessage(
+  commitMessage: string,
+  commitHash: string,
+  nostrClient: { fetchEvents: (filters: any[]) => Promise<any[]> }, // NostrClient interface
+  fileManager?: { getFileContent: (npub: string, repoName: string, filePath: string, ref?: string) => Promise<{ content: string }> },
+  npub?: string,
+  repoName?: string
+): Promise<{
+  valid: boolean;
+  error?: string;
+  pubkey?: string;
+  authorName?: string;
+  authorEmail?: string;
+  message?: string;
+  timestamp?: number;
+  eventId?: string;
+  npub?: string;
+  hasSignature?: boolean; // Indicates if a signature was found at all
+}> {
+  // Extract signature from commit message
+  const { signature } = extractCommitSignature(commitMessage);
+  
+  if (!signature) {
+    return { valid: false, hasSignature: false, error: 'No Nostr signature found in commit message' };
+  }
+
+  let signatureEvent: NostrEvent | null = null;
+
+  // First, try to find the signature event in the repo's .jsonl file
+  if (fileManager && npub && repoName) {
+    try {
+      const jsonlFile = await fileManager.getFileContent(npub, repoName, 'nostr/repo-events.jsonl', commitHash);
+      if (jsonlFile && jsonlFile.content) {
+        const lines = jsonlFile.content.trim().split('\n').filter(l => l.trim());
+        for (const line of lines) {
+          try {
+            const parsed = JSON.parse(line);
+            // Check if this is a commit signature event with matching event ID
+            if (parsed.event && 
+                parsed.event.kind === KIND.COMMIT_SIGNATURE && 
+                parsed.event.id === signature.eventId) {
+              signatureEvent = parsed.event as NostrEvent;
+              break; // Found it, stop searching
+            }
+          } catch {
+            // Skip invalid JSON lines
+          }
+        }
+      }
+    } catch (err) {
+      // .jsonl file not found or error reading it, fall through to relay check
+      console.debug('Could not read repo-events.jsonl, falling back to relays:', err);
+    }
+  }
+
+  // If not found in .jsonl, fetch from Nostr relays
+  if (!signatureEvent) {
+    const events = await nostrClient.fetchEvents([
+      {
+        kinds: [KIND.COMMIT_SIGNATURE],
+        ids: [signature.eventId],
+        limit: 1
+      }
+    ]);
+
+    if (events.length === 0) {
+      return { valid: false, hasSignature: true, error: 'Signature event not found in Nostr relays' };
+    }
+
+    signatureEvent = events[0] as NostrEvent;
+  }
+
+  // Verify the signature
+  const verification = verifyCommitSignature(signatureEvent, commitHash);
+  
+  if (!verification.valid) {
+    return { ...verification, hasSignature: true };
+  }
+
+  // Convert pubkey to npub for display
+  let npubDisplay: string | undefined;
+  try {
+    npubDisplay = nip19.npubEncode(signature.pubkey);
+  } catch {
+    // Ignore npub encoding errors
+  }
+
+  return {
+    ...verification,
+    npub: npubDisplay,
+    hasSignature: true
   };
 }

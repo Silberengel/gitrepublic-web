@@ -2086,6 +2086,66 @@ span.clone-more {
   color: var(--text-muted);
 }
 
+.commit-header-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.commit-verification-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.commit-verified-badge {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  background: var(--success);
+  color: var(--success-text, #ffffff);
+  cursor: help;
+  flex-shrink: 0;
+}
+
+.commit-verified-badge.invalid {
+  background: var(--error);
+  color: var(--error-text, #ffffff);
+}
+
+.commit-verified-badge.verifying {
+  background: var(--warning);
+  color: var(--warning-text, #ffffff);
+}
+
+.commit-verification-tooltip {
+  position: fixed;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  box-shadow: 0 4px 12px var(--shadow-color);
+  z-index: 10000;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  max-width: 300px;
+  pointer-events: none;
+}
+
+.commit-verification-tooltip div {
+  margin: 0.25rem 0;
+}
+
+.commit-verification-tooltip strong {
+  color: var(--text-primary);
+  margin-right: 0.5rem;
+}
+
 .issue-status,
 .pr-status,
 .patch-status {

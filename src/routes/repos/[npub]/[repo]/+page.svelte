@@ -391,11 +391,29 @@
   let defaultBranchName = $state('master'); // Default branch from settings
 
   // Commit history
-  let commits = $state<Array<{ hash: string; message: string; author: string; date: string; files: string[] }>>([]);
+  let commits = $state<Array<{ 
+    hash: string; 
+    message: string; 
+    author: string; 
+    date: string; 
+    files: string[];
+    verification?: {
+      valid: boolean;
+      hasSignature?: boolean;
+      error?: string;
+      pubkey?: string;
+      npub?: string;
+      authorName?: string;
+      authorEmail?: string;
+      timestamp?: number;
+      eventId?: string;
+    };
+  }>>([]);
   let loadingCommits = $state(false);
   let selectedCommit = $state<string | null>(null);
   let showDiff = $state(false);
   let diffData = $state<Array<{ file: string; additions: number; deletions: number; diff: string }>>([]);
+  let verifyingCommits = $state<Set<string>>(new Set());
 
   // Tags
   let tags = $state<Array<{ name: string; hash: string; message?: string; date?: number }>>([]);
@@ -4452,11 +4470,47 @@
           date: commit.date || new Date().toISOString(),
           files: commit.files || []
         })).filter((commit: any) => commit.hash); // Filter out commits without hash
+        
+        // Verify commits in background (only for cloned repos)
+        if (isRepoCloned === true) {
+          commits.forEach(commit => {
+            verifyCommit(commit.hash).catch(err => {
+              console.warn(`Failed to verify commit ${commit.hash}:`, err);
+            });
+          });
+        }
       }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load commit history';
     } finally {
       loadingCommits = false;
+    }
+  }
+
+  async function verifyCommit(commitHash: string) {
+    if (verifyingCommits.has(commitHash)) return; // Already verifying
+    if (!isRepoCloned) return; // Can't verify without local repo
+    
+    verifyingCommits.add(commitHash);
+    try {
+      const response = await fetch(`/api/repos/${npub}/${repo}/commits/${commitHash}/verify`, {
+        headers: buildApiHeaders()
+      });
+      if (response.ok) {
+        const verification = await response.json();
+        // Only update verification if there's actually a signature
+        // If hasSignature is false or undefined, don't set verification at all
+        if (verification.hasSignature !== false) {
+          const commitIndex = commits.findIndex(c => c.hash === commitHash);
+          if (commitIndex >= 0) {
+            commits[commitIndex].verification = verification;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`Failed to verify commit ${commitHash}:`, err);
+    } finally {
+      verifyingCommits.delete(commitHash);
     }
   }
 
@@ -5894,10 +5948,65 @@
           <ul class="commit-list">
             {#each commits as commit}
               {@const commitHash = commit.hash || (commit as any).sha || ''}
+              {@const verification = commit.verification}
+              {@const isVerifying = verifyingCommits.has(commitHash)}
               {#if commitHash}
                 <li class="commit-item" class:selected={selectedCommit === commitHash}>
                   <button onclick={() => viewDiff(commitHash)} class="commit-button">
-                    <div class="commit-hash">{commitHash.slice(0, 7)}</div>
+                    <div class="commit-header-row">
+                      <div class="commit-hash">{commitHash.slice(0, 7)}</div>
+                      {#if verification?.hasSignature}
+                        {#if verification.valid}
+                          <div class="commit-verification-group">
+                            <span 
+                              class="commit-verified-badge" 
+                              role="button"
+                              tabindex="0"
+                              title="Verified by {verification.npub || verification.pubkey?.slice(0, 16) || 'Nostr'}"
+                              onmouseenter={(e) => {
+                                if (verification) {
+                                  const tooltip = document.createElement('div');
+                                  tooltip.className = 'commit-verification-tooltip';
+                                  tooltip.innerHTML = `
+                                    <div><strong>Verified by:</strong> ${verification.npub || verification.pubkey || 'Unknown'}</div>
+                                    ${verification.authorName ? `<div><strong>Author:</strong> ${verification.authorName}${verification.authorEmail ? ` &lt;${verification.authorEmail}&gt;` : ''}</div>` : ''}
+                                    ${verification.timestamp ? `<div><strong>Signed:</strong> ${new Date(verification.timestamp * 1000).toLocaleString()}</div>` : ''}
+                                    ${verification.eventId ? `<div><strong>Event ID:</strong> ${verification.eventId.slice(0, 16)}...</div>` : ''}
+                                  `;
+                                  document.body.appendChild(tooltip);
+                                  const rect = (e.target as HTMLElement).getBoundingClientRect();
+                                  tooltip.style.left = `${rect.right + 10}px`;
+                                  tooltip.style.top = `${rect.top}px`;
+                                  const removeTooltip = () => {
+                                    tooltip.remove();
+                                    (e.target as HTMLElement).removeEventListener('mouseleave', removeTooltip);
+                                  };
+                                  (e.target as HTMLElement).addEventListener('mouseleave', removeTooltip);
+                                }
+                              }}
+                            >
+                              ✓ Verified
+                            </span>
+                            {#if verification.pubkey}
+                              <UserBadge pubkey={verification.pubkey} />
+                            {:else if verification.npub}
+                              <UserBadge pubkey={verification.npub} />
+                            {/if}
+                          </div>
+                        {:else}
+                          <span 
+                            class="commit-verification-badge invalid" 
+                            title="Verification failed: {verification.error || 'Unknown error'}"
+                          >
+                            ✗ Invalid
+                          </span>
+                        {/if}
+                      {:else if isVerifying}
+                        <span class="commit-verification-badge verifying" title="Verifying signature...">
+                          ⏳ Verifying...
+                        </span>
+                      {/if}
+                    </div>
                     <div class="commit-message">{commit.message || 'No message'}</div>
                     <div class="commit-meta">
                       <span>{commit.author || 'Unknown'}</span>
