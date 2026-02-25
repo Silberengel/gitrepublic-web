@@ -1800,8 +1800,9 @@
     checkingCloneStatus = true;
     try {
       // Check if repo exists locally by trying to fetch branches
+      // Use skipApiFallback parameter to ensure we only check local repo, not API fallback
       // 404 = repo not cloned, 403 = repo exists but access denied (cloned), 200 = cloned and accessible
-      const url = `/api/repos/${npub}/${repo}/branches`;
+      const url = `/api/repos/${npub}/${repo}/branches?skipApiFallback=true`;
       console.log(`[Clone Status] Checking clone status for ${npub}/${repo}...`);
       const response = await fetch(url, {
         headers: buildApiHeaders()
@@ -5556,7 +5557,7 @@
       currentBranch={currentBranch || null}
       topics={repoTopics || []}
       defaultBranch={defaultBranch || null}
-      isRepoCloned={isRepoCloned || false}
+      isRepoCloned={isRepoCloned}
       copyingCloneUrl={copyingCloneUrl || false}
       onBranchChange={safeHandleBranchChange}
       onCopyCloneUrl={safeCopyCloneUrl}

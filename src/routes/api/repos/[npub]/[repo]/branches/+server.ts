@@ -49,11 +49,19 @@ const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   : '/repos';
 
 export const GET: RequestHandler = createRepoGetHandler(
-  async (context: RepoRequestContext) => {
+  async (context: RepoRequestContext, event: RequestEvent) => {
     const repoPath = join(repoRoot, context.npub, `${context.repo}.git`);
+    const skipApiFallback = event.url.searchParams.get('skipApiFallback') === 'true';
     
-    // If repo doesn't exist, try to fetch it on-demand
+    // If repo doesn't exist, try to fetch it on-demand (unless skipApiFallback is true)
     if (!existsSync(repoPath)) {
+      // If skipApiFallback is true, return 404 immediately to indicate repo is not cloned
+      if (skipApiFallback) {
+        throw handleNotFoundError(
+          'Repository is not cloned locally',
+          { operation: 'getBranches', npub: context.npub, repo: context.repo }
+        );
+      }
       try {
         // Fetch repository announcement (case-insensitive) with caching
         let allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, context.repoOwnerPubkey, eventCache);
