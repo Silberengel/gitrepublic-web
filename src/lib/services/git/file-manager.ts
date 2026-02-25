@@ -1347,17 +1347,17 @@ export class FileManager {
                 : DEFAULT_NOSTR_RELAYS;
               
               // Publish to relays (non-blocking - don't fail if publishing fails)
-              const publishResult = await nostrClient.publishEvent(updatedEvent, userRelays);
+              const publishResult = await nostrClient.publishEvent(signatureEvent, userRelays);
               if (publishResult.success.length > 0) {
                 logger.debug({ 
-                  eventId: updatedEvent.id, 
+                  eventId: signatureEvent.id, 
                   commitHash,
                   relays: publishResult.success 
                 }, 'Published commit signature event to relays');
               }
               if (publishResult.failed.length > 0) {
                 logger.warn({ 
-                  eventId: updatedEvent.id,
+                  eventId: signatureEvent.id,
                   failed: publishResult.failed 
                 }, 'Some relays failed to publish commit signature event');
               }
