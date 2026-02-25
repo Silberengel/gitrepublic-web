@@ -15,6 +15,11 @@ import logger from '$lib/services/logger.js';
 export const load: PageServerLoad = async ({ params }: { params: { slug: string } }) => {
   let slug = params.slug;
   
+  // Strip .md extension if present (handles /docs/nostr-integration.md -> nostr-integration)
+  if (slug.endsWith('.md')) {
+    slug = slug.slice(0, -3);
+  }
+  
   // Security: Only allow alphanumeric, hyphens, underscores, and dots
   if (!/^[a-zA-Z0-9._-]+$/.test(slug)) {
     throw error(400, 'Invalid documentation path');
