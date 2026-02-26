@@ -49,6 +49,18 @@
   import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
   import { fetchUserEmail, fetchUserName } from '$lib/utils/user-profile.js';
   import { createRepoState, type RepoState } from './stores/repo-state.js';
+  import {
+    usePageDataEffect,
+    usePageParamsEffect,
+    useMaintainersEffect,
+    useAutoSaveEffect,
+    useUserStoreEffect,
+    useTabSwitchEffect,
+    useRepoImagesEffect,
+    usePatchHighlightsEffect,
+    useTabChangeEffect,
+    useBranchChangeEffect
+  } from './hooks/use-repo-effects.js';
 
   // Consolidated state - all state variables in one object
   let state = $state(createRepoState());
@@ -57,47 +69,9 @@
   let announcementEventId: string | null = null;
   let applying: Record<string, boolean> = {};
   
-  // Update pageData from $page when available (client-side)
-  $effect(() => {
-    if (typeof window === 'undefined' || !state.isMounted) return;
-    try {
-      const data = $page.data as typeof state.pageData;
-      if (data && state.isMounted) {
-        state.pageData = data || {};
-      }
-    } catch (err) {
-      // Ignore SSR errors and errors during destruction
-      if (state.isMounted) {
-        console.warn('Failed to update pageData:', err);
-      }
-    }
-  });
-
-  // Update params from $page when available (client-side)
-  $effect(() => {
-    if (typeof window === 'undefined' || !state.isMounted) return;
-    try {
-      const params = $page.params as { npub?: string; repo?: string };
-      if (params && state.isMounted) {
-        if (params.npub && params.npub !== state.npub) state.npub = params.npub;
-        if (params.repo && params.repo !== state.repo) state.repo = params.repo;
-      }
-    } catch {
-      // If $page.params fails, try to parse from URL path
-      if (!state.isMounted) return;
-      try {
-        if (typeof window !== 'undefined') {
-          const pathParts = window.location.pathname.split('/').filter(Boolean);
-          if (pathParts[0] === 'repos' && pathParts[1] && pathParts[2] && state.isMounted) {
-            state.npub = pathParts[1];
-            state.repo = pathParts[2];
-          }
-        }
-      } catch {
-        // Ignore errors - params will be set eventually
-      }
-    }
-  });
+  // Initialize effects
+  usePageDataEffect(state, () => $page.data);
+  usePageParamsEffect(state, () => $page.params as { npub?: string; repo?: string });
 
   // Extract fields from announcement for convenience
   const repoAnnouncement = $derived(state.pageData.announcement);
@@ -170,7 +144,7 @@
     }
   });
   
-
+  
   // Helper function to safely update state only if component is still mounted
   function safeStateUpdate<T>(updateFn: () => T): T | null {
     if (!state.isMounted) return null;
@@ -188,176 +162,33 @@
   // Store event listener handler for cleanup
   let clickOutsideHandler: ((event: MouseEvent) => void) | null = null;
   
-  // Auto-save
-  let autoSaveInterval: ReturnType<typeof setInterval> | null = null;
-
-  $effect(() => {
-    // Guard against SSR and component destruction
-    if (typeof window === 'undefined' || !state.isMounted) return;
-    try {
-      const data = $page.data as typeof state.pageData;
-      if (!data || !state.isMounted) return;
-      
-      const currentRepoKey = `${state.npub}/${state.repo}`;
-      
-      // Reset flags if repo changed
-      if (currentRepoKey !== state.maintainers.lastRepoKey && state.isMounted) {
-        state.maintainers.loaded = false;
-        state.maintainers.effectRan = false;
-        state.maintainers.lastRepoKey = currentRepoKey;
-      }
-      
-      // Only load if:
-      // 1. We have page data
-      // 2. Effect hasn't run yet for this repo
-      // 3. We're not currently state.loading.main
-      // 4. Component is still mounted
-      if (state.isMounted && 
-          (repoOwnerPubkeyDerived || (repoMaintainers && repoMaintainers.length > 0)) && 
-          !state.maintainers.effectRan && 
-          !state.loading.maintainers) {
-        state.maintainers.effectRan = true; // Mark as ran to prevent re-running
-        state.maintainers.loaded = true; // Set flag before state.loading.main to prevent concurrent calls
-        loadAllMaintainers().catch(err => {
-          if (!state.isMounted) return;
-          state.maintainers.loaded = false; // Reset on state.error so we can retry
-          state.maintainers.effectRan = false; // Allow retry
-          console.warn('Failed to load maintainers:', err);
-        });
-      }
-    } catch (err) {
-      // Ignore SSR errors and errors during destruction
-      if (state.isMounted) {
-        console.warn('Maintainers effect error:', err);
-      }
-    }
+  // Auto-save interval (wrapped in object for effect hook)
+  let autoSaveInterval = { value: null as ReturnType<typeof setInterval> | null };
+  
+  // Cached user data (not in state store - these are temporary caches)
+  let cachedUserEmail: string | null = null;
+  let cachedUserName: string | null = null;
+  
+  // Initialize maintainers effect (using derived values directly in hook)
+  useMaintainersEffect(state, () => repoOwnerPubkeyDerived, () => repoMaintainers, loadAllMaintainers, () => $page.data);
+  
+  // Initialize auto-save effect
+  useAutoSaveEffect(state, autoSaveInterval, setupAutoSave);
+  
+  // Initialize user store sync effect
+  const cachedUserData = { email: cachedUserEmail, name: cachedUserName };
+  useUserStoreEffect(state, cachedUserData, () => $userStore, {
+    checkMaintainerStatus,
+    loadBookmarkStatus,
+    loadAllMaintainers,
+    checkCloneStatus,
+    loadBranches,
+    loadFiles,
+    loadReadme,
+    loadTags,
+    loadDiscussions
   });
-
-  // Watch for auto-save setting changes
-  $effect(() => {
-    if (!state.isMounted) return;
-    // Check auto-save setting and update interval (async, but don't await)
-    settingsStore.getSettings().then(settings => {
-      if (!state.isMounted) return;
-      if (settings.autoSave && !autoSaveInterval) {
-        // Auto-save was enabled, set it up
-        setupAutoSave();
-      } else if (!settings.autoSave && autoSaveInterval) {
-        // Auto-save was disabled, clear interval
-        if (autoSaveInterval) {
-          clearInterval(autoSaveInterval);
-          autoSaveInterval = null;
-        }
-      }
-    }).catch(err => {
-      if (state.isMounted) {
-        console.warn('Failed to check auto-save setting:', err);
-      }
-    });
-  });
-
-  // Sync with userStore
-  $effect(() => {
-    if (!state.isMounted) return;
-    try {
-      const currentUser = $userStore;
-      if (!currentUser || !state.isMounted) return;
-      
-      const wasLoggedIn = state.user.pubkey !== null || state.user.pubkeyHex !== null;
-      
-      if (currentUser.userPubkey && currentUser.userPubkeyHex && state.isMounted) {
-        const wasDifferent = state.user.pubkey !== currentUser.userPubkey || state.user.pubkeyHex !== currentUser.userPubkeyHex;
-        state.user.pubkey = currentUser.userPubkey;
-        state.user.pubkeyHex = currentUser.userPubkeyHex;
-        
-        // Reload data when user logs in or pubkey changes
-        if (wasDifferent && state.isMounted) {
-          // Reset state.repoNotFound flag when user logs in, so we can retry state.loading.main
-          state.loading.repoNotFound = false;
-          // Clear cached email and name when user changes
-          cachedUserEmail = null;
-          cachedUserName = null;
-          
-          if (!state.isMounted) return;
-          checkMaintainerStatus().catch(err => {
-            if (state.isMounted) console.warn('Failed to reload maintainer status after login:', err);
-          });
-          loadBookmarkStatus().catch(err => {
-            if (state.isMounted) console.warn('Failed to reload bookmark status after login:', err);
-          });
-          // Reset flags to allow reload
-          state.maintainers.loaded = false;
-          state.maintainers.effectRan = false;
-          state.maintainers.lastRepoKey = null;
-          loadAllMaintainers().catch(err => {
-            if (state.isMounted) console.warn('Failed to reload maintainers after login:', err);
-          });
-          // Recheck clone status after login (force refresh) - delay slightly to ensure auth headers are ready
-          setTimeout(() => {
-            if (state.isMounted) {
-              checkCloneStatus(true).catch(err => {
-                if (state.isMounted) console.warn('Failed to recheck clone status after login:', err);
-              });
-            }
-          }, 100);
-          // Reload all repository data with the new user context
-          if (!state.loading.main && state.isMounted) {
-            loadBranches().catch(err => {
-              if (state.isMounted) console.warn('Failed to reload state.git.branches after login:', err);
-            });
-            loadFiles().catch(err => {
-              if (state.isMounted) console.warn('Failed to reload files after login:', err);
-            });
-            loadReadme().catch(err => {
-              if (state.isMounted) console.warn('Failed to reload readme after login:', err);
-            });
-            loadTags().catch(err => {
-              if (state.isMounted) console.warn('Failed to reload state.git.tags after login:', err);
-            });
-            // Reload state.discussions when user logs in (needs user context for relay selection)
-            loadDiscussions().catch(err => {
-              if (state.isMounted) console.warn('Failed to reload state.discussions after login:', err);
-            });
-          }
-        }
-      } else if (state.isMounted) {
-        state.user.pubkey = null;
-        state.user.pubkeyHex = null;
-        // Clear cached email and name when user logs out
-        cachedUserEmail = null;
-        cachedUserName = null;
-        
-        // Reload data when user logs out to hide private content
-        if (wasLoggedIn && state.isMounted) {
-          checkMaintainerStatus().catch(err => {
-            if (state.isMounted) console.warn('Failed to reload maintainer status after logout:', err);
-          });
-          loadBookmarkStatus().catch(err => {
-            if (state.isMounted) console.warn('Failed to reload bookmark status after logout:', err);
-          });
-          // Reset flags to allow reload
-          state.maintainers.loaded = false;
-          state.maintainers.effectRan = false;
-          state.maintainers.lastRepoKey = null;
-          loadAllMaintainers().catch(err => {
-            if (state.isMounted) console.warn('Failed to reload maintainers after logout:', err);
-          });
-          // If repo is private and user logged out, reload to trigger access check
-          if (!state.loading.main && state.ui.activeTab === 'files' && state.isMounted) {
-            loadFiles().catch(err => {
-              if (state.isMounted) console.warn('Failed to reload files after logout:', err);
-            });
-          }
-        }
-      }
-    } catch (err) {
-      // Ignore errors during destruction
-      if (state.isMounted) {
-        console.warn('User store sync error:', err);
-      }
-    }
-  });
-
+  
   // Function to toggle word wrap and refresh highlighting
   async function toggleWordWrap() {
     state.ui.wordWrap = !state.ui.wordWrap;
@@ -457,18 +288,8 @@
     return allTabs.map(({ requiresClone, ...tab }) => tab);
   });
   
-  // Redirect to a valid tab if current tab requires state.clone.cloning but repo isn't cloned and API fallback isn't available
-  $effect(() => {
-    if (!state.isMounted) return;
-    if (state.clone.isCloned === false && !canUseApiFallback && tabs.length > 0) {
-      const currentTab = tabs.find(t => t.id === state.ui.activeTab);
-      if (!currentTab && state.isMounted) {
-        // Current tab requires state.clone.cloning, switch to first available tab
-        state.ui.activeTab = tabs[0].id as typeof state.ui.activeTab;
-      }
-    }
-  });
-
+  // Initialize tab switch effect (already done above, but keeping for clarity)
+  
   const highlightsService = new HighlightsService(DEFAULT_NOSTR_RELAYS);
 
   // Parse nostr: links from content and extract IDs/pubkeys
@@ -927,13 +748,13 @@
       
       if (response.ok) {
         const data = await response.json();
-          const newMap = new Map<string, { reachable: boolean; error?: string; checkedAt: number; serverType: 'git' | 'grasp' | 'unknown' }>();
+        const newMap = new Map<string, { reachable: boolean; error?: string; checkedAt: number; serverType: 'git' | 'grasp' | 'unknown' }>();
         
         if (data.results && Array.isArray(data.results)) {
           for (const result of data.results) {
             newMap.set(result.url, {
               reachable: result.reachable,
-                error: result.error,
+              error: result.error,
               checkedAt: result.checkedAt,
               serverType: result.serverType || 'unknown'
             });
@@ -1958,10 +1779,10 @@
       const commentEventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
         kind: KIND.COMMENT,
           pubkey: state.user.pubkeyHex,
-          created_at: Math.floor(Date.now() / 1000),
-          tags: [
-            ['e', parentEventId, '', 'reply'], // Parent event
-            ['k', parentKind.toString()], // Parent kind
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [
+          ['e', parentEventId, '', 'reply'], // Parent event
+          ['k', parentKind.toString()], // Parent kind
           ['p', parentPubkey], // Parent pubkey
           ['E', rootEventId], // Root event
           ['K', rootKind.toString()], // Root kind
@@ -2250,28 +2071,8 @@
   }
 
   // Reactively update images when pageData changes (only once, when data becomes available)
-  $effect(() => {
-    // Guard against SSR and component destruction
-    if (typeof window === 'undefined' || !state.isMounted) return;
-    try {
-      const data = $page.data as typeof state.pageData;
-      if (!data || !state.isMounted) return;
-      // Only update if we have new data and don't already have the images set
-      if (data.image && data.image !== state.metadata.image && state.isMounted) {
-        state.metadata.image = data.image;
-        console.log('[Repo Images] Updated image from pageData (reactive):', state.metadata.image);
-      }
-      if (data.banner && data.banner !== state.metadata.banner && state.isMounted) {
-        state.metadata.banner = data.banner;
-        console.log('[Repo Images] Updated banner from pageData (reactive):', state.metadata.banner);
-      }
-    } catch (err) {
-      // Ignore errors during destruction
-      if (state.isMounted) {
-        console.warn('Image update effect error:', err);
-      }
-    }
-  });
+  // Initialize repo images effect
+  useRepoImagesEffect(state, () => $page.data);
 
   onMount(async () => {
     // Initialize bookmarks service
@@ -2372,9 +2173,9 @@
         state.isMounted = false;
         
         // Clean up intervals and timeouts
-        if (autoSaveInterval) {
-          clearInterval(autoSaveInterval);
-          autoSaveInterval = null;
+        if (autoSaveInterval.value) {
+          clearInterval(autoSaveInterval.value);
+          autoSaveInterval.value = null;
         }
         
         if (readmeAutoLoadTimeout) {
@@ -3484,10 +3285,7 @@
     }
   }
 
-  // Cache for user profile email and name
-  // Cached user data (not in state store - these are temporary caches)
-  let cachedUserEmail: string | null = null;
-  let cachedUserName: string | null = null;
+  // Cache for user profile email and name (already declared above)
   let fetchingUserEmail = false;
   let fetchingUserName = false;
 
@@ -3632,9 +3430,9 @@
 
   async function setupAutoSave() {
     // Clear existing interval if any
-    if (autoSaveInterval) {
-      clearInterval(autoSaveInterval);
-      autoSaveInterval = null;
+    if (autoSaveInterval.value) {
+      clearInterval(autoSaveInterval.value);
+      autoSaveInterval.value = null;
     }
     
     // Check if auto-save is enabled
@@ -3649,7 +3447,7 @@
     }
     
     // Set up interval to auto-save every 10 minutes
-    autoSaveInterval = setInterval(async () => {
+    autoSaveInterval.value = setInterval(async () => {
       await autoSaveFile();
     }, 10 * 60 * 1000); // 10 minutes
   }
@@ -3671,9 +3469,9 @@
       const settings = await settingsStore.getSettings();
       if (!settings.autoSave) {
         // Auto-save was disabled, clear interval
-        if (autoSaveInterval) {
-          clearInterval(autoSaveInterval);
-          autoSaveInterval = null;
+        if (autoSaveInterval.value) {
+          clearInterval(autoSaveInterval.value);
+          autoSaveInterval.value = null;
         }
         return;
       }
@@ -5069,124 +4867,32 @@
     }
   }
 
-  // Load highlights when a patch is selected
-  $effect(() => {
-    if (!state.isMounted || !state.selected.patch) return;
-    const patch = state.patches.find(p => p.id === state.selected.patch);
-    if (patch) {
-      loadPatchHighlights(patch.id, patch.author).catch(err => {
-        if (state.isMounted) console.warn('Failed to load patch highlights:', err);
-      });
-    }
+  // Initialize patch highlights effect
+  usePatchHighlightsEffect(state, loadPatchHighlights);
+  
+  // Initialize tab change effect
+  const lastTab = { value: null as string | null };
+  useTabChangeEffect(state, lastTab, findReadmeFile, {
+    loadFiles,
+    loadFile,
+    loadCommitHistory,
+    loadTags,
+    loadReleases,
+    loadIssues,
+    loadPRs,
+    loadDocumentation,
+    loadDiscussions,
+    loadPatches
   });
-
-  // Only load tab content when tab actually changes, not on every render
-  let lastTab: string | null = null;
-  $effect(() => {
-    if (!state.isMounted) return;
-    if (state.ui.activeTab !== lastTab) {
-      lastTab = state.ui.activeTab;
-      if (!state.isMounted) return;
-      
-      if (state.ui.activeTab === 'files') {
-        // Files tab - ensure state.files.list are loaded and README is shown if available
-        if (state.files.list.length === 0 || state.files.currentPath !== '') {
-          loadFiles('').catch(err => {
-            if (state.isMounted) console.warn('Failed to load files:', err);
-          });
-        } else if (state.files.list.length > 0 && !state.files.currentFile && state.isMounted) {
-          // Files already loaded, ensure README is shown
-          const readmeFile = findReadmeFile(state.files.list);
-          if (readmeFile) {
-            setTimeout(() => {
-              if (state.isMounted) {
-                loadFile(readmeFile.path).catch(err => {
-                  if (state.isMounted) console.warn('Failed to load README file:', err);
-                });
-              }
-            }, 100);
-          }
-        }
-      } else if (state.ui.activeTab === 'history' && state.isMounted) {
-        loadCommitHistory().catch(err => {
-          if (state.isMounted) console.warn('Failed to load commit history:', err);
-        });
-      } else if (state.ui.activeTab === 'tags' && state.isMounted) {
-        loadTags().catch(err => {
-          if (state.isMounted) console.warn('Failed to load tags:', err);
-        });
-        loadReleases().catch(err => {
-          if (state.isMounted) console.warn('Failed to load state.releases:', err);
-        }); // Load state.releases to check for tag associations
-      } else if (state.ui.activeTab === 'code-search') {
-        // Code search is performed on demand, not auto-loaded
-      } else if (state.ui.activeTab === 'issues' && state.isMounted) {
-        loadIssues().catch(err => {
-          if (state.isMounted) console.warn('Failed to load state.issues:', err);
-        });
-      } else if (state.ui.activeTab === 'prs' && state.isMounted) {
-        loadPRs().catch(err => {
-          if (state.isMounted) console.warn('Failed to load PRs:', err);
-        });
-      } else if (state.ui.activeTab === 'docs' && state.isMounted) {
-        loadDocumentation().catch(err => {
-          if (state.isMounted) console.warn('Failed to load documentation:', err);
-        });
-      } else if (state.ui.activeTab === 'discussions' && state.isMounted) {
-        loadDiscussions().catch(err => {
-          if (state.isMounted) console.warn('Failed to load state.discussions:', err);
-        });
-      } else if (state.ui.activeTab === 'patches' && state.isMounted) {
-        loadPatches().catch(err => {
-          if (state.isMounted) console.warn('Failed to load state.patches:', err);
-        });
-      }
-    }
-  });
-
-  // Reload all branch-dependent data when branch changes
-  let lastBranch: string | null = null;
-  $effect(() => {
-    if (!state.isMounted) return;
-    if (state.git.currentBranch && state.git.currentBranch !== lastBranch) {
-      lastBranch = state.git.currentBranch;
-      if (!state.isMounted) return;
-      
-      // Reload README (always branch-specific)
-      loadReadme().catch(err => {
-        if (state.isMounted) console.warn('Failed to reload README after branch change:', err);
-      });
-      
-      // Reload state.files.list if state.files.list tab is active
-      if (state.ui.activeTab === 'files' && state.isMounted) {
-        if (state.files.currentFile) {
-          loadFile(state.files.currentFile).catch(err => {
-            if (state.isMounted) console.warn('Failed to reload file after branch change:', err);
-          });
-        } else {
-          loadFiles(state.files.currentPath).catch(err => {
-            if (state.isMounted) console.warn('Failed to reload state.files.list after branch change:', err);
-          });
-        }
-      }
-      
-      // Reload commit history if history tab is active
-      if (state.ui.activeTab === 'history' && state.isMounted) {
-        loadCommitHistory().catch(err => {
-          if (state.isMounted) console.warn('Failed to reload commit history after branch change:', err);
-        });
-      }
-      
-      // Reload documentation if docs tab is active (reset to force reload)
-      if (state.ui.activeTab === 'docs' && state.isMounted) {
-        state.docs.html = null;
-        state.docs.content = null;
-        state.docs.kind = null;
-        loadDocumentation().catch(err => {
-          if (state.isMounted) console.warn('Failed to reload documentation after branch change:', err);
-        });
-      }
-    }
+  
+  // Initialize branch change effect
+  const lastBranch = { value: null as string | null };
+  useBranchChangeEffect(state, lastBranch, {
+    loadReadme,
+    loadFile,
+    loadFiles,
+    loadCommitHistory,
+    loadDocumentation
   });
 </script>
 
@@ -5743,7 +5449,7 @@
             }
           }}
         />
-      {/if}
+        {/if}
 
       <!-- Patches Tab -->
       {#if state.ui.activeTab === 'patches'}
@@ -5805,7 +5511,7 @@
           }}
           {applying}
         />
-      {/if}
+              {/if}
 
       <!-- Discussions Tab -->
       {#if state.ui.activeTab === 'discussions'}
@@ -5815,7 +5521,7 @@
           repoAnnouncement={repoAnnouncement}
           userPubkey={state.user.pubkey}
         />
-      {/if}
+        {/if}
 
       <!-- Docs Tab -->
       {#if state.ui.activeTab === 'docs'}
@@ -5825,7 +5531,7 @@
           currentBranch={state.git.currentBranch || null}
           relays={[...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS]}
         />
-      {/if}
+        {/if}
 
       <!-- Files tab content is now handled by FilesTab component -->
 
@@ -5903,7 +5609,7 @@
 
 
         <!-- Docs tab content is now handled by DocsTab component -->
-      </div>
+    </div>
     {/if}
   </main>
 
