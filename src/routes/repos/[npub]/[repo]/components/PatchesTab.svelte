@@ -27,6 +27,8 @@
     activeTab?: string;
     tabs?: Array<{ id: string; label: string; icon?: string }>;
     onTabChange?: (tab: string) => void;
+    onCreate?: () => void;
+    userPubkey?: string | null;
   }
   
   let {
@@ -40,7 +42,9 @@
     applying = {},
     activeTab = '',
     tabs = [],
-    onTabChange = () => {}
+    onTabChange = () => {},
+    onCreate,
+    userPubkey = null
   }: Props = $props();
   
   const items = $derived(patches.map(patch => ({
@@ -134,6 +138,8 @@
   {tabs}
   {onTabChange}
   title="Patches"
+  {onCreate}
+  showCreateButton={!!userPubkey && !!onCreate}
 />
 
 <style>

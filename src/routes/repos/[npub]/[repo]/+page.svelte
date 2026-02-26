@@ -294,26 +294,19 @@
   const lastBranch = { value: null as string | null };
   
   // Initialize activeTab from URL query parameter
+  // Sync activeTab to match URL state
   $effect(() => {
     if (typeof window === 'undefined' || !state.isMounted) return;
     const tabFromQuery = $page.url.searchParams.get('tab');
     
     const validTabs = ['docs', 'files', 'issues', 'prs', 'patches', 'discussions', 'history', 'tags', 'code-search'];
     
-    if (tabFromQuery && validTabs.includes(tabFromQuery)) {
-      // Update from URL query parameter
-      if (tabFromQuery !== state.ui.activeTab) {
-        state.ui.activeTab = tabFromQuery as typeof state.ui.activeTab;
-      }
-    } else if (!tabFromQuery) {
-      // No tab in query params - 'files' is the default (no param = files tab)
-      // Only set default if activeTab is not already a valid tab
-      if (!validTabs.includes(state.ui.activeTab)) {
-        state.ui.activeTab = 'files';
-      }
-      // If activeTab is already 'files', do nothing (user is on files tab)
-      // If activeTab is another valid tab but URL has no param, don't override
-      // This allows onTabChange handlers to manage state without interference
+    // Determine what tab the URL represents
+    const urlTab = tabFromQuery && validTabs.includes(tabFromQuery) ? tabFromQuery : 'files';
+    
+    // Only update if activeTab doesn't match URL state
+    if (state.ui.activeTab !== urlTab) {
+      state.ui.activeTab = urlTab as typeof state.ui.activeTab;
     }
   });
   
@@ -2325,6 +2318,8 @@
             }
             goto(url.pathname + url.search, { replaceState: true, noScroll: true });
           }}
+          onCreate={() => { state.openDialog = 'createIssue'; }}
+          userPubkey={state.user.pubkey || null}
         />
       {/if}
 
@@ -2385,6 +2380,8 @@
             }
             goto(url.pathname + url.search, { replaceState: true, noScroll: true });
           }}
+          onCreate={() => { state.openDialog = 'createPR'; }}
+          userPubkey={state.user.pubkey || null}
         />
       {/if}
 
@@ -2466,6 +2463,8 @@
             }
             goto(url.pathname + url.search, { replaceState: true, noScroll: true });
           }}
+          onCreate={() => { state.openDialog = 'createPatch'; }}
+          userPubkey={state.user.pubkey || null}
         />
       {/if}
 

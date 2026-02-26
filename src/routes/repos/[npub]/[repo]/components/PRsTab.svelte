@@ -26,6 +26,8 @@
     activeTab?: string;
     tabs?: Array<{ id: string; label: string; icon?: string }>;
     onTabChange?: (tab: string) => void;
+    onCreate?: () => void;
+    userPubkey?: string | null;
   }
   
   let {
@@ -37,7 +39,9 @@
     onStatusUpdate = () => {},
     activeTab = '',
     tabs = [],
-    onTabChange = () => {}
+    onTabChange = () => {},
+    onCreate,
+    userPubkey = null
   }: Props = $props();
   
   const items = $derived(prs.map(pr => ({
@@ -130,6 +134,8 @@
   {tabs}
   {onTabChange}
   title="Pull Requests"
+  {onCreate}
+  showCreateButton={!!userPubkey && !!onCreate}
 />
 
 <style>

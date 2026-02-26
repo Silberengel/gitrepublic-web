@@ -91,15 +91,19 @@
     {#if selectedCommit}
       {@const commit = commits.find(c => c.hash === selectedCommit)}
       {#if commit}
+        {@const hasNostrSignature = commit.message && commit.message.includes('Nostr-Signature:')}
+        {@const hasVerification = commit.verification && commit.verification.hasSignature !== false}
         <div class="commit-detail">
           <div class="commit-detail-header">
             <h2>Commit {commit.hash.slice(0, 7)}</h2>
-            <button
-              onclick={() => onVerify(commit.hash)}
-              disabled={verifyingCommits.has(commit.hash)}
-            >
-              {verifyingCommits.has(commit.hash) ? 'Verifying...' : 'Verify Signature'}
-            </button>
+            {#if hasNostrSignature || hasVerification}
+              <button
+                onclick={() => onVerify(commit.hash)}
+                disabled={verifyingCommits.has(commit.hash)}
+              >
+                {verifyingCommits.has(commit.hash) ? 'Verifying...' : 'Verify Signature'}
+              </button>
+            {/if}
           </div>
           
           <div class="commit-info">

@@ -24,6 +24,8 @@
     tabs?: Array<{ id: string; label: string; icon?: string }>;
     onTabChange?: (tab: string) => void;
     title?: string;
+    onCreate?: () => void;
+    showCreateButton?: boolean;
   }
   
   let {
@@ -41,7 +43,9 @@
     activeTab = '',
     tabs = [],
     onTabChange = () => {},
-    title = ''
+    title = '',
+    onCreate,
+    showCreateButton = false
   }: Props = $props();
   
   let selectedItem = $derived(items.find(item => item.id === selectedId) || null);
@@ -76,6 +80,18 @@
 >
   {#snippet leftPane()}
     <div class="status-groups">
+      {#if showCreateButton && onCreate}
+        <div class="status-header-wrapper">
+          <h2 class="status-title">{title || 'Items'}</h2>
+          <button 
+            onclick={onCreate}
+            class="create-button"
+            title="Create New"
+          >
+            <img src="/icons/plus.svg" alt="New" class="icon" />
+          </button>
+        </div>
+      {/if}
       {#each statusGroups as { label, value }}
         {#if grouped[value] && grouped[value].length > 0}
           <div class="status-group">
@@ -132,6 +148,41 @@
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
+  }
+  
+  .status-header-wrapper {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+  }
+  
+  .status-title {
+    margin: 0;
+    font-size: 1.25rem;
+    color: var(--text-primary);
+  }
+  
+  .create-button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0.25rem;
+    display: flex;
+    align-items: center;
+    transition: opacity 0.2s;
+  }
+  
+  .create-button:hover {
+    opacity: 0.7;
+  }
+  
+  .create-button .icon {
+    width: 20px;
+    height: 20px;
+    filter: var(--icon-filter, none);
   }
   
   .status-group {

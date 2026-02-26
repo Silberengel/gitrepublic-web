@@ -36,9 +36,11 @@
   let documentationKind = $state<'markdown' | 'asciidoc' | 'text' | '30040' | null>(null);
   let indexEvent = $state<NostrEvent | null>(null);
   let loading = $state(false);
+  let loadingDocs = $state(false);
   let error = $state<string | null>(null);
   let docFiles: Array<{ name: string; path: string }> = $state([]);
   let selectedDoc: string | null = $state(null);
+  let hasReadme = $state(false);
   
   $effect(() => {
     if (npub && repo && currentBranch) {
@@ -48,83 +50,67 @@
   
   async function loadDocumentation() {
     loading = true;
+    loadingDocs = true;
     error = null;
     documentationContent = null;
     documentationKind = null;
     indexEvent = null;
+    hasReadme = false;
     
     try {
       logger.operation('Loading documentation', { npub, repo, branch: currentBranch });
       
-      // Try README first (faster, always available if repo has content)
-      const readmePromise = (async () => {
-        try {
-          const readmeResponse = await fetch(`/api/repos/${npub}/${repo}/readme?ref=${currentBranch || 'HEAD'}`);
-          if (readmeResponse.ok) {
-            const readmeData = await readmeResponse.json();
-            if (readmeData.content) {
-              return {
-                content: readmeData.content,
-                kind: readmeData.type || 'markdown',
-                path: 'README.md'
-              };
-            }
+      // Load README FIRST and display immediately
+      try {
+        const readmeResponse = await fetch(`/api/repos/${npub}/${repo}/readme?ref=${currentBranch || 'HEAD'}`);
+        if (readmeResponse.ok) {
+          const readmeData = await readmeResponse.json();
+          if (readmeData.content) {
+            documentationContent = readmeData.content;
+            documentationKind = readmeData.type || 'markdown';
+            selectedDoc = 'README.md';
+            hasReadme = true;
+            loading = false; // Stop showing loading once README is loaded
+            logger.debug({ npub, repo }, 'README loaded and displayed');
           }
-        } catch (readmeErr) {
-          logger.debug({ error: readmeErr, npub, repo }, 'No README found');
         }
-        return null;
-      })();
-      
-      // Try docs folder in parallel
-      const docsPromise = (async () => {
-        try {
-          const response = await fetch(`/api/repos/${npub}/${repo}/tree?ref=${currentBranch || 'HEAD'}&path=docs`);
-          if (response.ok) {
-            const data = await response.json();
-            return Array.isArray(data) ? data : (data.files || []);
-          }
-        } catch (err) {
-          logger.debug({ error: err, npub, repo }, 'Docs folder not found');
-        }
-        return [];
-      })();
-      
-      // Wait for both, prefer docs folder if it has files
-      const [readmeResult, docsFiles] = await Promise.all([readmePromise, docsPromise]);
-      docFiles = docsFiles;
-      
-      if (docsFiles.length > 0) {
-        // Look for README or index files first in docs folder
-        const readmeFile = docsFiles.find((f: { name: string; path: string }) => 
-          f.name.toLowerCase() === 'readme.md' || 
-          f.name.toLowerCase() === 'readme.adoc' ||
-          f.name.toLowerCase() === 'index.md'
-        );
-        
-        if (readmeFile) {
-          await loadDocFile(readmeFile.path);
-        } else {
-          // Load first file from docs folder
-          await loadDocFile(docsFiles[0].path);
-        }
-      } else if (readmeResult) {
-        // No docs folder, use README from root
-        documentationContent = readmeResult.content;
-        documentationKind = readmeResult.kind as 'markdown' | 'asciidoc';
-        selectedDoc = readmeResult.path;
+      } catch (readmeErr) {
+        logger.debug({ error: readmeErr, npub, repo }, 'No README found');
       }
       
-      // Check for kind 30040 publication index (only if no content found yet)
-      if (!documentationContent && !indexEvent) {
+      // Now check for docs folder in the background
+      try {
+        const response = await fetch(`/api/repos/${npub}/${repo}/tree?ref=${currentBranch || 'HEAD'}&path=docs`);
+        if (response.ok) {
+          const data = await response.json();
+          const docsFiles = Array.isArray(data) ? data : (data.files || []);
+          
+          if (docsFiles.length > 0) {
+            docFiles = docsFiles;
+            logger.debug({ npub, repo, fileCount: docsFiles.length }, 'Docs folder found');
+          }
+        }
+      } catch (err) {
+        logger.debug({ error: err, npub, repo }, 'Docs folder not found');
+      }
+      
+      // Check for kind 30040 publication index (only if no README found)
+      if (!hasReadme && !indexEvent) {
         await checkForPublicationIndex();
+        if (indexEvent) {
+          loading = false;
+        }
       }
       
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load documentation';
       logger.error({ error: err, npub, repo }, 'Error loading documentation');
-    } finally {
       loading = false;
+    } finally {
+      loadingDocs = false;
+      if (!hasReadme && !indexEvent) {
+        loading = false;
+      }
     }
   }
   
@@ -198,31 +184,47 @@
   {#snippet leftPane()}
     <div class="docs-sidebar">
       <h3>Documentation</h3>
-      {#if loading}
-        <div class="loading">Loading documentation...</div>
+      {#if loadingDocs}
+        <div class="loading">Loading...</div>
       {:else if error}
         <div class="error">{error}</div>
-      {:else if docFiles.length > 0}
+      {:else}
         <ul class="doc-list">
-          {#each docFiles as file}
+          {#if hasReadme}
             <li>
               <button 
-                class="doc-item {selectedDoc === file.path ? 'selected' : ''}"
-                onclick={() => loadDocFile(file.path)}
+                class="doc-item {selectedDoc === 'README.md' ? 'selected' : ''}"
+                onclick={() => {
+                  // Reload README if needed
+                  if (!documentationContent) {
+                    loadDocumentation();
+                  } else {
+                    selectedDoc = 'README.md';
+                  }
+                }}
               >
-                {file.name}
+                README.md
               </button>
             </li>
-          {/each}
+          {/if}
+          {#if docFiles.length > 0}
+            {#each docFiles as file}
+              <li>
+                <button 
+                  class="doc-item {selectedDoc === file.path ? 'selected' : ''}"
+                  onclick={() => loadDocFile(file.path)}
+                >
+                  {file.name}
+                </button>
+              </li>
+            {/each}
+          {/if}
+          {#if !hasReadme && docFiles.length === 0}
+            <div class="empty-sidebar">
+              <p>No documentation files found</p>
+            </div>
+          {/if}
         </ul>
-      {:else if documentationContent}
-        <div class="empty-sidebar">
-          <p>No custom documentation found. Displaying the ReadMe, instead.</p>
-        </div>
-      {:else}
-        <div class="empty-sidebar">
-          <p>No documentation files found</p>
-        </div>
       {/if}
     </div>
   {/snippet}
@@ -260,12 +262,14 @@
 <style>
   .docs-sidebar {
     padding: 1rem;
+    color: var(--text-primary);
   }
   
   .docs-sidebar h3 {
     margin: 0 0 1rem 0;
     font-size: 1rem;
     font-weight: 600;
+    color: var(--text-primary);
   }
   
   .doc-list {
@@ -284,16 +288,22 @@
     margin-bottom: 0.5rem;
     cursor: pointer;
     transition: all 0.2s;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: inherit;
   }
   
   .doc-item:hover {
     background: var(--bg-hover);
     border-color: var(--accent-color);
+    color: var(--text-primary);
   }
   
   .doc-item.selected {
     background: var(--bg-selected);
     border-color: var(--accent-color);
+    color: var(--text-primary);
+    font-weight: 500;
   }
   
   .empty-docs {

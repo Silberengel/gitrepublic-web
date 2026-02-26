@@ -73,6 +73,10 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
   }
   
   .tab-header {
@@ -83,6 +87,8 @@
     gap: 0.5rem;
     background: var(--bg-primary);
     flex-shrink: 0;
+    width: 100%;
+    box-sizing: border-box;
   }
   
   .tab-title {
@@ -90,26 +96,35 @@
     margin: 0;
     font-size: 1.2rem;
     color: var(--text-primary);
+    min-width: 0;
   }
   
   .tab-layout {
     display: flex;
     flex: 1;
     min-height: 0;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
     gap: 1rem;
+    box-sizing: border-box;
   }
   
   .left-pane {
     flex: 0 0 300px;
+    min-width: 300px;
+    max-width: 300px;
     border-right: 1px solid var(--border-color);
     overflow-y: auto;
     padding: 1rem;
+    box-sizing: border-box;
   }
   
   .right-panel {
-    flex: 1;
+    flex: 1 1 auto;
     min-width: 0;
-    width: 100%;
+    width: auto;
+    max-width: none;
     overflow-y: auto;
     overflow-x: hidden;
     padding: 1rem;

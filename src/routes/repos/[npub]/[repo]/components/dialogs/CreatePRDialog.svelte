@@ -47,13 +47,24 @@
     margin-bottom: 1rem;
   }
 
+  label {
+    color: var(--text-primary, #e0e0e0);
+  }
+
   label input,
   label textarea {
     width: 100%;
     padding: 0.5rem;
     margin-top: 0.25rem;
-    border: 1px solid var(--border-color, #e0e0e0);
+    border: 1px solid var(--border-color, #333);
     border-radius: 4px;
+    background: var(--bg-secondary, #2a2a2a);
+    color: var(--text-primary, #e0e0e0);
+  }
+
+  label input::placeholder,
+  label textarea::placeholder {
+    color: var(--text-secondary, #888);
   }
 
   .modal-actions {
@@ -72,12 +83,22 @@
   }
 
   .cancel-button {
-    background: var(--cancel-bg, #e0e0e0);
+    background: var(--cancel-bg, var(--bg-secondary, #2a2a2a));
+    color: var(--text-primary, #e0e0e0);
+    border: 1px solid var(--border-color, #333);
+  }
+
+  .cancel-button:hover {
+    background: var(--bg-hover, #3a3a3a);
   }
 
   .save-button {
-    background: var(--primary-color, #2196f3);
+    background: var(--primary-color, var(--accent-color, #2196f3));
     color: white;
+  }
+
+  .save-button:hover {
+    opacity: 0.9;
   }
 
   .save-button:disabled {

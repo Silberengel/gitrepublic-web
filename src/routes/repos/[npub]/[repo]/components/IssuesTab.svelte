@@ -27,6 +27,8 @@
     activeTab?: string;
     tabs?: Array<{ id: string; label: string; icon?: string }>;
     onTabChange?: (tab: string) => void;
+    onCreate?: () => void;
+    userPubkey?: string | null;
   }
   
   let {
@@ -40,7 +42,9 @@
     loadingReplies = false,
     activeTab = '',
     tabs = [],
-    onTabChange = () => {}
+    onTabChange = () => {},
+    onCreate,
+    userPubkey = null
   }: Props = $props();
   
   const items = $derived(issues.map(issue => ({
@@ -148,6 +152,8 @@
   {tabs}
   {onTabChange}
   title="Issues"
+  {onCreate}
+  showCreateButton={!!userPubkey && !!onCreate}
 />
 
 <style>

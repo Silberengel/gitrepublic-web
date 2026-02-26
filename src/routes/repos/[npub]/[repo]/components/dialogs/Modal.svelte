@@ -52,16 +52,19 @@
   }
 
   .modal {
-    background: var(--modal-bg, #fff);
+    background: var(--modal-bg, var(--bg-primary, #1a1a1a));
+    color: var(--text-primary, #e0e0e0);
     border-radius: 8px;
     padding: 1.5rem;
     max-width: 500px;
     width: 90%;
     max-height: 90vh;
     overflow-y: auto;
+    border: 1px solid var(--border-color, #333);
   }
 
   .modal h3 {
     margin: 0 0 1rem 0;
+    color: var(--text-primary, #e0e0e0);
   }
 </style>
