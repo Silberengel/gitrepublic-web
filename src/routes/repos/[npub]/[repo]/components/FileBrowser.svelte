@@ -26,7 +26,7 @@
   {#if loading}
     <div class="loading">Loading files...</div>
   {:else if files.length === 0}
-    <div class="empty">No files found</div>
+    <div class="empty">This repo is empty and contains no files.</div>
   {:else}
     <div class="file-list">
       {#if currentPath}

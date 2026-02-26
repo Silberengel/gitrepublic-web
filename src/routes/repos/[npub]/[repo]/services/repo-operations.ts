@@ -49,7 +49,7 @@ export async function checkCloneStatus(
     });
     
     // If response is 403, repo exists (cloned) but user doesn't have access
-    // If response is 404, repo doesn't exist (not cloned)
+    // If response is 404, repo doesn't exist (not cloned) - this is expected, not an error
     // If response is 200, repo exists and is accessible (cloned)
     const wasCloned = response.status !== 404;
     state.clone.isCloned = wasCloned;
@@ -59,7 +59,16 @@ export async function checkCloneStatus(
       // Try to detect API fallback by checking if we have clone URLs
       if (repoCloneUrls && repoCloneUrls.length > 0) {
         // We have clone URLs, so API fallback might work - will be detected when loadBranches() runs
+        // Set a timeout to mark as unavailable if not determined within 5 seconds
         state.clone.apiFallbackAvailable = null; // Will be set to true if a subsequent request succeeds
+        setTimeout(() => {
+          // If still null after 5 seconds, assume API fallback is unavailable
+          // (loadBranches should have set it by now if it worked)
+          if (state.clone.apiFallbackAvailable === null && state.clone.isCloned === false) {
+            state.clone.apiFallbackAvailable = false;
+            console.log('[Clone Status] API fallback check timeout - assuming unavailable');
+          }
+        }, 5000);
       } else {
         state.clone.apiFallbackAvailable = false;
       }
@@ -68,12 +77,25 @@ export async function checkCloneStatus(
       state.clone.apiFallbackAvailable = false;
     }
     
-    console.log(`[Clone Status] Repo ${wasCloned ? 'is cloned' : 'is not cloned'} (status: ${response.status}), API fallback: ${state.clone.apiFallbackAvailable}`);
+    // Only log as info, not error - 404 is expected when repo isn't cloned
+    if (response.status === 404) {
+      console.log(`[Clone Status] Repo is not cloned (status: 404 - expected), API fallback: ${state.clone.apiFallbackAvailable}`);
+    } else {
+      console.log(`[Clone Status] Repo ${wasCloned ? 'is cloned' : 'is not cloned'} (status: ${response.status}), API fallback: ${state.clone.apiFallbackAvailable}`);
+    }
   } catch (err) {
-    // On error, assume not cloned
-    console.warn('[Clone Status] Error checking clone status:', err);
+    // On error, assume not cloned - but don't log as error since 404s are expected
+    // Only log network errors or unexpected errors
+    if (err instanceof TypeError && err.message.includes('fetch')) {
+      // Network error - might be offline or CORS issue
+      console.warn('[Clone Status] Network error checking clone status (may be offline):', err);
+    } else {
+      // Unexpected error
+      console.warn('[Clone Status] Error checking clone status:', err);
+    }
     state.clone.isCloned = false;
-    state.clone.apiFallbackAvailable = false;
+    // If we have clone URLs, API fallback might still work
+    state.clone.apiFallbackAvailable = (repoCloneUrls && repoCloneUrls.length > 0) ? null : false;
   } finally {
     state.clone.checking = false;
   }

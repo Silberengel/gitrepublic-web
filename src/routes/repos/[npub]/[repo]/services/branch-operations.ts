@@ -158,29 +158,53 @@ export async function loadBranches(
         state.git.currentBranch = state.git.defaultBranch;
       }
     } else {
-      // No branches exist - set currentBranch to null to show "no branches" in header
+      // No branches exist - empty repo
       state.git.currentBranch = null;
+      state.git.defaultBranch = null;
+      // Don't set error - empty repos are valid
+      console.log('[Branches] Repository is empty (no branches) - this is valid');
     }
   } catch (err: any) {
     // Handle 404 - repository not found or not cloned
     const errorMessage = err instanceof Error ? err.message : String(err);
     if (errorMessage.includes('404') || errorMessage.includes('not found')) {
-      if (errorMessage.includes('not cloned locally')) {
-        // Repository is not cloned - check if API fallback might be available
-        if (repoCloneUrls && repoCloneUrls.length > 0) {
-          // We have clone URLs, so API fallback might work - mark as unknown for now
-          state.clone.apiFallbackAvailable = null;
+      // Check if API fallback was tried and failed
+      if (errorMessage.includes('could not be fetched via API') || 
+          errorMessage.includes('API fallback failed') ||
+          errorMessage.includes('could not be fetched via API from external clone URLs')) {
+        // API fallback was attempted but failed - set to false
+        state.clone.apiFallbackAvailable = false;
+        console.log('[Branches] API fallback was attempted but failed');
+      } else if (repoCloneUrls && repoCloneUrls.length > 0) {
+        // We have clone URLs, but API fallback hasn't been tried yet
+        // Only set to null if this is the first check (skipApiFallback wasn't used)
+        // If we're here from a regular branches call, API fallback should have been tried
+        // So if we get a 404, it means API fallback failed
+        if (errorMessage.includes('not cloned locally') && !errorMessage.includes('skipApiFallback')) {
+          // This is from a regular branches call (not skipApiFallback), so API fallback was tried
+          state.clone.apiFallbackAvailable = false;
+          console.log('[Branches] Repo not cloned and API fallback unavailable (tried and failed)');
         } else {
-          // No clone URLs, API fallback won't work
+          // This might be from skipApiFallback check - API fallback not tried yet
+          state.clone.apiFallbackAvailable = null;
+          console.log('[Branches] Repo not cloned but has clone URLs - API fallback may be available');
+        }
+      } else if (errorMessage.includes('not cloned locally')) {
+        // Repository is not cloned and no clone URLs
+        state.clone.apiFallbackAvailable = false;
+        console.log('[Branches] Repo not cloned and no clone URLs - API fallback unavailable');
+      } else {
+        // Generic 404 - might be a real "not found" or might be not cloned
+        // If we have clone URLs from announcement, don't set repoNotFound
+        // Only set repoNotFound if we're really sure the repo doesn't exist
+        if (!repoCloneUrls || repoCloneUrls.length === 0) {
           state.repoNotFound = true;
           state.clone.apiFallbackAvailable = false;
-          state.error = errorMessage || `Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`;
+          state.error = `Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`;
+        } else {
+          // We have clone URLs, so repo exists - but API fallback failed
+          state.clone.apiFallbackAvailable = false;
         }
-      } else {
-        // Generic 404 - repository doesn't exist
-        state.repoNotFound = true;
-        state.clone.apiFallbackAvailable = false;
-        state.error = `Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`;
       }
     } else if (errorMessage.includes('403') || errorMessage.includes('Access denied')) {
       // Access denied - don't set repoNotFound, allow retry after login

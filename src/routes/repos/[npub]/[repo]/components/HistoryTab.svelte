@@ -55,7 +55,7 @@
     <div class="commits-list">
       <h3>Commits</h3>
       {#if commits.length === 0}
-        <div class="empty">No commits found</div>
+        <div class="empty">This repo is empty and contains no files.</div>
       {:else}
         <ul class="commit-list">
           {#each commits as commit}
@@ -147,6 +147,10 @@
           {/if}
         </div>
       {/if}
+    {:else if commits.length === 0}
+      <div class="empty-state">
+        <p>This repo is empty and contains no files.</p>
+      </div>
     {:else}
       <div class="empty-state">
         <p>Select a commit to view details</p>

@@ -301,8 +301,8 @@
     
     const validTabs = ['docs', 'files', 'issues', 'prs', 'patches', 'discussions', 'history', 'tags', 'code-search'];
     
-    // Determine what tab the URL represents
-    const urlTab = tabFromQuery && validTabs.includes(tabFromQuery) ? tabFromQuery : 'files';
+    // Determine what tab the URL represents - default to 'docs' since it always works
+    const urlTab = tabFromQuery && validTabs.includes(tabFromQuery) ? tabFromQuery : 'docs';
     
     // Only update if activeTab doesn't match URL state
     if (state.ui.activeTab !== urlTab) {
@@ -369,31 +369,18 @@
   
 
   
-  // Tabs menu - defined after state.issues and state.prs
-  // Order: Docs, Files, Issues, PRs, Patches, Discussion, History, Tags, Code Search
-  // Show tabs that require cloned repo when repo is cloned OR API fallback is available
-  const tabs = $derived.by(() => {
-    const allTabs = [
-      { id: 'docs', label: 'Documentation', icon: '/icons/book.svg', requiresClone: false },
-      { id: 'files', label: 'Files', icon: '/icons/file-text.svg', requiresClone: true },
-      { id: 'issues', label: 'Issues', icon: '/icons/alert-circle.svg', requiresClone: false },
-      { id: 'prs', label: 'Pull Requests', icon: '/icons/git-pull-request.svg', requiresClone: false },
-      { id: 'patches', label: 'Patches', icon: '/icons/clipboard-list.svg', requiresClone: false },
-      { id: 'discussions', label: 'Discussions', icon: '/icons/message-circle.svg', requiresClone: false },
-      { id: 'history', label: 'Commit History', icon: '/icons/git-commit.svg', requiresClone: true },
-      { id: 'tags', label: 'Tags', icon: '/icons/tag.svg', requiresClone: true },
-      { id: 'code-search', label: 'Code Search', icon: '/icons/search.svg', requiresClone: true }
-    ];
-    
-    // Show all tabs if repo is cloned OR API fallback is available
-    // Otherwise, only show tabs that don't require state.clone.cloning
-    if (state.clone.isCloned === false && !canUseApiFallback) {
-      return allTabs.filter(tab => !tab.requiresClone).map(({ requiresClone, ...tab }) => tab);
-    }
-    
-    // Return all tabs when repo is cloned, API fallback is available, or status is unknown (remove requiresClone property)
-    return allTabs.map(({ requiresClone, ...tab }) => tab);
-  });
+  // Tabs menu - always show all tabs, let each tab component handle its own requirements
+  const tabs = [
+    { id: 'docs', label: 'Documentation', icon: '/icons/book.svg' },
+    { id: 'files', label: 'Files', icon: '/icons/file-text.svg' },
+    { id: 'issues', label: 'Issues', icon: '/icons/alert-circle.svg' },
+    { id: 'prs', label: 'Pull Requests', icon: '/icons/git-pull-request.svg' },
+    { id: 'patches', label: 'Patches', icon: '/icons/clipboard-list.svg' },
+    { id: 'discussions', label: 'Discussions', icon: '/icons/message-circle.svg' },
+    { id: 'history', label: 'Commit History', icon: '/icons/git-commit.svg' },
+    { id: 'tags', label: 'Tags', icon: '/icons/tag.svg' },
+    { id: 'code-search', label: 'Code Search', icon: '/icons/search.svg' }
+  ];
   
   // Initialize tab switch effect (already done above, but keeping for clarity)
   
@@ -673,7 +660,8 @@
       : '';
     
     // Get current branch for the API URL
-    const branch = state.git.currentBranch || state.git.defaultBranch || 'main';
+    // If repo is empty (no branches), use null and let API handle it
+    const branch = state.git.currentBranch || state.git.defaultBranch || null;
     
     // Rewrite relative image paths
     return html.replace(/<img([^>]*)\ssrc=["']([^"']+)["']([^>]*)>/gi, (match, before, src, after) => {
@@ -708,7 +696,9 @@
       imagePath = normalizedPath.join('/');
       
       // Build API URL
-      const apiUrl = `/api/repos/${state.npub}/${state.repo}/raw?path=${encodeURIComponent(imagePath)}&ref=${encodeURIComponent(branch)}`;
+      // Use HEAD if branch is null (empty repo)
+      const ref = branch || 'HEAD';
+      const apiUrl = `/api/repos/${state.npub}/${state.repo}/raw?path=${encodeURIComponent(imagePath)}&ref=${encodeURIComponent(ref)}`;
       
       return `<img${before} src="${apiUrl}"${after}>`;
     });
@@ -2086,23 +2076,9 @@
     {/if}
 
     <!-- Tabs -->
-    
-    {#if state.clone.isCloned === false && !canUseApiFallback && tabs.length === 0}
-      <div class="repo-not-cloned-message">
-        <div class="message-content">
-          <h2>Repository Not Cloned</h2>
-          <p>This repository has not been cloned to the server yet, and read-only access via external clone URLs is not available.</p>
-          {#if hasUnlimitedAccess($userStore.userLevel)}
-            <p>Use the "Clone to Server" option in the repository menu to clone this repository.</p>
-          {:else}
-            <p>Contact a server administrator with unlimited access to clone this repository.</p>
-          {/if}
-        </div>
-      </div>
-    {:else}
     <div class="repo-layout">
       <!-- Files Tab -->
-      {#if state.ui.activeTab === 'files' && canViewRepo}
+      {#if state.ui.activeTab === 'files'}
         <FilesTab
           files={state.files.list}
           currentPath={state.files.currentPath}
@@ -2166,7 +2142,7 @@
             state.ui.activeTab = tab as typeof state.ui.activeTab;
             // Update URL query parameter without page reload
             const url = new URL($page.url);
-            if (tab === 'files') {
+            if (tab === 'docs') {
               url.searchParams.delete('tab');
             } else {
               url.searchParams.set('tab', tab);
@@ -2177,7 +2153,7 @@
       {/if}
 
       <!-- History Tab -->
-      {#if state.ui.activeTab === 'history' && canViewRepo}
+      {#if state.ui.activeTab === 'history'}
         <HistoryTab
           commits={state.git.commits}
           selectedCommit={state.git.selectedCommit}
@@ -2208,7 +2184,7 @@
             state.ui.activeTab = tab as typeof state.ui.activeTab;
             // Update URL query parameter without page reload
             const url = new URL($page.url);
-            if (tab === 'files') {
+            if (tab === 'docs') {
               url.searchParams.delete('tab');
             } else {
               url.searchParams.set('tab', tab);
@@ -2237,17 +2213,17 @@
         {tabs}
         showLeftPanelOnMobile={state.ui.showLeftPanelOnMobile}
         onTagSelect={(tagName) => state.git.selectedTag = tagName}
-        onTabChange={(tab: string) => {
-          state.ui.activeTab = tab as typeof state.ui.activeTab;
-          // Update URL without page reload
-          const url = new URL($page.url);
-          if (tab === 'files') {
-            url.searchParams.delete('tab');
-          } else {
-            url.searchParams.set('tab', tab);
-          }
-          goto(url.pathname + url.search, { replaceState: true, noScroll: true });
-        }}
+          onTabChange={(tab: string) => {
+            state.ui.activeTab = tab as typeof state.ui.activeTab;
+            // Update URL without page reload
+            const url = new URL($page.url);
+            if (tab === 'docs') {
+              url.searchParams.delete('tab');
+            } else {
+              url.searchParams.set('tab', tab);
+            }
+            goto(url.pathname + url.search, { replaceState: true, noScroll: true });
+          }}
         onToggleMobilePanel={() => state.ui.showLeftPanelOnMobile = !state.ui.showLeftPanelOnMobile}
         onCreateTag={() => state.openDialog = 'createTag'}
         onCreateRelease={(tagName, tagHash) => {
@@ -2259,7 +2235,7 @@
       />
 
       <!-- Code Search View -->
-      {#if state.ui.activeTab === 'code-search' && canViewRepo}
+      {#if state.ui.activeTab === 'code-search'}
       <aside class="code-search-sidebar" class:hide-on-mobile={!state.ui.showLeftPanelOnMobile && state.ui.activeTab === 'code-search'}>
         <div class="code-search-header">
           <TabsMenu 
@@ -2267,9 +2243,14 @@
             {tabs} 
             onTabChange={(tab: string) => {
               state.ui.activeTab = tab as typeof state.ui.activeTab;
-              // Update URL without page reload
-              const newPath = `/repos/${state.npub}/${state.repo}${tab === 'files' ? '' : `/${tab}`}`;
-              goto(newPath, { replaceState: true, noScroll: true });
+              // Update URL query parameter without page reload
+              const url = new URL($page.url);
+              if (tab === 'docs') {
+                url.searchParams.delete('tab');
+              } else {
+                url.searchParams.set('tab', tab);
+              }
+              goto(url.pathname + url.search, { replaceState: true, noScroll: true });
             }}
           />
           <h2>Code Search</h2>
@@ -2311,7 +2292,7 @@
             state.ui.activeTab = tab as typeof state.ui.activeTab;
             // Update URL query parameter without page reload
             const url = new URL($page.url);
-            if (tab === 'files') {
+            if (tab === 'docs') {
               url.searchParams.delete('tab');
             } else {
               url.searchParams.set('tab', tab);
@@ -2373,7 +2354,7 @@
             state.ui.activeTab = tab as typeof state.ui.activeTab;
             // Update URL query parameter without page reload
             const url = new URL($page.url);
-            if (tab === 'files') {
+            if (tab === 'docs') {
               url.searchParams.delete('tab');
             } else {
               url.searchParams.set('tab', tab);
@@ -2414,12 +2395,29 @@
                 return;
               }
               
+              // Check if repo is empty (no branches)
+              if (state.git.branches.length === 0) {
+                alert('Cannot apply patch to an empty repository. Please create a branch first.');
+                return;
+              }
+              
               if (!confirm('Apply this patch to the repository? This will create a commit with the patch changes.')) {
                 return;
               }
               
               const authorEmail = await getUserEmail();
               const authorName = await getUserName();
+              
+              // Use current branch, default branch, or first branch (repo is not empty at this point)
+              const branch = state.git.currentBranch || state.git.defaultBranch || 
+                (state.git.branches.length > 0 
+                  ? (typeof state.git.branches[0] === 'string' ? state.git.branches[0] : state.git.branches[0].name)
+                  : null);
+              
+              if (!branch) {
+                alert('No branch available to apply patch to. Please create a branch first.');
+                return;
+              }
               
               const response = await fetch(`/api/repos/${state.npub}/${state.repo}/patches/${id}/apply`, {
                 method: 'POST',
@@ -2431,7 +2429,7 @@
                   message: `Apply patch ${id.slice(0, 8)}: ${patch.subject}`,
                   authorName,
                   authorEmail,
-                  branch: state.git.currentBranch || state.git.defaultBranch || 'main'
+                  branch
                 })
               });
               
@@ -2456,7 +2454,7 @@
             state.ui.activeTab = tab as typeof state.ui.activeTab;
             // Update URL query parameter without page reload
             const url = new URL($page.url);
-            if (tab === 'files') {
+            if (tab === 'docs') {
               url.searchParams.delete('tab');
             } else {
               url.searchParams.set('tab', tab);
@@ -2481,7 +2479,7 @@
             state.ui.activeTab = tab as typeof state.ui.activeTab;
             // Update URL query parameter without page reload
             const url = new URL($page.url);
-            if (tab === 'files') {
+            if (tab === 'docs') {
               url.searchParams.delete('tab');
             } else {
               url.searchParams.set('tab', tab);
@@ -2491,8 +2489,8 @@
         />
       {/if}
 
-      <!-- Docs Tab -->
-      {#if state.ui.activeTab === 'docs'}
+      <!-- Docs Tab - Always render as fallback if no other tab is active -->
+      {#if state.ui.activeTab === 'docs' || (!['files', 'issues', 'prs', 'patches', 'discussions', 'history', 'tags', 'code-search'].includes(state.ui.activeTab))}
         <DocsTab
           npub={state.npub}
           repo={state.repo}
@@ -2504,7 +2502,7 @@
             state.ui.activeTab = tab as typeof state.ui.activeTab;
             // Update URL query parameter without page reload
             const url = new URL($page.url);
-            if (tab === 'files') {
+            if (tab === 'docs') {
               url.searchParams.delete('tab');
             } else {
               url.searchParams.set('tab', tab);
@@ -2521,7 +2519,7 @@
         <!-- Tags content is now handled by TagsTab component -->
 
 
-        {#if state.ui.activeTab === 'code-search' && canViewRepo}
+        {#if state.ui.activeTab === 'code-search'}
           <div class="code-search-content" class:hide-on-mobile={state.ui.showLeftPanelOnMobile && state.ui.activeTab === 'code-search'}>
             <div class="content-header-mobile">
               <button 
@@ -2532,52 +2530,58 @@
                 <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
               </button>
             </div>
-            <div class="code-search-form">
-              <div class="search-input-group">
-                <input 
-                  type="text" 
-                  bind:value={state.codeSearch.query}
-                  placeholder="Search code..."
-                  onkeydown={(e) => e.key === 'Enter' && performCodeSearch()}
-                  class="code-search-input"
-                />
-                <select bind:value={state.codeSearch.scope} class="code-search-scope">
-                  <option value="repo">This Repository</option>
-                  <option value="all">All Repositories</option>
-                </select>
-                <button onclick={performCodeSearch} disabled={state.loading.codeSearch || !state.codeSearch.query.trim()} class="search-button">
-                  {state.loading.codeSearch ? 'Searching...' : 'Search'}
-                </button>
-              </div>
-            </div>
-            {#if state.loading.codeSearch}
+            {#if state.files.list.length === 0 && !state.loading.main}
               <div class="empty-state">
-                <p>Searching...</p>
+                <p>This repo is empty and contains no files.</p>
               </div>
-            {:else if state.codeSearch.results.length > 0}
-              <div class="code-search-results">
-                <h3>Found {state.codeSearch.results.length} result{state.codeSearch.results.length !== 1 ? 's' : ''}</h3>
-                {#each state.codeSearch.results as result}
-                  <div class="code-search-result-item">
-                    <div class="result-header">
-                      <span class="result-file">{result.file}</span>
-                      <span class="result-line">Line {result.line}</span>
-                      {#if state.codeSearch.scope === 'all' && 'repo' in result}
-                        <span class="result-repo">{result.repo || state.npub}/{result.repo || state.repo}</span>
-                      {/if}
+            {:else}
+              <div class="code-search-form">
+                <div class="search-input-group">
+                  <input 
+                    type="text" 
+                    bind:value={state.codeSearch.query}
+                    placeholder="Search code..."
+                    onkeydown={(e) => e.key === 'Enter' && performCodeSearch()}
+                    class="code-search-input"
+                  />
+                  <select bind:value={state.codeSearch.scope} class="code-search-scope">
+                    <option value="repo">This Repository</option>
+                    <option value="all">All Repositories</option>
+                  </select>
+                  <button onclick={performCodeSearch} disabled={state.loading.codeSearch || !state.codeSearch.query.trim()} class="search-button">
+                    {state.loading.codeSearch ? 'Searching...' : 'Search'}
+                  </button>
+                </div>
+              </div>
+              {#if state.loading.codeSearch}
+                <div class="empty-state">
+                  <p>Searching...</p>
+                </div>
+              {:else if state.codeSearch.results.length > 0}
+                <div class="code-search-results">
+                  <h3>Found {state.codeSearch.results.length} result{state.codeSearch.results.length !== 1 ? 's' : ''}</h3>
+                  {#each state.codeSearch.results as result}
+                    <div class="code-search-result-item">
+                      <div class="result-header">
+                        <span class="result-file">{result.file}</span>
+                        <span class="result-line">Line {result.line}</span>
+                        {#if state.codeSearch.scope === 'all' && 'repo' in result}
+                          <span class="result-repo">{result.repo || state.npub}/{result.repo || state.repo}</span>
+                        {/if}
+                      </div>
+                      <pre class="result-content">{result.content}</pre>
                     </div>
-                    <pre class="result-content">{result.content}</pre>
-                  </div>
-                {/each}
-              </div>
-            {:else if state.codeSearch.query.trim() && !state.loading.codeSearch}
-              <div class="empty-state">
-                {#if state.error}
-                  <p class="state.error-message">Error: {state.error}</p>
-                {:else}
-                  <p>No results found</p>
-                {/if}
-              </div>
+                  {/each}
+                </div>
+              {:else if state.codeSearch.query.trim() && !state.loading.codeSearch}
+                <div class="empty-state">
+                  {#if state.error}
+                    <p class="state.error-message">Error: {state.error}</p>
+                  {:else}
+                    <p>No results found</p>
+                  {/if}
+                </div>
+              {/if}
             {/if}
           </div>
         {/if}
@@ -2591,7 +2595,6 @@
 
         <!-- Docs tab content is now handled by DocsTab component -->
     </div>
-    {/if}
   </main>
 
   <!-- Dialogs -->

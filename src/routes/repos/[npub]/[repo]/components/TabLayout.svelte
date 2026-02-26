@@ -25,7 +25,8 @@
     activeTab = '',
     tabs = [],
     onTabChange = () => {},
-    title = ''
+    title = '',
+    headerActions
   }: Props = $props();
 </script>
 

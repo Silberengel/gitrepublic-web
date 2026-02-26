@@ -99,7 +99,7 @@
   }
 </script>
 
-{#if activeTab === 'tags' && canViewRepo}
+{#if activeTab === 'tags'}
   <aside class="tags-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'tags'}>
     <div class="tags-header">
       <TabsMenu 
@@ -153,7 +153,7 @@
       </ul>
     {:else}
       <div class="empty-state">
-        <p>No tags found</p>
+        <p>This repo is empty and contains no files.</p>
       </div>
     {/if}
   </aside>
@@ -240,6 +240,10 @@
           {/if}
         </div>
       {/if}
+    {:else if tags.length === 0}
+      <div class="empty-state">
+        <p>This repo is empty and contains no files.</p>
+      </div>
     {:else}
       <div class="empty-state">
         <p>Select a tag from the sidebar to view details</p>

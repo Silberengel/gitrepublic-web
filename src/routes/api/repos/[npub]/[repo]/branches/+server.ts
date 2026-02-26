@@ -220,6 +220,12 @@ export const GET: RequestHandler = createRepoGetHandler(
         }
       }
       
+      // If branches is still empty after API fallback, return empty array (empty repo is valid)
+      if (branches.length === 0) {
+        logger.debug({ npub: context.npub, repo: context.repo }, 'Repository is empty (no branches), returning empty array');
+        return json([]);
+      }
+      
       // Sort branches: default branch first, then alphabetically
       let sortedBranches = [...branches];
       try {

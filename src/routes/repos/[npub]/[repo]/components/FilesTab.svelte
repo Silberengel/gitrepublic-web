@@ -259,6 +259,10 @@
           </div>
         {/if}
       </div>
+    {:else if files.length === 0 && !readmeContent}
+      <div class="empty-state">
+        <p>This repo is empty and contains no files.</p>
+      </div>
     {:else}
       <div class="empty-state">
         <p>Select a file to view or edit</p>
