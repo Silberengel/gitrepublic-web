@@ -47,7 +47,6 @@
   // Note: Announcements are now stored in nostr/repo-events.jsonl, not .nostr-announcement
   import type { NostrEvent } from '$lib/types/nostr.js';
   import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
-  import { fetchUserEmail, fetchUserName } from '$lib/utils/user-profile.js';
   import { createRepoState, type RepoState } from './stores/repo-state.js';
   import {
     usePageDataEffect,
@@ -61,6 +60,23 @@
     useTabChangeEffect,
     useBranchChangeEffect
   } from './hooks/use-repo-effects.js';
+  import {
+    getHighlightLanguage,
+    supportsPreview,
+    isImageFileType,
+    renderCsvAsTable,
+    escapeHtml,
+    applySyntaxHighlighting as applySyntaxHighlightingUtil,
+    renderFileAsHtml as renderFileAsHtmlUtil
+  } from './utils/file-processing.js';
+  import {
+    parseNostrLinks
+  } from './utils/nostr-links.js';
+  // formatDiscussionTime is defined locally (slightly different format than utility version)
+  import {
+    getUserEmail as getUserEmailUtil,
+    getUserName as getUserNameUtil
+  } from './utils/user-profile.js';
 
   // Consolidated state - all state variables in one object
   let state = $state(createRepoState());
@@ -292,34 +308,7 @@
   
   const highlightsService = new HighlightsService(DEFAULT_NOSTR_RELAYS);
 
-  // Parse nostr: links from content and extract IDs/pubkeys
-  function parseNostrLinks(content: string): Array<{ type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile'; value: string; start: number; end: number }> {
-    const links: Array<{ type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile'; value: string; start: number; end: number }> = [];
-    const nostrLinkRegex = /nostr:(nevent1|naddr1|note1|npub1|profile1)[a-zA-Z0-9]+/g;
-    let match;
-    
-    while ((match = nostrLinkRegex.exec(content)) !== null) {
-      const fullMatch = match[0];
-      const prefix = match[1];
-      let type: 'nevent' | 'naddr' | 'note1' | 'npub' | 'profile';
-      
-      if (prefix === 'nevent1') type = 'nevent';
-      else if (prefix === 'naddr1') type = 'naddr';
-      else if (prefix === 'note1') type = 'note1';
-      else if (prefix === 'npub1') type = 'npub';
-      else if (prefix === 'profile1') type = 'profile';
-      else continue;
-      
-      links.push({
-        type,
-        value: fullMatch,
-        start: match.index,
-        end: match.index + fullMatch.length
-      });
-    }
-    
-    return links;
-  }
+  // parseNostrLinks is now imported from utils/nostr-links.ts
 
   // Load events/profiles from nostr: links
   async function loadNostrLinks(content: string) {
@@ -398,8 +387,8 @@
     }
   }
 
-  // Get event from nostr: link
-  function getEventFromNostrLink(link: string): NostrEvent | undefined {
+  // Get event from nostr: link (local version that uses state)
+  function getEventFromNostrLinkLocal(link: string): NostrEvent | undefined {
     try {
       if (link.startsWith('nostr:nevent1') || link.startsWith('nostr:note1')) {
         const decoded = nip19.decode(link.replace('nostr:', ''));
@@ -426,12 +415,12 @@
     return undefined;
   }
 
-  // Get pubkey from nostr: npub/profile link
-  function getPubkeyFromNostrLink(link: string): string | undefined {
+  // Get pubkey from nostr: npub/profile link (local version that uses state)
+  function getPubkeyFromNostrLinkLocal(link: string): string | undefined {
     return state.discussion.nostrLinkProfiles.get(link);
   }
 
-  // Process content with nostr links into parts for rendering
+  // Process content with nostr links into parts for rendering (local version that uses state)
   function processContentWithNostrLinks(content: string): Array<{ type: 'text' | 'event' | 'profile' | 'placeholder'; value: string; event?: NostrEvent; pubkey?: string }> {
     const links = parseNostrLinks(content);
     if (links.length === 0) {
@@ -451,8 +440,8 @@
       }
 
       // Add link
-      const event = getEventFromNostrLink(link.value);
-      const pubkey = getPubkeyFromNostrLink(link.value);
+      const event = getEventFromNostrLinkLocal(link.value);
+      const pubkey = getPubkeyFromNostrLinkLocal(link.value);
       if (event) {
         parts.push({ type: 'event', value: link.value, event });
       } else if (pubkey) {
@@ -863,412 +852,21 @@
     }
   }
 
-  // Map file extensions to highlight.js language names
-  function getHighlightLanguage(ext: string): string {
-    const langMap: Record<string, string> = {
-      'js': 'javascript',
-      'ts': 'typescript',
-      'jsx': 'javascript',
-      'tsx': 'typescript',
-      'json': 'json',
-      'css': 'css',
-      'html': 'xml',
-      'xml': 'xml',
-      'yaml': 'yaml',
-      'yml': 'yaml',
-      'py': 'python',
-      'rb': 'ruby',
-      'go': 'go',
-      'rs': 'rust',
-      'java': 'java',
-      'c': 'c',
-      'cpp': 'cpp',
-      'h': 'c',
-      'hpp': 'cpp',
-      'sh': 'bash',
-      'bash': 'bash',
-      'zsh': 'bash',
-      'sql': 'sql',
-      'php': 'php',
-      'swift': 'swift',
-      'kt': 'kotlin',
-      'scala': 'scala',
-      'r': 'r',
-      'm': 'objectivec',
-      'mm': 'objectivec',
-      'vue': 'xml',
-      'svelte': 'xml',
-      'dockerfile': 'dockerfile',
-      'toml': 'toml',
-      'ini': 'ini',
-      'conf': 'ini',
-      'log': 'plaintext',
-      'txt': 'plaintext',
-      'md': 'markdown',
-      'markdown': 'markdown',
-      'mdown': 'markdown',
-      'mkdn': 'markdown',
-      'mkd': 'markdown',
-      'mdwn': 'markdown',
-      'adoc': 'asciidoc',
-      'asciidoc': 'asciidoc',
-      'ad': 'asciidoc',
-    };
-    return langMap[ext.toLowerCase()] || 'plaintext';
-  }
-
-  // Check if file type supports preview mode
-  function supportsPreview(ext: string): boolean {
-    const previewExtensions = ['md', 'markdown', 'adoc', 'asciidoc', 'html', 'htm', 'csv'];
-    return previewExtensions.includes(ext.toLowerCase());
-  }
-
-  // Check if a file is an image based on extension
-  function isImageFileType(ext: string): boolean {
-    const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'apng', 'avif'];
-    return imageExtensions.includes(ext.toLowerCase());
-  }
+  // File processing utilities are now imported from utils/file-processing.ts
 
   // Render markdown, asciidoc, or HTML files as HTML
   async function renderFileAsHtml(content: string, ext: string) {
-    try {
-      const lowerExt = ext.toLowerCase();
-      
-      if (lowerExt === 'md' || lowerExt === 'markdown') {
-        // Render markdown
-        const MarkdownIt = (await import('markdown-it')).default;
-        const hljsModule = await import('highlight.js');
-        const hljs = hljsModule.default || hljsModule;
-        
-        const md = new MarkdownIt({
-          html: true,
-          linkify: true,
-          typographer: true,
-          breaks: true,
-          highlight: function (str: string, lang: string): string {
-            if (lang && hljs.getLanguage(lang)) {
-              try {
-                return hljs.highlight(str, { language: lang }).value;
-              } catch (__) {}
-            }
-            try {
-              return hljs.highlightAuto(str).value;
-            } catch (__) {}
-            return '';
-          }
-        });
-        
-        let rendered = md.render(content);
-        // Rewrite image paths to point to repository API
-        rendered = rewriteImagePaths(rendered, state.files.currentFile);
-        state.preview.file.html = rendered;
-      } else if (lowerExt === 'adoc' || lowerExt === 'asciidoc') {
-        // Render asciidoc
-        const Asciidoctor = (await import('@asciidoctor/core')).default;
-        const asciidoctor = Asciidoctor();
-        const converted = asciidoctor.convert(content, {
-          safe: 'safe',
-          attributes: {
-            'source-highlighter': 'highlight.js'
-          }
-        });
-        let rendered = typeof converted === 'string' ? converted : String(converted);
-        // Rewrite image paths to point to repository API
-        rendered = rewriteImagePaths(rendered, state.files.currentFile);
-        state.preview.file.html = rendered;
-      } else if (lowerExt === 'html' || lowerExt === 'htm') {
-        // HTML files - rewrite image paths
-        let rendered = content;
-        rendered = rewriteImagePaths(rendered, state.files.currentFile);
-        state.preview.file.html = rendered;
-      } else if (lowerExt === 'csv') {
-        // Parse CSV and render as HTML table
-        state.preview.file.html = renderCsvAsTable(content);
-      }
-    } catch (err) {
-      console.error('Error rendering file as HTML:', err);
-      state.preview.file.html = '';
-    }
+    await renderFileAsHtmlUtil(content, ext, state.files.currentFile, (html: string) => {
+      state.preview.file.html = html;
+    });
   }
 
-  // Parse CSV content and render as HTML table
-  function renderCsvAsTable(csvContent: string): string {
-    try {
-      // Parse CSV - handle quoted fields and escaped quotes
-      const lines = csvContent.split(/\r?\n/).filter(line => line.trim() !== '');
-      if (lines.length === 0) {
-        return '<div class="csv-empty"><p>Empty CSV file</p></div>';
-      }
-
-      const rows: string[][] = [];
-      
-      for (const line of lines) {
-        const row: string[] = [];
-        let currentField = '';
-        let inQuotes = false;
-        
-        for (let i = 0; i < line.length; i++) {
-          const char = line[i];
-          const nextChar = line[i + 1];
-          
-          if (char === '"') {
-            if (inQuotes && nextChar === '"') {
-              // Escaped quote
-              currentField += '"';
-              i++; // Skip next quote
-            } else {
-              // Toggle quote state
-              inQuotes = !inQuotes;
-            }
-          } else if (char === ',' && !inQuotes) {
-            // Field separator
-            row.push(currentField);
-            currentField = '';
-          } else {
-            currentField += char;
-          }
-        }
-        
-        // Add the last field
-        row.push(currentField);
-        rows.push(row);
-      }
-
-      if (rows.length === 0) {
-        return '<div class="csv-empty"><p>No data in CSV file</p></div>';
-      }
-
-      // Find the maximum number of columns to ensure consistent table structure
-      const maxColumns = Math.max(...rows.map(row => row.length));
-
-      // Determine if first row should be treated as header (if it has more than 1 row)
-      const hasHeader = rows.length > 1;
-      const headerRow = hasHeader ? rows[0] : null;
-      const dataRows = hasHeader ? rows.slice(1) : rows;
-
-      // Build HTML table
-      let html = '<div class="csv-table-wrapper"><table class="csv-table">';
-      
-      // Add header row if we have one
-      if (hasHeader && headerRow) {
-        html += '<thead><tr>';
-        for (let i = 0; i < maxColumns; i++) {
-          const cell = headerRow[i] || '';
-          html += `<th>${escapeHtml(cell)}</th>`;
-        }
-        html += '</tr></thead>';
-      }
-      
-      // Add data rows
-      html += '<tbody>';
-      for (const row of dataRows) {
-        html += '<tr>';
-        for (let i = 0; i < maxColumns; i++) {
-          const cell = row[i] || '';
-          html += `<td>${escapeHtml(cell)}</td>`;
-        }
-        html += '</tr>';
-      }
-      html += '</tbody></table></div>';
-
-      return html;
-    } catch (err) {
-      console.error('Error parsing CSV:', err);
-      return `<div class="csv-state.error"><p>Error parsing CSV: ${escapeHtml(err instanceof Error ? err.message : String(err))}</p></div>`;
-    }
-  }
-
-  // Escape HTML to prevent XSS
-  function escapeHtml(text: string): string {
-    const map: Record<string, string> = {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#039;'
-    };
-    return text.replace(/[&<>"']/g, (m) => map[m]);
-  }
+  // CSV and HTML utilities are now imported from utils/file-processing.ts
 
   async function applySyntaxHighlighting(content: string, ext: string) {
-    try {
-      const hljsModule = await import('highlight.js');
-      // highlight.js v11+ uses default export
-      const hljs = hljsModule.default || hljsModule;
-      const lang = getHighlightLanguage(ext);
-      
-      // Register Markdown language if needed (not in highlight.js by default)
-      if (lang === 'markdown' && !hljs.getLanguage('markdown')) {
-        hljs.registerLanguage('markdown', function(hljs) {
-          return {
-            name: 'Markdown',
-            aliases: ['md', 'mkdown', 'mkd'],
-            contains: [
-              // Headers
-              {
-                className: 'section',
-                begin: /^#{1,6}\s+/,
-                relevance: 10
-              },
-              // Bold
-              {
-                className: 'strong',
-                begin: /\*\*[^*]+\*\*/,
-                relevance: 0
-              },
-              {
-                className: 'strong',
-                begin: /__[^_]+__/,
-                relevance: 0
-              },
-              // Italic
-              {
-                className: 'emphasis',
-                begin: /\*[^*]+\*/,
-                relevance: 0
-              },
-              {
-                className: 'emphasis',
-                begin: /_[^_]+_/,
-                relevance: 0
-              },
-              // Inline code
-              {
-                className: 'code',
-                begin: /`[^`]+`/,
-                relevance: 0
-              },
-              // Code blocks
-              {
-                className: 'code',
-                begin: /^```[\w]*/,
-                end: /^```$/,
-                contains: [{ begin: /./ }]
-              },
-              // Links
-              {
-                className: 'link',
-                begin: /\[/,
-                end: /\]/,
-                contains: [
-                  {
-                    className: 'string',
-                    begin: /\(/,
-                    end: /\)/
-                  }
-                ]
-              },
-              // Images
-              {
-                className: 'string',
-                begin: /!\[/,
-                end: /\]/
-              },
-              // Lists
-              {
-                className: 'bullet',
-                begin: /^(\s*)([*+-]|\d+\.)\s+/,
-                relevance: 0
-              },
-              // Blockquotes
-              {
-                className: 'quote',
-                begin: /^>\s+/,
-                relevance: 0
-              },
-              // Horizontal rules
-              {
-                className: 'horizontal_rule',
-                begin: /^(\*{3,}|-{3,}|_{3,})$/,
-                relevance: 0
-              }
-            ]
-          };
-        });
-      }
-      
-      // Register AsciiDoc language if needed (not in highlight.js by default)
-      if (lang === 'asciidoc' && !hljs.getLanguage('asciidoc')) {
-        hljs.registerLanguage('asciidoc', function(hljs) {
-          return {
-            name: 'AsciiDoc',
-            aliases: ['adoc', 'asciidoc', 'ad'],
-            contains: [
-              // Headers
-              {
-                className: 'section',
-                begin: /^={1,6}\s+/,
-                relevance: 10
-              },
-              // Bold
-              {
-                className: 'strong',
-                begin: /\*\*[^*]+\*\*/,
-                relevance: 0
-              },
-              // Italic
-              {
-                className: 'emphasis',
-                begin: /_[^_]+_/,
-                relevance: 0
-              },
-              // Inline code
-              {
-                className: 'code',
-                begin: /`[^`]+`/,
-                relevance: 0
-              },
-              // Code blocks
-              {
-                className: 'code',
-                begin: /^----+$/,
-                end: /^----+$/,
-                contains: [{ begin: /./ }]
-              },
-              // Lists
-              {
-                className: 'bullet',
-                begin: /^(\*+|\.+|-+)\s+/,
-                relevance: 0
-              },
-              // Links
-              {
-                className: 'link',
-                begin: /link:/,
-                end: /\[/,
-                contains: [{ begin: /\[/, end: /\]/ }]
-              },
-              // Comments
-              {
-                className: 'comment',
-                begin: /^\/\/.*$/,
-                relevance: 0
-              },
-              // Attributes
-              {
-                className: 'attr',
-                begin: /^:.*:$/,
-                relevance: 0
-              }
-            ]
-          };
-        });
-      }
-      
-      // Apply highlighting
-      if (lang === 'plaintext') {
-        state.preview.file.highlightedContent = `<pre><code class="hljs">${hljs.highlight(content, { language: 'plaintext' }).value}</code></pre>`;
-      } else if (hljs.getLanguage(lang)) {
-        state.preview.file.highlightedContent = `<pre><code class="hljs language-${lang}">${hljs.highlight(content, { language: lang }).value}</code></pre>`;
-      } else {
-        // Fallback to auto-detection
-        state.preview.file.highlightedContent = `<pre><code class="hljs">${hljs.highlightAuto(content).value}</code></pre>`;
-      }
-    } catch (err) {
-      console.error('Error applying syntax highlighting:', err);
-      // Fallback to plain text
-      state.preview.file.highlightedContent = `<pre><code class="hljs">${content}</code></pre>`;
-    }
+    await applySyntaxHighlightingUtil(content, ext, (html: string) => {
+      state.preview.file.highlightedContent = html;
+    });
   }
 
   async function loadForkInfo() {
@@ -3290,142 +2888,11 @@
   let fetchingUserName = false;
 
   async function getUserEmail(): Promise<string> {
-    // Check settings store first
-    try {
-      const settings = await settingsStore.getSettings();
-      if (settings.userEmail && settings.userEmail.trim()) {
-        cachedUserEmail = settings.userEmail.trim();
-        return cachedUserEmail;
-      }
-    } catch (err) {
-      console.warn('Failed to get userEmail from settings:', err);
-    }
-
-    // Return cached email if available
-    if (cachedUserEmail) {
-      return cachedUserEmail;
-    }
-
-    // If no user pubkey, can't proceed
-    if (!state.user.pubkeyHex) {
-      throw new Error('User not authenticated');
-    }
-
-    // Prevent concurrent fetches
-    if (fetchingUserEmail) {
-      // Wait a bit and retry (shouldn't happen, but just in case)
-      await new Promise(resolve => setTimeout(resolve, 100));
-      if (cachedUserEmail) {
-        return cachedUserEmail;
-      }
-    }
-
-    fetchingUserEmail = true;
-    let prefillEmail: string;
-    
-    try {
-      // Fetch from kind 0 event (cache or relays)
-      prefillEmail = await fetchUserEmail(state.user.pubkeyHex, state.user.pubkey || undefined, DEFAULT_NOSTR_RELAYS);
-    } catch (err) {
-      console.warn('Failed to fetch user profile for email:', err);
-      // Fallback to shortenednpub@gitrepublic.web
-      const npubFromPubkey = state.user.pubkeyHex ? nip19.npubEncode(state.user.pubkeyHex) : (state.user.pubkey || 'unknown');
-      const shortenedNpub = npubFromPubkey.substring(0, 20);
-      prefillEmail = `${shortenedNpub}@gitrepublic.web`;
-    } finally {
-      fetchingUserEmail = false;
-    }
-    
-    // Prompt user for email address
-    const userEmail = prompt(
-      'Please enter your email address for git commits.\n\n' +
-      'This will be used as the author email in your commits.\n' +
-      'You can use any email address you prefer.',
-      prefillEmail
-    );
-
-    if (userEmail && userEmail.trim()) {
-      // Basic email validation
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (emailRegex.test(userEmail.trim())) {
-        cachedUserEmail = userEmail.trim();
-        // Save to settings store
-        settingsStore.setSetting('userEmail', cachedUserEmail).catch(console.error);
-        return cachedUserEmail;
-      } else {
-        alert('Invalid email format. Using fallback email address.');
-      }
-    }
-
-    // Use fallback if user cancelled or entered invalid email
-    cachedUserEmail = prefillEmail;
-    return cachedUserEmail;
+    return getUserEmailUtil(state.user.pubkeyHex, state.user.pubkey, { email: cachedUserEmail, name: cachedUserName }, { email: fetchingUserEmail, name: fetchingUserName });
   }
 
   async function getUserName(): Promise<string> {
-    // Check settings store first
-    try {
-      const settings = await settingsStore.getSettings();
-      if (settings.userName && settings.userName.trim()) {
-        cachedUserName = settings.userName.trim();
-        return cachedUserName;
-      }
-    } catch (err) {
-      console.warn('Failed to get userName from settings:', err);
-    }
-
-    // Return cached name if available
-    if (cachedUserName) {
-      return cachedUserName;
-    }
-
-    // If no user pubkey, can't proceed
-    if (!state.user.pubkeyHex) {
-      throw new Error('User not authenticated');
-    }
-
-    // Prevent concurrent fetches
-    if (fetchingUserName) {
-      // Wait a bit and retry (shouldn't happen, but just in case)
-      await new Promise(resolve => setTimeout(resolve, 100));
-      if (cachedUserName) {
-        return cachedUserName;
-      }
-    }
-
-    fetchingUserName = true;
-    let prefillName: string;
-    
-    try {
-      // Fetch from kind 0 event (cache or relays)
-      prefillName = await fetchUserName(state.user.pubkeyHex, state.user.pubkey || undefined, DEFAULT_NOSTR_RELAYS);
-    } catch (err) {
-      console.warn('Failed to fetch user profile for name:', err);
-      // Fallback to shortened npub (20 chars)
-      const npubFromPubkey = state.user.pubkeyHex ? nip19.npubEncode(state.user.pubkeyHex) : (state.user.pubkey || 'unknown');
-      prefillName = npubFromPubkey.substring(0, 20);
-    } finally {
-      fetchingUserName = false;
-    }
-    
-    // Prompt user for name
-    const userName = prompt(
-      'Please enter your name for git commits.\n\n' +
-      'This will be used as the author name in your commits.\n' +
-      'You can use any name you prefer.',
-      prefillName
-    );
-
-    if (userName && userName.trim()) {
-      cachedUserName = userName.trim();
-      // Save to settings store
-      settingsStore.setSetting('userName', cachedUserName).catch(console.error);
-      return cachedUserName;
-    }
-
-    // Use fallback if user cancelled
-    cachedUserName = prefillName;
-    return cachedUserName;
+    return getUserNameUtil(state.user.pubkeyHex, state.user.pubkey, { email: cachedUserEmail, name: cachedUserName }, { email: fetchingUserEmail, name: fetchingUserName });
   }
 
   async function setupAutoSave() {
@@ -5478,8 +4945,8 @@
                 return;
               }
               
-              const authorEmail = await fetchUserEmail(state.user.pubkeyHex || '', state.user.pubkey || undefined);
-              const authorName = await fetchUserName(state.user.pubkeyHex || '', state.user.pubkey || undefined);
+              const authorEmail = await getUserEmail();
+              const authorName = await getUserName();
               
               const response = await fetch(`/api/repos/${state.npub}/${state.repo}/patches/${id}/apply`, {
                 method: 'POST',
