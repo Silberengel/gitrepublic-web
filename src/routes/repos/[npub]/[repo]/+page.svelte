@@ -77,6 +77,15 @@
     getUserEmail as getUserEmailUtil,
     getUserName as getUserNameUtil
   } from './utils/user-profile.js';
+  import {
+    saveFile as saveFileService,
+    createFile as createFileService,
+    deleteFile as deleteFileService
+  } from './services/file-operations.js';
+  import {
+    createBranch as createBranchService,
+    deleteBranch as deleteBranchService
+  } from './services/branch-operations.js';
 
   // Consolidated state - all state variables in one object
   let state = $state(createRepoState());
@@ -3013,88 +3022,12 @@
   }
 
   async function saveFile() {
-    if (!state.files.currentFile || !state.forms.commit.message.trim()) {
-      alert('Please enter a commit message');
-      return;
-    }
-
-    if (!state.user.pubkey) {
-      alert('Please connect your NIP-07 extension to save state.files.list');
-      return;
-    }
-
-    // Validate branch selection
-    if (!state.git.currentBranch || typeof state.git.currentBranch !== 'string') {
-      alert('Please select a branch before state.saving the file');
-      return;
-    }
-
-    state.saving = true;
-    state.error = null;
-
-    try {
-      // Get user email and name (from profile or prompt)
-      const authorEmail = await getUserEmail();
-      const authorName = await getUserName();
-      
-      // Sign commit with NIP-07 (client-side)
-      let commitSignatureEvent: NostrEvent | null = null;
-      if (isNIP07Available()) {
-        try {
-          const { KIND } = await import('$lib/types/nostr.js');
-          const timestamp = Math.floor(Date.now() / 1000);
-          const eventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
-            kind: KIND.COMMIT_SIGNATURE,
-            pubkey: '', // Will be filled by NIP-07
-            created_at: timestamp,
-            tags: [
-              ['author', authorName, authorEmail],
-              ['message', state.forms.commit.message.trim()]
-            ],
-            content: `Signed commit: ${state.forms.commit.message.trim()}`
-          };
-          commitSignatureEvent = await signEventWithNIP07(eventTemplate);
-        } catch (err) {
-          console.warn('Failed to sign commit with NIP-07:', err);
-          // Continue without signature if signing fails
-        }
-      }
-      
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/file`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...buildApiHeaders()
-        },
-        body: JSON.stringify({
-          path: state.files.currentFile,
-          content: state.files.editedContent,
-          message: state.forms.commit.message.trim(),
-          authorName: authorName,
-          authorEmail: authorEmail,
-          branch: state.git.currentBranch,
-          userPubkey: state.user.pubkey,
-          commitSignatureEvent: commitSignatureEvent // Send the signed event to server
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: response.statusText }));
-        const errorMessage = errorData.message || errorData.state.error || 'Failed to save file';
-        throw new Error(errorMessage);
-      }
-
-      // Reload file to get updated content
-      await loadFile(state.files.currentFile);
-      state.forms.commit.message = '';
-      state.openDialog = null;
-      alert('File saved successfully!');
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to save file';
-      console.error('Error state.saving file:', err);
-    } finally {
-      state.saving = false;
-    }
+    await saveFileService(state, {
+      getUserEmail,
+      getUserName,
+      loadFiles,
+      loadFile
+    });
   }
 
   function handleBranchChangeDirect(branch: string) {
@@ -3142,269 +3075,31 @@
   }
 
   async function createFile() {
-    if (!state.forms.file.fileName.trim()) {
-      alert('Please enter a file name');
-      return;
-    }
-
-    if (!state.user.pubkey) {
-      alert('Please connect your NIP-07 extension');
-      return;
-    }
-
-    // Validate branch selection
-    if (!state.git.currentBranch || typeof state.git.currentBranch !== 'string') {
-      alert('Please select a branch before creating the file');
-      return;
-    }
-
-    state.saving = true;
-    state.error = null;
-
-    try {
-      // Get user email and name (from profile or prompt)
-      const authorEmail = await getUserEmail();
-      const authorName = await getUserName();
-      const filePath = state.files.currentPath ? `${state.files.currentPath}/${state.forms.file.fileName}` : state.forms.file.fileName;
-      const commitMsg = `Create ${state.forms.file.fileName}`;
-      
-      // Sign commit with NIP-07 (client-side)
-      let commitSignatureEvent: NostrEvent | null = null;
-      if (isNIP07Available()) {
-        try {
-          const { KIND } = await import('$lib/types/nostr.js');
-          const timestamp = Math.floor(Date.now() / 1000);
-          const eventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
-            kind: KIND.COMMIT_SIGNATURE,
-            pubkey: '', // Will be filled by NIP-07
-            created_at: timestamp,
-            tags: [
-              ['author', authorName, authorEmail],
-              ['message', commitMsg]
-            ],
-            content: `Signed commit: ${commitMsg}`
-          };
-          commitSignatureEvent = await signEventWithNIP07(eventTemplate);
-        } catch (err) {
-          console.warn('Failed to sign commit with NIP-07:', err);
-          // Continue without signature if signing fails
-        }
-      }
-      
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/file`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...buildApiHeaders()
-        },
-        body: JSON.stringify({
-          path: filePath,
-          content: state.forms.file.content,
-          message: commitMsg,
-          authorName: authorName,
-          authorEmail: authorEmail,
-          branch: state.git.currentBranch,
-          action: 'create',
-          userPubkey: state.user.pubkey,
-          commitSignatureEvent: commitSignatureEvent // Send the signed event to server
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to create file');
-      }
-
-      state.openDialog = null;
-      state.forms.file.fileName = '';
-      state.forms.file.content = '';
-      await loadFiles(state.files.currentPath);
-      alert('File created successfully!');
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to create file';
-    } finally {
-      state.saving = false;
-    }
+    await createFileService(state, {
+      getUserEmail,
+      getUserName,
+      loadFiles
+    });
   }
 
   async function deleteFile(filePath: string) {
-    if (!confirm(`Are you sure you want to delete "${filePath}"?\n\nThis will permanently delete the file from the repository. This action cannot be undone.\n\nClick OK to delete, or Cancel to abort.`)) {
-      return;
-    }
-
-    if (!state.user.pubkey) {
-      alert('Please connect your NIP-07 extension');
-      return;
-    }
-
-    // Validate branch selection
-    if (!state.git.currentBranch || typeof state.git.currentBranch !== 'string') {
-      alert('Please select a branch before deleting the file');
-      return;
-    }
-
-    state.saving = true;
-    state.error = null;
-
-    try {
-      // Get user email and name (from profile or prompt)
-      const authorEmail = await getUserEmail();
-      const authorName = await getUserName();
-      const commitMsg = `Delete ${filePath}`;
-      
-      // Sign commit with NIP-07 (client-side)
-      let commitSignatureEvent: NostrEvent | null = null;
-      if (isNIP07Available()) {
-        try {
-          const { KIND } = await import('$lib/types/nostr.js');
-          const timestamp = Math.floor(Date.now() / 1000);
-          const eventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
-            kind: KIND.COMMIT_SIGNATURE,
-            pubkey: '', // Will be filled by NIP-07
-            created_at: timestamp,
-            tags: [
-              ['author', authorName, authorEmail],
-              ['message', commitMsg]
-            ],
-            content: `Signed commit: ${commitMsg}`
-          };
-          commitSignatureEvent = await signEventWithNIP07(eventTemplate);
-        } catch (err) {
-          console.warn('Failed to sign commit with NIP-07:', err);
-          // Continue without signature if signing fails
-        }
-      }
-      
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/file`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...buildApiHeaders()
-        },
-        body: JSON.stringify({
-          path: filePath,
-          message: commitMsg,
-          authorName: authorName,
-          authorEmail: authorEmail,
-          branch: state.git.currentBranch,
-          action: 'delete',
-          userPubkey: state.user.pubkey,
-          commitSignatureEvent: commitSignatureEvent // Send the signed event to server
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to delete file');
-      }
-
-      if (state.files.currentFile === filePath) {
-        state.files.currentFile = null;
-      }
-      await loadFiles(state.files.currentPath);
-      alert('File deleted successfully!');
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to delete file';
-    } finally {
-      state.saving = false;
-    }
+    await deleteFileService(filePath, state, {
+      getUserEmail,
+      getUserName,
+      loadFiles
+    });
   }
 
   async function createBranch() {
-    if (!state.forms.branch.name.trim()) {
-      alert('Please enter a branch name');
-      return;
-    }
-
-    state.saving = true;
-    state.error = null;
-
-    try {
-      // If no state.git.branches exist, don't pass fromBranch (will use --orphan)
-      // Otherwise, use the selected branch or current branch
-      let fromBranch: string | undefined = state.forms.branch.from || state.git.currentBranch || undefined;
-      
-      // Include announcement if available (for empty repos)
-      const requestBody: { branchName: string; fromBranch?: string; announcement?: NostrEvent } = {
-        branchName: state.forms.branch.name
-      };
-      if (state.git.branches.length > 0 && fromBranch) {
-        requestBody.fromBranch = fromBranch;
-      }
-      // Pass announcement if available (especially useful for empty repos)
-      if (repoAnnouncement) {
-        requestBody.announcement = repoAnnouncement;
-      }
-
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/branches`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...buildApiHeaders()
-        },
-        body: JSON.stringify(requestBody)
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to create branch');
-      }
-
-      state.openDialog = null;
-      state.forms.branch.name = '';
-      await loadBranches();
-      alert('Branch created successfully!');
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to create branch';
-    } finally {
-      state.saving = false;
-    }
+    await createBranchService(state, repoAnnouncement, {
+      loadBranches
+    });
   }
 
   async function deleteBranch(branchName: string) {
-    if (!confirm(`Are you sure you want to delete the branch "${branchName}"?\n\nThis will permanently delete the branch from the repository. This action CANNOT be undone.\n\nClick OK to delete, or Cancel to abort.`)) {
-      return;
-    }
-
-    if (!state.user.pubkey) {
-      alert('Please connect your NIP-07 extension');
-      return;
-    }
-
-    // Prevent deleting the current branch
-    if (branchName === state.git.currentBranch) {
-      alert('Cannot delete the currently selected branch. Please switch to a different branch first.');
-      return;
-    }
-
-    state.saving = true;
-    state.error = null;
-
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/branches`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          ...buildApiHeaders()
-        },
-        body: JSON.stringify({
-          branchName: branchName
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to delete branch');
-      }
-
-      await loadBranches();
-      alert('Branch deleted successfully!');
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to delete branch';
-      alert(state.error);
-    } finally {
-      state.saving = false;
-    }
+    await deleteBranchService(branchName, state, {
+      loadBranches
+    });
   }
 
   async function loadCommitHistory() {
