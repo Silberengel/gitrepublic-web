@@ -1,0 +1,79 @@
+<script lang="ts">
+  import Modal from './Modal.svelte';
+  import type { RepoState } from '../../stores/repo-state.js';
+
+  interface Props {
+    open: boolean;
+    state: RepoState;
+    onCreate: () => void;
+    onClose: () => void;
+  }
+
+  let { open, state, onCreate, onClose }: Props = $props();
+</script>
+
+<Modal {open} title="Create New Discussion Thread" ariaLabel="Create new discussion thread" {onClose}>
+  <label>
+    Title:
+    <input type="text" bind:value={state.forms.discussion.threadTitle} placeholder="Thread title..." />
+  </label>
+  <label>
+    Content:
+    <textarea bind:value={state.forms.discussion.threadContent} rows="10" placeholder="Start the discussion..."></textarea>
+  </label>
+  <div class="modal-actions">
+    <button onclick={onClose} class="cancel-button">Cancel</button>
+    <button 
+      onclick={onCreate} 
+      disabled={!state.forms.discussion.threadTitle.trim() || state.creating.thread} 
+      class="save-button"
+    >
+      {state.creating.thread ? 'Creating...' : 'Create Thread'}
+    </button>
+  </div>
+</Modal>
+
+<style>
+  label {
+    display: block;
+    margin-bottom: 1rem;
+  }
+
+  label input,
+  label textarea {
+    width: 100%;
+    padding: 0.5rem;
+    margin-top: 0.25rem;
+    border: 1px solid var(--border-color, #e0e0e0);
+    border-radius: 4px;
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+    margin-top: 1rem;
+  }
+
+  .cancel-button,
+  .save-button {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .cancel-button {
+    background: var(--cancel-bg, #e0e0e0);
+  }
+
+  .save-button {
+    background: var(--primary-color, #2196f3);
+    color: white;
+  }
+
+  .save-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+</style>

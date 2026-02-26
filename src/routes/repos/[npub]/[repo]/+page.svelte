@@ -17,6 +17,20 @@
   import PatchesTab from './components/PatchesTab.svelte';
   import DocsTab from './components/DocsTab.svelte';
   import DiscussionsTab from './components/DiscussionsTab.svelte';
+  import CreateFileDialog from './components/dialogs/CreateFileDialog.svelte';
+  import CreateBranchDialog from './components/dialogs/CreateBranchDialog.svelte';
+  import CreateTagDialog from './components/dialogs/CreateTagDialog.svelte';
+  import CreateReleaseDialog from './components/dialogs/CreateReleaseDialog.svelte';
+  import CreateIssueDialog from './components/dialogs/CreateIssueDialog.svelte';
+  import CreateThreadDialog from './components/dialogs/CreateThreadDialog.svelte';
+  import ReplyDialog from './components/dialogs/ReplyDialog.svelte';
+  import CreatePRDialog from './components/dialogs/CreatePRDialog.svelte';
+  import CreatePatchDialog from './components/dialogs/CreatePatchDialog.svelte';
+  import PatchHighlightDialog from './components/dialogs/PatchHighlightDialog.svelte';
+  import PatchCommentDialog from './components/dialogs/PatchCommentDialog.svelte';
+  import CommitDialog from './components/dialogs/CommitDialog.svelte';
+  import VerificationDialog from './components/dialogs/VerificationDialog.svelte';
+  import CloneUrlVerificationDialog from './components/dialogs/CloneUrlVerificationDialog.svelte';
   import { downloadRepository as downloadRepoUtil } from './utils/download.js';
   import { buildApiHeaders } from './utils/api-client.js';
   import '$lib/styles/repo.css';
@@ -5893,675 +5907,113 @@
     {/if}
   </main>
 
-  <!-- Create File Dialog -->
-  {#if state.openDialog === 'createFile' && state.user.pubkey && state.maintainers.isMaintainer}
-    <div 
-      class="modal-overlay" 
-      role="dialog"
-      aria-modal="true"
-      aria-label="Create new file"
-      onclick={() => state.openDialog = null}
-      onkeydown={(e) => e.key === 'Escape' && (state.openDialog = null)}
-      tabindex="-1"
-    >
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div 
-        class="modal" 
-        role="document"
-        onclick={(e) => e.stopPropagation()}
-      >
-        <h3>Create New File</h3>
-        {#if state.git.branches.length > 0}
-          <label>
-            Branch:
-            <select bind:value={state.git.currentBranch} disabled={state.saving}>
-              {#each state.git.branches as branch}
-                {@const branchName = typeof branch === 'string' ? branch : branch.name}
-                <option value={branchName}>{branchName}{#if branchName === state.git.defaultBranch} (default){/if}</option>
-              {/each}
-            </select>
-          </label>
-        {:else if state.git.currentBranch}
-          <label>
-            Branch:
-            <input type="text" value={state.git.currentBranch} disabled />
-          </label>
-        {/if}
-        <label>
-          File Name:
-          <input type="text" bind:value={state.forms.file.fileName} placeholder="filename.md" />
-        </label>
-        <label>
-          Content:
-          <textarea bind:value={state.forms.file.content} rows="10" placeholder="File content..."></textarea>
-        </label>
-        <div class="modal-actions">
-          <button onclick={() => state.openDialog = null} class="cancel-button">Cancel</button>
-          <button 
-            onclick={createFile} 
-            disabled={!state.forms.file.fileName.trim() || state.saving || needsClone || !state.git.currentBranch} 
-            class="save-button"
-            title={needsClone ? cloneTooltip : (!state.git.currentBranch ? 'Please select a branch' : '')}
-          >
-            {state.saving ? 'Creating...' : 'Create'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <!-- Dialogs -->
+  <CreateFileDialog
+    open={state.openDialog === 'createFile' && !!state.user.pubkey && state.maintainers.isMaintainer}
+    {state}
+    {needsClone}
+    {cloneTooltip}
+    onCreate={createFile}
+    onClose={() => state.openDialog = null}
+  />
 
-  <!-- Create Branch Dialog -->
-  {#if state.openDialog === 'createBranch' && state.user.pubkey && state.maintainers.isMaintainer}
-    <div 
-      class="modal-overlay" 
-      role="dialog"
-      aria-modal="true"
-      aria-label="Create new branch"
-      onclick={() => state.openDialog = null}
-      onkeydown={(e) => e.key === 'Escape' && (state.openDialog = null)}
-      tabindex="-1"
-    >
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div 
-        class="modal" 
-        role="document"
-        onclick={(e) => e.stopPropagation()}
-      >
-        <h3>Create New Branch</h3>
-        <label>
-          Branch Name:
-          <input type="text" bind:value={state.forms.branch.name} placeholder="feature/new-feature" />
-        </label>
-        <label>
-          From Branch:
-          <select bind:value={state.forms.branch.from}>
-            {#if state.git.branches.length === 0}
-              <option value={null}>No state.git.branches - will create initial branch</option>
-            {:else}
-              {#each state.git.branches as branch}
-                {@const branchName = typeof branch === 'string' ? branch : (branch as { name: string }).name}
-                {@const isDefaultBranch = branchName === state.forms.branch.defaultName}
-                {#if !isDefaultBranch}
-                  <option value={branchName}>{branchName}</option>
-                {/if}
-              {/each}
-            {/if}
-          </select>
-        </label>
-        <div class="modal-actions">
-          <button onclick={() => state.openDialog = null} class="cancel-button">Cancel</button>
-          <button 
-            onclick={createBranch} 
-            disabled={!state.forms.branch.name.trim() || state.saving || needsClone} 
-            class="save-button"
-            title={needsClone ? cloneTooltip : ''}
-          >
-            {state.saving ? 'Creating...' : 'Create Branch'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <CreateBranchDialog
+    open={state.openDialog === 'createBranch' && !!state.user.pubkey && state.maintainers.isMaintainer}
+    {state}
+    {needsClone}
+    {cloneTooltip}
+    onCreate={createBranch}
+    onClose={() => state.openDialog = null}
+  />
 
-  <!-- Create Tag Dialog -->
-  {#if state.openDialog === 'createTag' && state.user.pubkey && state.maintainers.isMaintainer}
-    <div 
-      class="modal-overlay" 
-      role="dialog"
-      aria-modal="true"
-      aria-label="Create new tag"
-      onclick={() => state.openDialog = null}
-      onkeydown={(e) => e.key === 'Escape' && (state.openDialog = null)}
-      tabindex="-1"
-    >
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div 
-        class="modal" 
-        role="document"
-        onclick={(e) => e.stopPropagation()}
-      >
-        <h3>Create New Tag</h3>
-        <label>
-          Tag Name:
-          <input type="text" bind:value={state.forms.tag.name} placeholder="v1.0.0" />
-        </label>
-        <label>
-          Reference (commit/branch):
-          <input type="text" bind:value={state.forms.tag.ref} placeholder="HEAD" />
-        </label>
-        <label>
-          Message (optional, for annotated tag):
-          <textarea bind:value={state.forms.tag.message} rows="3" placeholder="Tag message..."></textarea>
-        </label>
-        <div class="modal-actions">
-          <button onclick={() => state.openDialog = null} class="cancel-button">Cancel</button>
-          <button 
-            onclick={createTag} 
-            disabled={!state.forms.tag.name.trim() || state.saving || needsClone} 
-            class="save-button"
-            title={needsClone ? cloneTooltip : ''}
-          >
-            {state.saving ? 'Creating...' : 'Create Tag'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <CreateTagDialog
+    open={state.openDialog === 'createTag' && !!state.user.pubkey && state.maintainers.isMaintainer}
+    {state}
+    {needsClone}
+    {cloneTooltip}
+    onCreate={createTag}
+    onClose={() => state.openDialog = null}
+  />
 
-  <!-- Create Release Dialog -->
-  {#if state.openDialog === 'createRelease' && state.user.pubkey && (state.maintainers.isMaintainer || state.user.pubkeyHex === repoOwnerPubkeyDerived) && state.clone.isCloned}
-    <div 
-      class="modal-overlay" 
-      role="dialog"
-      aria-modal="true"
-      aria-label="Create new release"
-      onclick={() => state.openDialog = null}
-      onkeydown={(e) => e.key === 'Escape' && (state.openDialog = null)}
-      tabindex="-1"
-    >
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div 
-        class="modal" 
-        role="document"
-        onclick={(e) => e.stopPropagation()}
-      >
-        <h3>Create New Release</h3>
-        <label>
-          Tag Name:
-          <input type="text" bind:value={state.forms.release.tagName} placeholder="v1.0.0" />
-        </label>
-        <label>
-          Tag Hash (commit hash):
-          <input type="text" bind:value={state.forms.release.tagHash} placeholder="abc1234..." />
-        </label>
-        <label>
-          Release Notes:
-          <textarea bind:value={state.forms.release.notes} rows="10" placeholder="Release notes in markdown..."></textarea>
-        </label>
-        <label>
-          <input type="checkbox" bind:checked={state.forms.release.isDraft} />
-          Draft Release
-        </label>
-        <label>
-          <input type="checkbox" bind:checked={state.forms.release.isPrerelease} />
-          Pre-release
-        </label>
-        <div class="modal-actions">
-          <button onclick={() => state.openDialog = null} class="cancel-button">Cancel</button>
-          <button 
-            onclick={createRelease} 
-            disabled={!state.forms.release.tagName.trim() || !state.forms.release.tagHash.trim() || state.creating.release} 
-            class="save-button"
-          >
-            {state.creating.release ? 'Creating...' : 'Create Release'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <CreateReleaseDialog
+    open={state.openDialog === 'createRelease' && !!state.user.pubkey && (state.maintainers.isMaintainer || state.user.pubkeyHex === repoOwnerPubkeyDerived) && !!state.clone.isCloned}
+    {state}
+    onCreate={createRelease}
+    onClose={() => state.openDialog = null}
+  />
 
-  <!-- Create Issue Dialog -->
-  {#if state.openDialog === 'createIssue' && state.user.pubkey}
-    <div 
-      class="modal-overlay" 
-      role="dialog"
-      aria-modal="true"
-      aria-label="Create new issue"
-      onclick={() => state.openDialog = null}
-      onkeydown={(e) => e.key === 'Escape' && (state.openDialog = null)}
-      tabindex="-1"
-    >
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div 
-        class="modal" 
-        role="document"
-        onclick={(e) => e.stopPropagation()}
-      >
-        <h3>Create New Issue</h3>
-        <label>
-          Subject:
-          <input type="text" bind:value={state.forms.issue.subject} placeholder="Issue title..." />
-        </label>
-        <label>
-          Description:
-          <textarea bind:value={state.forms.issue.content} rows="10" placeholder="Describe the issue..."></textarea>
-        </label>
-        <div class="modal-actions">
-          <button onclick={() => state.openDialog = null} class="cancel-button">Cancel</button>
-          <button onclick={createIssue} disabled={!state.forms.issue.subject.trim() || !state.forms.issue.content.trim() || state.saving} class="save-button">
-            {state.saving ? 'Creating...' : 'Create Issue'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <CreateIssueDialog
+    open={state.openDialog === 'createIssue' && !!state.user.pubkey}
+    {state}
+    onCreate={createIssue}
+    onClose={() => state.openDialog = null}
+  />
 
-  <!-- Create Discussion Thread Dialog -->
-  {#if state.openDialog === 'createThread' && state.user.pubkey}
-    <div 
-      class="modal-overlay" 
-      role="dialog"
-      aria-modal="true"
-      aria-label="Create new discussion thread"
-      onclick={() => state.openDialog = null}
-      onkeydown={(e) => e.key === 'Escape' && (state.openDialog = null)}
-      tabindex="-1"
-    >
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div 
-        class="modal" 
-        role="document"
-        onclick={(e) => e.stopPropagation()}
-      >
-        <h3>Create New Discussion Thread</h3>
-        <label>
-          Title:
-          <input type="text" bind:value={state.forms.discussion.threadTitle} placeholder="Thread title..." />
-        </label>
-        <label>
-          Content:
-          <textarea bind:value={state.forms.discussion.threadContent} rows="10" placeholder="Start the discussion..."></textarea>
-        </label>
-        <div class="modal-actions">
-          <button onclick={() => state.openDialog = null} class="cancel-button">Cancel</button>
-          <button onclick={createDiscussionThread} disabled={!state.forms.discussion.threadTitle.trim() || state.creating.thread} class="save-button">
-            {state.creating.thread ? 'Creating...' : 'Create Thread'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <CreateThreadDialog
+    open={state.openDialog === 'createThread' && !!state.user.pubkey}
+    {state}
+    onCreate={createDiscussionThread}
+    onClose={() => state.openDialog = null}
+  />
 
-  <!-- Reply to Thread/Comment Dialog -->
-  {#if state.openDialog === 'reply' && state.user.pubkey && (state.discussion.replyingToThread || state.discussion.replyingToComment)}
-    <div 
-      class="modal-overlay" 
-      role="dialog"
-      aria-modal="true"
-      aria-label="Reply to thread"
-      onclick={() => {
-        state.openDialog = null;
-        state.discussion.replyingToThread = null;
-        state.discussion.replyingToComment = null;
-        state.forms.discussion.replyContent = '';
-      }}
-      onkeydown={(e) => e.key === 'Escape' && (state.openDialog = null)}
-      tabindex="-1"
-    >
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div 
-        class="modal" 
-        role="document"
-        onclick={(e) => e.stopPropagation()}
-      >
-        <h3>
-          {#if state.discussion.replyingToComment}
-            Reply to Comment
-          {:else if state.discussion.replyingToThread}
-            Reply to Thread
-          {:else}
-            Reply
-          {/if}
-        </h3>
-        <label>
-          Your Reply:
-          <textarea bind:value={state.forms.discussion.replyContent} rows="8" placeholder="Write your reply..."></textarea>
-        </label>
-        <div class="modal-actions">
-          <button 
-            onclick={() => {
-              state.openDialog = null;
-              state.discussion.replyingToThread = null;
-              state.discussion.replyingToComment = null;
-              state.forms.discussion.replyContent = '';
-            }} 
-            class="cancel-button"
-          >
-            Cancel
-          </button>
-          <button 
-            onclick={() => createThreadReply()} 
-            disabled={!state.forms.discussion.replyContent.trim() || state.creating.reply} 
-            class="save-button"
-          >
-            {state.creating.reply ? 'Posting...' : 'Post Reply'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <ReplyDialog
+    open={state.openDialog === 'reply' && !!state.user.pubkey && (!!state.discussion.replyingToThread || !!state.discussion.replyingToComment)}
+    {state}
+    onCreate={createThreadReply}
+    onClose={() => state.openDialog = null}
+  />
 
-  <!-- Create PR Dialog -->
-  {#if state.openDialog === 'createPR' && state.user.pubkey}
-    <div 
-      class="modal-overlay" 
-      role="dialog"
-      aria-modal="true"
-      aria-label="Create new pull request"
-      onclick={() => state.openDialog = null}
-      onkeydown={(e) => e.key === 'Escape' && (state.openDialog = null)}
-      tabindex="-1"
-    >
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div 
-        class="modal" 
-        role="document"
-        onclick={(e) => e.stopPropagation()}
-      >
-        <h3>Create New Pull Request</h3>
-        <label>
-          Subject:
-          <input type="text" bind:value={state.forms.pr.subject} placeholder="PR title..." />
-        </label>
-        <label>
-          Description:
-          <textarea bind:value={state.forms.pr.content} rows="8" placeholder="Describe your changes..."></textarea>
-        </label>
-        <label>
-          Commit ID:
-          <input type="text" bind:value={state.forms.pr.commitId} placeholder="Commit hash..." />
-        </label>
-        <label>
-          Branch Name (optional):
-          <input type="text" bind:value={state.forms.pr.branchName} placeholder="feature/new-feature" />
-        </label>
-        <div class="modal-actions">
-          <button onclick={() => state.openDialog = null} class="cancel-button">Cancel</button>
-          <button onclick={createPR} disabled={!state.forms.pr.subject.trim() || !state.forms.pr.content.trim() || !state.forms.pr.commitId.trim() || state.saving} class="save-button">
-            {state.saving ? 'Creating...' : 'Create PR'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <CreatePRDialog
+    open={state.openDialog === 'createPR' && !!state.user.pubkey}
+    {state}
+    onCreate={createPR}
+    onClose={() => state.openDialog = null}
+  />
 
-  <!-- Create Patch Dialog -->
-  {#if state.openDialog === 'createPatch' && state.user.pubkey}
-    <div 
-      class="modal-overlay" 
-      role="dialog"
-      aria-modal="true"
-      aria-label="Create new patch"
-      onclick={() => state.openDialog = null}
-      onkeydown={(e) => e.key === 'Escape' && (state.openDialog = null)}
-      tabindex="-1"
-    >
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div 
-        class="modal" 
-        role="document"
-        onclick={(e) => e.stopPropagation()}
-      >
-        <h3>Create New Patch</h3>
-        <p class="help-text">Enter your patch content in git format-patch format. Patches should be under 60KB.</p>
-        <label>
-          Subject (optional):
-          <input type="text" bind:value={state.forms.patch.subject} placeholder="Patch title..." />
-        </label>
-        <label>
-          Patch Content:
-          <textarea bind:value={state.forms.patch.content} rows="15" placeholder="Paste your git format-patch output here..."></textarea>
-        </label>
-        <div class="modal-actions">
-          <button onclick={() => state.openDialog = null} class="cancel-button">Cancel</button>
-          <button onclick={createPatch} disabled={!state.forms.patch.content.trim() || state.creating.patch} class="save-button">
-            {state.creating.patch ? 'Creating...' : 'Create Patch'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <CreatePatchDialog
+    open={state.openDialog === 'createPatch' && !!state.user.pubkey}
+    {state}
+    onCreate={createPatch}
+    onClose={() => state.openDialog = null}
+  />
 
-  <!-- Patch Highlight Dialog -->
-  {#if state.openDialog === 'patchHighlight'}
-    <div 
-      class="modal-overlay" 
-      role="dialog"
-      aria-modal="true"
-      aria-label="Create highlight"
-      tabindex="-1"
-      onclick={() => state.openDialog = null}
-      onkeydown={(e) => {
-        if (e.key === 'Escape') {
-          state.openDialog = null;
-        }
-      }}
-    >
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div class="modal" role="document" onclick={(e) => e.stopPropagation()}>
-        <h3>Create Highlight</h3>
-        <div class="selected-code">
-          <pre><code>{state.forms.patchHighlight.text}</code></pre>
-        </div>
-        <label>
-          Comment (optional):
-          <textarea bind:value={state.forms.patchHighlight.comment} rows="4" placeholder="Add a comment about this code..."></textarea>
-        </label>
-        <div class="modal-actions">
-          <button onclick={() => state.openDialog = null} class="cancel-btn">Cancel</button>
-          <button onclick={createPatchHighlight} disabled={state.creating.patchHighlight} class="save-btn">
-            {state.creating.patchHighlight ? 'Creating...' : 'Create Highlight'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <PatchHighlightDialog
+    open={state.openDialog === 'patchHighlight'}
+    {state}
+    onCreate={createPatchHighlight}
+    onClose={() => state.openDialog = null}
+  />
 
-  <!-- Patch Comment Dialog -->
-  {#if state.openDialog === 'patchComment'}
-    <div 
-      class="modal-overlay" 
-      role="dialog"
-      aria-modal="true"
-      aria-label={state.forms.patchComment.replyingTo ? 'Reply to comment' : 'Add comment'}
-      tabindex="-1"
-      onclick={() => { state.openDialog = null; state.forms.patchComment.replyingTo = null; }}
-      onkeydown={(e) => {
-        if (e.key === 'Escape') {
-          state.openDialog = null;
-          state.forms.patchComment.replyingTo = null;
-        }
-      }}
-    >
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div class="modal" role="document" onclick={(e) => e.stopPropagation()}>
-        <h3>{state.forms.patchComment.replyingTo ? 'Reply to Comment' : 'Add Comment'}</h3>
-        <label>
-          Comment:
-          <textarea bind:value={state.forms.patchComment.content} rows="6" placeholder="Write your comment..."></textarea>
-        </label>
-        <div class="modal-actions">
-          <button onclick={() => { state.openDialog = null; state.forms.patchComment.replyingTo = null; }} class="cancel-btn">Cancel</button>
-          <button onclick={createPatchComment} disabled={state.creating.patchComment || !state.forms.patchComment.content.trim()} class="save-btn">
-            {state.creating.patchComment ? 'Creating...' : (state.forms.patchComment.replyingTo ? 'Reply' : 'Add Comment')}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <PatchCommentDialog
+    open={state.openDialog === 'patchComment'}
+    {state}
+    onCreate={createPatchComment}
+    onClose={() => state.openDialog = null}
+  />
 
-  <!-- Commit Dialog -->
-  {#if state.openDialog === 'commit' && state.user.pubkey && state.maintainers.isMaintainer}
-    <div 
-      class="modal-overlay" 
-      role="dialog"
-      aria-modal="true"
-      aria-label="Commit changes"
-      onclick={() => state.openDialog = null}
-      onkeydown={(e) => e.key === 'Escape' && (state.openDialog = null)}
-      tabindex="-1"
-    >
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div 
-        class="modal" 
-        role="document"
-        onclick={(e) => e.stopPropagation()}
-      >
-        <h3>Commit Changes</h3>
-        {#if state.git.branches.length > 0}
-          <label>
-            Branch:
-            <select bind:value={state.git.currentBranch} disabled={state.saving}>
-              {#each state.git.branches as branch}
-                {@const branchName = typeof branch === 'string' ? branch : branch.name}
-                <option value={branchName}>{branchName}{#if branchName === state.git.defaultBranch} (default){/if}</option>
-              {/each}
-            </select>
-          </label>
-        {:else if state.git.currentBranch}
-          <label>
-            Branch:
-            <input type="text" value={state.git.currentBranch} disabled />
-          </label>
-        {/if}
-        <label>
-          Commit Message:
-          <textarea 
-            bind:value={state.forms.commit.message} 
-            placeholder="Describe your changes..."
-            rows="4"
-          ></textarea>
-        </label>
-        <div class="modal-actions">
-          <button onclick={() => state.openDialog = null} class="cancel-button">Cancel</button>
-          <button 
-            onclick={saveFile} 
-            disabled={!state.forms.commit.message.trim() || state.saving || needsClone || !state.git.currentBranch} 
-            class="save-button"
-            title={needsClone ? cloneTooltip : (!state.git.currentBranch ? 'Please select a branch' : '')}
-          >
-            {state.saving ? 'Saving...' : 'Commit & Save'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <CommitDialog
+    open={state.openDialog === 'commit' && !!state.user.pubkey && state.maintainers.isMaintainer}
+    {state}
+    {needsClone}
+    {cloneTooltip}
+    onCommit={saveFile}
+    onClose={() => state.openDialog = null}
+  />
 
-  <!-- Verification File Dialog -->
-  {#if state.openDialog === 'verification' && state.verification.fileContent}
-    <div 
-      class="modal-overlay" 
-      role="dialog"
-      aria-modal="true"
-      aria-label="Repository verification file"
-      onclick={() => state.openDialog = null}
-      onkeydown={(e) => e.key === 'Escape' && (state.openDialog = null)}
-      tabindex="-1"
-    >
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div 
-        class="modal verification-modal" 
-        role="document"
-        onclick={(e) => e.stopPropagation()}
-      >
-        <div class="modal-header">
-          <h3>Repository Verification File</h3>
-        </div>
-        <div class="modal-body">
-          <p class="verification-instructions">
-            The announcement event should be saved to <code>nostr/repo-events.jsonl</code> in your repository.
-            You can download the announcement event JSON below for reference.
-          </p>
-          <div class="verification-file-content">
-            <div class="file-header">
-              <span class="filename">announcement-event.json</span>
-              <div class="file-actions">
-                <button onclick={copyVerificationToClipboard} class="copy-button">Copy</button>
-                <button onclick={downloadVerificationFile} class="download-button">Download</button>
-              </div>
-            </div>
-            <pre class="file-content"><code>{state.verification.fileContent}</code></pre>
-          </div>
-        </div>
-        <div class="modal-actions">
-          <button onclick={() => state.openDialog = null} class="cancel-button">Close</button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <VerificationDialog
+    open={state.openDialog === 'verification' && !!state.verification.fileContent}
+    {state}
+    onCopy={copyVerificationToClipboard}
+    onDownload={downloadVerificationFile}
+    onClose={() => state.openDialog = null}
+  />
 
-  <!-- Clone URL Verification Dialog -->
-  {#if state.openDialog === 'cloneUrlVerification'}
-    <div 
-      class="modal-overlay" 
-      role="dialog"
-      aria-modal="true"
-      aria-label="Verify repository"
-      onclick={() => state.openDialog = null}
-      onkeydown={(e) => e.key === 'Escape' && (state.openDialog = null)}
-      tabindex="-1"
-    >
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div 
-        class="modal verification-modal" 
-        role="document"
-        onclick={(e) => e.stopPropagation()}
-      >
-        <div class="modal-header">
-          <h3>Verify Repository</h3>
-        </div>
-        <div class="modal-body">
-          <p class="verification-instructions">
-            Verify this repository by committing the repo announcement event to it.
-          </p>
-          {#if state.verification.selectedCloneUrl}
-            <p style="margin: 1rem 0;">
-              <strong>Clone URL:</strong> <code>{state.verification.selectedCloneUrl}</code>
-            </p>
-          {/if}
-          {#if state.clone.isCloned !== true}
-            <div class="state.error-message" style="margin: 1rem 0; padding: 0.75rem; background: var(--bg-warning, #fff3cd); border-left: 4px solid var(--text-warning, #856404); border-radius: 4px; color: var(--text-warning, #856404);">
-              <strong>Repository must be cloned first.</strong> Please clone this repository to the server before verifying ownership.
-            </div>
-          {:else}
-            <p style="margin: 1rem 0; color: var(--text-secondary);">
-              This will commit the repository announcement event to <code>nostr/repo-events.jsonl</code> in the default branch, which verifies that you control this repository.
-            </p>
-          {/if}
-          {#if state.error}
-            <div class="state.error-message" style="margin: 1rem 0; padding: 0.75rem; background: var(--bg-state.error, #fee); border-left: 4px solid var(--accent-state.error, #f00); border-radius: 4px;">
-              {state.error}
-            </div>
-          {/if}
-        </div>
-        <div class="modal-footer">
-          <button 
-            onclick={verifyCloneUrl} 
-            class="primary-button"
-            disabled={!!state.verification.selectedCloneUrl || !state.clone.isCloned}
-            title={!state.clone.isCloned ? 'Repository must be cloned first' : ''}
-          >
-            {state.verification.selectedCloneUrl ? 'Verifying...' : 'Verify Repository'}
-          </button>
-          <button 
-            onclick={() => {
-              state.openDialog = null;
-              state.verification.selectedCloneUrl = null;
-              state.error = null;
-            }} 
-            class="cancel-button"
-            disabled={!!state.verification.selectedCloneUrl}
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <CloneUrlVerificationDialog
+    open={state.openDialog === 'cloneUrlVerification'}
+    {state}
+    onVerify={verifyCloneUrl}
+    onClose={() => state.openDialog = null}
+  />
 </div>
 
 <style>
