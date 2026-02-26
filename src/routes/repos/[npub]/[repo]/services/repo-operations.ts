@@ -363,3 +363,197 @@ export async function checkVerification(
     console.log('[Verification] Status after check:', state.verification.status);
   }
 }
+
+/**
+ * Load bookmark status
+ */
+export async function loadBookmarkStatus(
+  state: RepoState,
+  bookmarksService: any
+): Promise<void> {
+  if (!state.user.pubkey || !state.metadata.address || !bookmarksService) return;
+  
+  try {
+    state.bookmark.isBookmarked = await bookmarksService.isBookmarked(state.user.pubkey, state.metadata.address);
+  } catch (err) {
+    console.warn('Failed to load bookmark status:', err);
+  }
+}
+
+/**
+ * Load clone URL reachability status
+ */
+export async function loadCloneUrlReachability(
+  forceRefresh: boolean,
+  state: RepoState,
+  repoCloneUrls: string[] | undefined
+): Promise<void> {
+  if (!repoCloneUrls || repoCloneUrls.length === 0) {
+    return;
+  }
+  
+  if (state.loading.reachability) return;
+  
+  state.loading.reachability = true;
+  try {
+    const data = await apiRequest<{
+      results?: Array<{
+        url: string;
+        reachable: boolean;
+        error?: string;
+        checkedAt: number;
+        serverType?: 'git' | 'grasp' | 'unknown';
+      }>;
+    }>(`/api/repos/${state.npub}/${state.repo}/clone-urls/reachability${forceRefresh ? '?forceRefresh=true' : ''}`);
+    
+    const newMap = new Map<string, { reachable: boolean; error?: string; checkedAt: number; serverType: 'git' | 'grasp' | 'unknown' }>();
+    
+    if (data.results && Array.isArray(data.results)) {
+      for (const result of data.results) {
+        newMap.set(result.url, {
+          reachable: result.reachable,
+          error: result.error,
+          checkedAt: result.checkedAt,
+          serverType: result.serverType || 'unknown'
+        });
+      }
+    }
+    
+    state.clone.reachability = newMap;
+  } catch (err) {
+    console.warn('Failed to load clone URL reachability:', err);
+  } finally {
+    state.loading.reachability = false;
+    state.clone.checkingReachability.clear();
+  }
+}
+
+/**
+ * Load fork information
+ */
+export async function loadForkInfo(
+  state: RepoState
+): Promise<void> {
+  try {
+    const data = await apiRequest<{
+      isFork?: boolean;
+      originalRepo?: {
+        npub: string;
+        repo: string;
+      };
+    }>(`/api/repos/${state.npub}/${state.repo}/fork`);
+    
+    if (data.isFork && data.originalRepo) {
+      state.fork.info = {
+        isFork: true,
+        originalRepo: data.originalRepo
+      };
+    } else {
+      state.fork.info = {
+        isFork: false,
+        originalRepo: null
+      };
+    }
+  } catch (err) {
+    console.error('Failed to load fork info:', err);
+    state.fork.info = {
+      isFork: false,
+      originalRepo: null
+    };
+  }
+}
+
+/**
+ * Load repository images (image and banner)
+ */
+export async function loadRepoImages(
+  state: RepoState,
+  repoOwnerPubkeyDerived: string | null,
+  repoIsPrivate: boolean,
+  pageData: any
+): Promise<void> {
+  try {
+    // Get images from page data (loaded from announcement)
+    if (typeof window === 'undefined') return;
+    if (pageData?.image) {
+      state.metadata.image = pageData.image;
+      console.log('[Repo Images] Loaded image from pageData:', state.metadata.image);
+    }
+    if (pageData?.banner) {
+      state.metadata.banner = pageData.banner;
+      console.log('[Repo Images] Loaded banner from pageData:', state.metadata.banner);
+    }
+
+    // Also fetch from announcement directly as fallback (only if not private or user has access)
+    if (!state.metadata.image && !state.metadata.banner && repoOwnerPubkeyDerived) {
+      if (typeof window === 'undefined') return;
+      
+      // Check access for private repos
+      if (repoIsPrivate) {
+        const headers: Record<string, string> = {};
+        if (state.user.pubkey) {
+          try {
+            const { nip19 } = await import('nostr-tools');
+            const decoded = nip19.decode(state.user.pubkey);
+            if (decoded.type === 'npub') {
+              headers['X-User-Pubkey'] = decoded.data as string;
+            } else {
+              headers['X-User-Pubkey'] = state.user.pubkey;
+            }
+          } catch {
+            headers['X-User-Pubkey'] = state.user.pubkey;
+          }
+        }
+        
+        const accessData = await apiRequest<{ canView?: boolean }>(`/api/repos/${state.npub}/${state.repo}/access`, {
+          headers
+        } as RequestInit);
+        
+        if (!accessData.canView) {
+          // User doesn't have access, don't fetch images
+          return;
+        }
+      }
+      
+      const { nip19 } = await import('nostr-tools');
+      const decoded = nip19.decode(state.npub);
+      if (decoded.type === 'npub') {
+        const repoOwnerPubkey = decoded.data as string;
+        const { NostrClient } = await import('$lib/services/nostr/nostr-client.js');
+        const { DEFAULT_NOSTR_RELAYS } = await import('$lib/config.js');
+        const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
+        const events = await client.fetchEvents([
+          {
+            kinds: [30617], // REPO_ANNOUNCEMENT
+            authors: [repoOwnerPubkeyDerived],
+            '#d': [state.repo],
+            limit: 1
+          }
+        ]);
+
+        if (events.length > 0) {
+          const announcement = events[0];
+          const imageTag = announcement.tags.find((t: string[]) => t[0] === 'image');
+          const bannerTag = announcement.tags.find((t: string[]) => t[0] === 'banner');
+          
+          if (imageTag?.[1]) {
+            state.metadata.image = imageTag[1];
+            console.log('[Repo Images] Loaded image from announcement:', state.metadata.image);
+          }
+          if (bannerTag?.[1]) {
+            state.metadata.banner = bannerTag[1];
+            console.log('[Repo Images] Loaded banner from announcement:', state.metadata.banner);
+          }
+        } else {
+          console.log('[Repo Images] No announcement found');
+        }
+      }
+    }
+    
+    if (!state.metadata.image && !state.metadata.banner) {
+      console.log('[Repo Images] No images found in announcement');
+    }
+  } catch (err) {
+    console.error('Error loading repo images:', err);
+  }
+}

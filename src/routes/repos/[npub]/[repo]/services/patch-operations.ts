@@ -199,3 +199,177 @@ export async function updatePatchStatus(
     state.statusUpdates.patch[patchId] = false;
   }
 }
+
+/**
+ * Load patch highlights and comments
+ */
+export async function loadPatchHighlights(
+  patchId: string,
+  patchAuthor: string,
+  state: RepoState
+): Promise<void> {
+  if (!patchId || !patchAuthor) return;
+  
+  state.loading.patchHighlights = true;
+  try {
+    const decoded = nip19.decode(state.npub);
+    if (decoded.type !== 'npub') {
+      throw new Error('Invalid npub format');
+    }
+
+    const data = await apiRequest<{
+      highlights?: Array<any>;
+      comments?: Array<any>;
+    }>(`/api/repos/${state.npub}/${state.repo}/highlights?patchId=${patchId}&patchAuthor=${patchAuthor}`);
+    
+    state.patchHighlights = data.highlights || [];
+    state.patchComments = data.comments || [];
+  } catch (err) {
+    console.error('Failed to load patch highlights:', err);
+  } finally {
+    state.loading.patchHighlights = false;
+  }
+}
+
+/**
+ * Create a patch highlight
+ */
+export async function createPatchHighlight(
+  state: RepoState,
+  highlightsService: any,
+  callbacks: PatchOperationsCallbacks
+): Promise<void> {
+  if (!state.user.pubkey || !state.forms.patchHighlight.text.trim() || !state.selected.patch) return;
+
+  const patch = state.patches.find(p => p.id === state.selected.patch);
+  if (!patch) return;
+
+  state.creating.patchHighlight = true;
+  state.error = null;
+
+  try {
+    const decoded = nip19.decode(state.npub);
+    if (decoded.type !== 'npub') {
+      throw new Error('Invalid npub format');
+    }
+    const repoOwnerPubkey = decoded.data as string;
+
+    const eventTemplate = highlightsService.createHighlightEvent(
+      state.forms.patchHighlight.text,
+      patch.id,
+      patch.author,
+      repoOwnerPubkey,
+      state.repo,
+      KIND.PATCH, // targetKind
+      undefined, // filePath
+      state.forms.patchHighlight.startLine, // lineStart
+      state.forms.patchHighlight.endLine, // lineEnd
+      undefined, // context
+      state.forms.patchHighlight.comment.trim() || undefined // comment
+    );
+
+    const signedEvent = await signEventWithNIP07(eventTemplate);
+    
+    const tempClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+    const { outbox } = await getUserRelays(state.user.pubkey, tempClient);
+    const combinedRelays = combineRelays(outbox);
+
+    await apiRequest(`/api/repos/${state.npub}/${state.repo}/highlights`, {
+      method: 'POST',
+      body: JSON.stringify({
+        type: 'highlight',
+        event: signedEvent,
+        userPubkey: state.user.pubkey
+      })
+    } as RequestInit);
+
+    state.openDialog = null;
+    state.forms.patchHighlight.text = '';
+    state.forms.patchHighlight.comment = '';
+    await loadPatchHighlights(patch.id, patch.author, state);
+  } catch (err) {
+    state.error = err instanceof Error ? err.message : 'Failed to create highlight';
+  } finally {
+    state.creating.patchHighlight = false;
+  }
+}
+
+/**
+ * Create a patch comment
+ */
+export async function createPatchComment(
+  state: RepoState,
+  highlightsService: any,
+  callbacks: PatchOperationsCallbacks
+): Promise<void> {
+  if (!state.user.pubkey || !state.forms.patchComment.content.trim() || !state.selected.patch) return;
+
+  const patch = state.patches.find(p => p.id === state.selected.patch);
+  if (!patch) return;
+
+  state.creating.patchComment = true;
+  state.error = null;
+
+  try {
+    const decoded = nip19.decode(state.npub);
+    if (decoded.type !== 'npub') {
+      throw new Error('Invalid npub format');
+    }
+    const repoOwnerPubkey = decoded.data as string;
+
+    const rootEventId = state.forms.patchComment.replyingTo || patch.id;
+    const rootEventKind = state.forms.patchComment.replyingTo ? KIND.COMMENT : KIND.PATCH;
+    const rootPubkey = state.forms.patchComment.replyingTo ? 
+      (state.patchComments.find(c => c.id === state.forms.patchComment.replyingTo)?.pubkey || patch.author) :
+      patch.author;
+
+    let parentEventId: string | undefined;
+    let parentEventKind: number | undefined;
+    let parentPubkey: string | undefined;
+
+    if (state.forms.patchComment.replyingTo) {
+      // Reply to a comment
+      const parentComment = state.patchComments.find(c => c.id === state.forms.patchComment.replyingTo) || 
+                           state.patchHighlights.flatMap(h => h.comments || []).find(c => c.id === state.forms.patchComment.replyingTo);
+      if (parentComment) {
+        parentEventId = state.forms.patchComment.replyingTo;
+        parentEventKind = KIND.COMMENT;
+        parentPubkey = parentComment.pubkey;
+      }
+    }
+
+    const eventTemplate = highlightsService.createCommentEvent(
+      state.forms.patchComment.content.trim(),
+      rootEventId,
+      rootEventKind,
+      rootPubkey,
+      parentEventId,
+      parentEventKind,
+      parentPubkey
+    );
+
+    const signedEvent = await signEventWithNIP07(eventTemplate);
+    
+    const tempClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+    const { outbox } = await getUserRelays(state.user.pubkey, tempClient);
+    const combinedRelays = combineRelays(outbox);
+
+    await apiRequest(`/api/repos/${state.npub}/${state.repo}/highlights`, {
+      method: 'POST',
+      body: JSON.stringify({
+        type: 'comment',
+        event: signedEvent,
+        userPubkey: state.user.pubkey
+      })
+    } as RequestInit);
+
+    state.openDialog = null;
+    state.forms.patchComment.content = '';
+    state.forms.patchComment.replyingTo = null;
+    await loadPatchHighlights(patch.id, patch.author, state);
+  } catch (err) {
+    state.error = err instanceof Error ? err.message : 'Failed to create comment';
+  } finally {
+    state.creating.patchComment = false;
+  }
+}

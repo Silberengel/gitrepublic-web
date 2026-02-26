@@ -112,8 +112,14 @@
   import {
     loadPatches as loadPatchesService,
     createPatch as createPatchService,
-    updatePatchStatus as updatePatchStatusService
+    updatePatchStatus as updatePatchStatusService,
+    loadPatchHighlights as loadPatchHighlightsService,
+    createPatchHighlight as createPatchHighlightService,
+    createPatchComment as createPatchCommentService
   } from './services/patch-operations.js';
+  import {
+    performCodeSearch as performCodeSearchService
+  } from './services/code-search-operations.js';
   import {
     loadDiscussions as loadDiscussionsService,
     createDiscussionThread as createDiscussionThreadService,
@@ -127,8 +133,15 @@
     toggleBookmark as toggleBookmarkService,
     checkMaintainerStatus as checkMaintainerStatusService,
     loadAllMaintainers as loadAllMaintainersService,
-    checkVerification as checkVerificationService
+    checkVerification as checkVerificationService,
+    loadBookmarkStatus as loadBookmarkStatusService,
+    loadCloneUrlReachability as loadCloneUrlReachabilityService,
+    loadForkInfo as loadForkInfoService,
+    loadRepoImages as loadRepoImagesService
   } from './services/repo-operations.js';
+  import {
+    loadReadme as loadReadmeService
+  } from './services/file-operations.js';
 
   // Consolidated state - all state variables in one object
   let state = $state(createRepoState());
@@ -772,136 +785,11 @@
 
   // Load clone URL reachability status
   async function loadCloneUrlReachability(forceRefresh: boolean = false) {
-    if (!repoCloneUrls || repoCloneUrls.length === 0) {
-      return;
-    }
-    
-    if (state.loading.reachability) return;
-    
-    state.loading.reachability = true;
-    try {
-      const response = await fetch(
-        `/api/repos/${state.npub}/${state.repo}/clone-urls/reachability${forceRefresh ? '?forceRefresh=true' : ''}`,
-        {
-          headers: buildApiHeaders()
-        }
-      );
-      
-      if (response.ok) {
-        const data = await response.json();
-        const newMap = new Map<string, { reachable: boolean; error?: string; checkedAt: number; serverType: 'git' | 'grasp' | 'unknown' }>();
-        
-        if (data.results && Array.isArray(data.results)) {
-          for (const result of data.results) {
-            newMap.set(result.url, {
-              reachable: result.reachable,
-              error: result.error,
-              checkedAt: result.checkedAt,
-              serverType: result.serverType || 'unknown'
-            });
-          }
-        }
-        
-        state.clone.reachability = newMap;
-      }
-    } catch (err) {
-      console.warn('Failed to load clone URL reachability:', err);
-    } finally {
-      state.loading.reachability = false;
-      state.clone.checkingReachability.clear();
-    }
+    await loadCloneUrlReachabilityService(forceRefresh, state, repoCloneUrls);
   }
 
   async function loadReadme() {
-    if (state.loading.repoNotFound) return;
-    state.loading.readme = true;
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/readme?ref=${state.git.currentBranch}`, {
-        headers: buildApiHeaders()
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (data.found) {
-          state.preview.readme.content = data.content;
-          state.preview.readme.path = data.path;
-          state.preview.readme.isMarkdown = data.isMarkdown;
-          
-          // Reset preview mode for README
-          state.preview.file.showPreview = true;
-          state.preview.readme.html = '';
-          
-          // Render markdown or asciidoc if needed
-          if (state.preview.readme.content) {
-            const ext = state.preview.readme.path?.split('.').pop()?.toLowerCase() || '';
-            if (state.preview.readme.isMarkdown || ext === 'md' || ext === 'markdown') {
-              try {
-                const MarkdownIt = (await import('markdown-it')).default;
-                const hljsModule = await import('highlight.js');
-                const hljs = hljsModule.default || hljsModule;
-                
-                const md = new MarkdownIt({
-                  html: true, // Enable HTML state.git.tags in source
-                  linkify: true, // Autoconvert URL-like text to links
-                  typographer: true, // Enable some language-neutral replacement + quotes beautification
-                  breaks: true, // Convert '\n' in paragraphs into <br>
-                  highlight: function (str: string, lang: string): string {
-                    if (lang && hljs.getLanguage(lang)) {
-                      try {
-                        return '<pre class="hljs"><code>' +
-                               hljs.highlight(str, { language: lang }).value +
-                               '</code></pre>';
-                      } catch (err) {
-                        // Fallback to escaped HTML if highlighting fails
-                        // This is expected for unsupported languages
-                      }
-                    }
-                    return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
-                  }
-                });
-                
-                let rendered = md.render(state.preview.readme.content);
-                // Rewrite image paths to point to repository API
-                rendered = rewriteImagePaths(rendered, state.preview.readme.path);
-                state.preview.readme.html = rendered;
-                console.log('[README] Markdown rendered successfully, HTML length:', state.preview.readme.html.length);
-              } catch (err) {
-                console.error('[README] Error rendering markdown:', err);
-                state.preview.readme.html = '';
-              }
-            } else if (ext === 'adoc' || ext === 'asciidoc') {
-              try {
-                const Asciidoctor = (await import('@asciidoctor/core')).default;
-                const asciidoctor = Asciidoctor();
-                const converted = asciidoctor.convert(state.preview.readme.content, {
-                  safe: 'safe',
-                  attributes: {
-                    'source-highlighter': 'highlight.js'
-                  }
-                });
-                let rendered = typeof converted === 'string' ? converted : String(converted);
-                // Rewrite image paths to point to repository API
-                rendered = rewriteImagePaths(rendered, state.preview.readme.path);
-                state.preview.readme.html = rendered;
-                state.preview.readme.isMarkdown = true; // Treat as markdown for display purposes
-              } catch (err) {
-                console.error('[README] Error rendering asciidoc:', err);
-                state.preview.readme.html = '';
-              }
-            } else if (ext === 'html' || ext === 'htm') {
-              // Rewrite image paths to point to repository API
-              state.preview.readme.html = rewriteImagePaths(state.preview.readme.content || '', state.preview.readme.path);
-              state.preview.readme.isMarkdown = true; // Treat as markdown for display purposes
-            } else {
-              state.preview.readme.html = '';
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.error('Error state.loading.main README:', err);
-    } finally {
-      state.loading.readme = false;
-    }
+    await loadReadmeService(state, rewriteImagePaths);
   }
 
   // File processing utilities are now imported from utils/file-processing.ts
@@ -1011,92 +899,7 @@
   }
 
   async function loadRepoImages() {
-    try {
-      // Get images from page data (loaded from announcement)
-      // Use $page.data directly to ensure we get the latest data
-      // Guard against SSR - $page store can only be accessed in component context
-      if (typeof window === 'undefined') return;
-      const data = $page.data as typeof state.pageData;
-      if (data.image) {
-        state.metadata.image = data.image;
-        console.log('[Repo Images] Loaded image from pageData:', state.metadata.image);
-      }
-      if (data.banner) {
-        state.metadata.banner = data.banner;
-        console.log('[Repo Images] Loaded banner from pageData:', state.metadata.banner);
-      }
-
-      // Also fetch from announcement directly as fallback (only if not private or user has access)
-      if (!state.metadata.image && !state.metadata.banner) {
-        // Guard against SSR - $page store can only be accessed in component context
-        if (typeof window === 'undefined') return;
-        const data = $page.data as typeof state.pageData;
-        // Check access for private repos
-        if (repoIsPrivate) {
-          const headers: Record<string, string> = {};
-          if (state.user.pubkey) {
-            try {
-              const decoded = nip19.decode(state.user.pubkey);
-              if (decoded.type === 'npub') {
-                headers['X-User-Pubkey'] = decoded.data as string;
-              } else {
-                headers['X-User-Pubkey'] = state.user.pubkey;
-              }
-            } catch {
-              headers['X-User-Pubkey'] = state.user.pubkey;
-            }
-          }
-          
-          const accessResponse = await fetch(`/api/repos/${state.npub}/${state.repo}/access`, { headers });
-          if (!accessResponse.ok) {
-            // Access check failed, don't fetch images
-            return;
-          }
-          const accessData = await accessResponse.json();
-          if (!accessData.canView) {
-            // User doesn't have access, don't fetch images
-            return;
-          }
-        }
-        
-        const decoded = nip19.decode(state.npub);
-        if (decoded.type === 'npub') {
-          const repoOwnerPubkey = decoded.data as string;
-          const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
-          const events = await client.fetchEvents([
-            {
-              kinds: [30617], // REPO_ANNOUNCEMENT
-              authors: [repoOwnerPubkeyDerived],
-              '#d': [state.repo],
-              limit: 1
-            }
-          ]);
-
-          if (events.length > 0) {
-            const announcement = events[0];
-            const imageTag = announcement.tags.find((t: string[]) => t[0] === 'image');
-            const bannerTag = announcement.tags.find((t: string[]) => t[0] === 'banner');
-            
-            if (imageTag?.[1]) {
-              state.metadata.image = imageTag[1];
-              console.log('[Repo Images] Loaded image from announcement:', state.metadata.image);
-            }
-            if (bannerTag?.[1]) {
-              state.metadata.banner = bannerTag[1];
-              console.log('[Repo Images] Loaded banner from announcement:', state.metadata.banner);
-            }
-          } else {
-            console.log('[Repo Images] No announcement found');
-          }
-        }
-      }
-      
-      if (!state.metadata.image && !state.metadata.banner) {
-        console.log('[Repo Images] No images found in announcement');
-      }
-    } catch (err) {
-      console.error('Error state.loading.main repo images:', err);
-    }
+    await loadRepoImagesService(state, repoOwnerPubkeyDerived, repoIsPrivate, $page.data);
   }
 
   // Reactively update images when pageData changes (only once, when data becomes available)
@@ -1373,13 +1176,7 @@
 
 
   async function loadBookmarkStatus() {
-    if (!state.user.pubkey || !state.metadata.address || !bookmarksService) return;
-    
-    try {
-      state.bookmark.isBookmarked = await bookmarksService.isBookmarked(state.user.pubkey, state.metadata.address);
-    } catch (err) {
-      console.warn('Failed to load bookmark status:', err);
-    }
+    await loadBookmarkStatusService(state, bookmarksService);
   }
 
   async function toggleBookmark() {
@@ -2425,50 +2222,7 @@
   }
 
   async function performCodeSearch() {
-    if (!state.codeSearch.query.trim() || state.codeSearch.query.length < 2) {
-      state.codeSearch.results = [];
-      return;
-    }
-
-    state.loading.codeSearch = true;
-    state.error = null;
-
-    try {
-      // Get current branch for repo-specific search
-      const branchParam = state.codeSearch.scope === 'repo' && state.git.currentBranch 
-        ? `&branch=${encodeURIComponent(state.git.currentBranch)}` 
-        : '';
-      
-      // For "All Repositories", don't pass repo filter - let it search all repos
-      const url = state.codeSearch.scope === 'repo' 
-        ? `/api/repos/${state.npub}/${state.repo}/code-search?q=${encodeURIComponent(state.codeSearch.query.trim())}${branchParam}`
-        : `/api/code-search?q=${encodeURIComponent(state.codeSearch.query.trim())}`;
-      
-      const response = await fetch(url, {
-        headers: buildApiHeaders()
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        state.codeSearch.results = Array.isArray(data) ? data : [];
-      } else {
-        let errorMessage = 'Failed to search code';
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.message || errorMessage;
-        } catch {
-          errorMessage = `Search failed: ${response.status} ${response.statusText}`;
-        }
-        throw new Error(errorMessage);
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to search code';
-      console.error('[Code Search] Error:', err);
-      state.error = errorMessage;
-      state.codeSearch.results = [];
-    } finally {
-      state.loading.codeSearch = false;
-    }
+    await performCodeSearchService(state);
   }
 
   async function loadIssues() {
@@ -2524,29 +2278,7 @@
   }
 
   async function loadPatchHighlights(patchId: string, patchAuthor: string) {
-    if (!patchId || !patchAuthor) return;
-    
-    state.loading.patchHighlights = true;
-    try {
-      const decoded = nip19.decode(state.npub);
-      if (decoded.type !== 'npub') {
-        throw new Error('Invalid npub format');
-      }
-      const repoOwnerPubkey = decoded.data as string;
-
-      const response = await fetch(
-        `/api/repos/${state.npub}/${state.repo}/highlights?patchId=${patchId}&patchAuthor=${patchAuthor}`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        state.patchHighlights = data.highlights || [];
-        state.patchComments = data.comments || [];
-      }
-    } catch (err) {
-      console.error('Failed to load patch highlights:', err);
-    } finally {
-      state.loading.patchHighlights = false;
-    }
+    await loadPatchHighlightsService(patchId, patchAuthor, state);
   }
 
   function handlePatchCodeSelection(
@@ -2567,65 +2299,7 @@
   }
 
   async function createPatchHighlight() {
-    if (!state.user.pubkey || !state.forms.patchHighlight.text.trim() || !state.selected.patch) return;
-
-    const patch = state.patches.find(p => p.id === state.selected.patch);
-    if (!patch) return;
-
-    state.creating.patchHighlight = true;
-    state.error = null;
-
-    try {
-      const decoded = nip19.decode(state.npub);
-      if (decoded.type !== 'npub') {
-        throw new Error('Invalid npub format');
-      }
-      const repoOwnerPubkey = decoded.data as string;
-
-      const eventTemplate = highlightsService.createHighlightEvent(
-        state.forms.patchHighlight.text,
-        patch.id,
-        patch.author,
-        repoOwnerPubkey,
-        state.repo,
-        KIND.PATCH, // targetKind
-        undefined, // filePath
-        state.forms.patchHighlight.startLine, // lineStart
-        state.forms.patchHighlight.endLine, // lineEnd
-        undefined, // context
-        state.forms.patchHighlight.comment.trim() || undefined // comment
-      );
-
-      const signedEvent = await signEventWithNIP07(eventTemplate);
-      
-      const tempClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
-      const { outbox } = await getUserRelays(state.user.pubkey, tempClient);
-      const combinedRelays = combineRelays(outbox);
-
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/highlights`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'highlight',
-          event: signedEvent,
-          userPubkey: state.user.pubkey
-        })
-      });
-
-      if (response.ok) {
-        state.openDialog = null;
-        state.forms.patchHighlight.text = '';
-        state.forms.patchHighlight.comment = '';
-        await loadPatchHighlights(patch.id, patch.author);
-      } else {
-        const data = await response.json();
-        state.error = data.state.error || 'Failed to create highlight';
-      }
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to create highlight';
-    } finally {
-      state.creating.patchHighlight = false;
-    }
+    await createPatchHighlightService(state, highlightsService, { loadPatches });
   }
 
   function formatPubkey(pubkey: string): string {
@@ -2646,82 +2320,7 @@
   }
 
   async function createPatchComment() {
-    if (!state.user.pubkey || !state.forms.patchComment.content.trim() || !state.selected.patch) return;
-
-    const patch = state.patches.find(p => p.id === state.selected.patch);
-    if (!patch) return;
-
-    state.creating.patchComment = true;
-    state.error = null;
-
-    try {
-      const decoded = nip19.decode(state.npub);
-      if (decoded.type !== 'npub') {
-        throw new Error('Invalid npub format');
-      }
-      const repoOwnerPubkey = decoded.data as string;
-
-      const rootEventId = state.forms.patchComment.replyingTo || patch.id;
-      const rootEventKind = state.forms.patchComment.replyingTo ? KIND.COMMENT : KIND.PATCH;
-      const rootPubkey = state.forms.patchComment.replyingTo ? 
-        (state.patchComments.find(c => c.id === state.forms.patchComment.replyingTo)?.pubkey || patch.author) :
-        patch.author;
-
-      let parentEventId: string | undefined;
-      let parentEventKind: number | undefined;
-      let parentPubkey: string | undefined;
-
-      if (state.forms.patchComment.replyingTo) {
-        // Reply to a comment
-        const parentComment = state.patchComments.find(c => c.id === state.forms.patchComment.replyingTo) || 
-                             state.patchHighlights.flatMap(h => h.comments || []).find(c => c.id === state.forms.patchComment.replyingTo);
-        if (parentComment) {
-          parentEventId = state.forms.patchComment.replyingTo;
-          parentEventKind = KIND.COMMENT;
-          parentPubkey = parentComment.pubkey;
-        }
-      }
-
-      const eventTemplate = highlightsService.createCommentEvent(
-        state.forms.patchComment.content.trim(),
-        rootEventId,
-        rootEventKind,
-        rootPubkey,
-        parentEventId,
-        parentEventKind,
-        parentPubkey
-      );
-
-      const signedEvent = await signEventWithNIP07(eventTemplate);
-      
-      const tempClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
-      const { outbox } = await getUserRelays(state.user.pubkey, tempClient);
-      const combinedRelays = combineRelays(outbox);
-
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/highlights`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'comment',
-          event: signedEvent,
-          userPubkey: state.user.pubkey
-        })
-      });
-
-      if (response.ok) {
-        state.openDialog = null;
-        state.forms.patchComment.content = '';
-        state.forms.patchComment.replyingTo = null;
-        await loadPatchHighlights(patch.id, patch.author);
-      } else {
-        const data = await response.json();
-        state.error = data.state.error || 'Failed to create comment';
-      }
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to create comment';
-    } finally {
-      state.creating.patchComment = false;
-    }
+    await createPatchCommentService(state, highlightsService, { loadPatches });
   }
 
   // Initialize patch highlights effect

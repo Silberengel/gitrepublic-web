@@ -253,3 +253,102 @@ export async function deleteFile(
     state.saving = false;
   }
 }
+
+/**
+ * Load README file
+ */
+export async function loadReadme(
+  state: RepoState,
+  rewriteImagePaths: (html: string, filePath: string | null) => string
+): Promise<void> {
+  if (state.loading.repoNotFound) return;
+  state.loading.readme = true;
+  try {
+    const { apiRequest } = await import('../utils/api-client.js');
+    const data = await apiRequest<{
+      found?: boolean;
+      content?: string;
+      path?: string;
+      isMarkdown?: boolean;
+    }>(`/api/repos/${state.npub}/${state.repo}/readme?ref=${state.git.currentBranch}`);
+    
+    if (data.found) {
+      state.preview.readme.content = data.content || null;
+      state.preview.readme.path = data.path || null;
+      state.preview.readme.isMarkdown = data.isMarkdown || false;
+      
+      // Reset preview mode for README
+      state.preview.file.showPreview = true;
+      state.preview.readme.html = '';
+      
+      // Render markdown or asciidoc if needed
+      if (state.preview.readme.content) {
+        const ext = state.preview.readme.path?.split('.').pop()?.toLowerCase() || '';
+        if (state.preview.readme.isMarkdown || ext === 'md' || ext === 'markdown') {
+          try {
+            const MarkdownIt = (await import('markdown-it')).default;
+            const hljsModule = await import('highlight.js');
+            const hljs = hljsModule.default || hljsModule;
+            
+            const md = new MarkdownIt({
+              html: true, // Enable HTML tags in source
+              linkify: true, // Autoconvert URL-like text to links
+              typographer: true, // Enable some language-neutral replacement + quotes beautification
+              breaks: true, // Convert '\n' in paragraphs into <br>
+              highlight: function (str: string, lang: string): string {
+                if (lang && hljs.getLanguage(lang)) {
+                  try {
+                    return '<pre class="hljs"><code>' +
+                           hljs.highlight(str, { language: lang }).value +
+                           '</code></pre>';
+                  } catch (err) {
+                    // Fallback to escaped HTML if highlighting fails
+                  }
+                }
+                return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
+              }
+            });
+            
+            let rendered = md.render(state.preview.readme.content);
+            // Rewrite image paths to point to repository API
+            rendered = rewriteImagePaths(rendered, state.preview.readme.path);
+            state.preview.readme.html = rendered;
+            console.log('[README] Markdown rendered successfully, HTML length:', state.preview.readme.html.length);
+          } catch (err) {
+            console.error('[README] Error rendering markdown:', err);
+            state.preview.readme.html = '';
+          }
+        } else if (ext === 'adoc' || ext === 'asciidoc') {
+          try {
+            const Asciidoctor = (await import('@asciidoctor/core')).default;
+            const asciidoctor = Asciidoctor();
+            const converted = asciidoctor.convert(state.preview.readme.content, {
+              safe: 'safe',
+              attributes: {
+                'source-highlighter': 'highlight.js'
+              }
+            });
+            let rendered = typeof converted === 'string' ? converted : String(converted);
+            // Rewrite image paths to point to repository API
+            rendered = rewriteImagePaths(rendered, state.preview.readme.path);
+            state.preview.readme.html = rendered;
+            state.preview.readme.isMarkdown = true; // Treat as markdown for display purposes
+          } catch (err) {
+            console.error('[README] Error rendering asciidoc:', err);
+            state.preview.readme.html = '';
+          }
+        } else if (ext === 'html' || ext === 'htm') {
+          // Rewrite image paths to point to repository API
+          state.preview.readme.html = rewriteImagePaths(state.preview.readme.content || '', state.preview.readme.path);
+          state.preview.readme.isMarkdown = true; // Treat as markdown for display purposes
+        } else {
+          state.preview.readme.html = '';
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error loading README:', err);
+  } finally {
+    state.loading.readme = false;
+  }
+}
