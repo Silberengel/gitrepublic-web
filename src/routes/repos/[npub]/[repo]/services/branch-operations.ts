@@ -5,10 +5,15 @@
 
 import type { NostrEvent } from '$lib/types/nostr.js';
 import type { RepoState } from '../stores/repo-state.js';
-import { apiPost, apiRequest } from '../utils/api-client.js';
+import { apiPost, apiRequest, buildApiHeaders } from '../utils/api-client.js';
 
 interface BranchOperationsCallbacks {
   loadBranches: () => Promise<void>;
+  loadFiles: (path: string) => Promise<void>;
+  loadFile: (path: string) => Promise<void>;
+  loadReadme: () => Promise<void>;
+  loadCommitHistory: () => Promise<void>;
+  loadDocumentation: () => Promise<void>;
 }
 
 /**
@@ -98,4 +103,132 @@ export async function deleteBranch(
   } finally {
     state.saving = false;
   }
+}
+
+/**
+ * Load branches from the repository
+ */
+export async function loadBranches(
+  state: RepoState,
+  repoCloneUrls: string[] | undefined
+): Promise<void> {
+  try {
+    const data = await apiRequest<Array<string | { name: string; commit?: any }>>(
+      `/api/repos/${state.npub}/${state.repo}/branches`
+    );
+    
+    state.git.branches = data;
+    
+    // If repo is not cloned but we got branches, API fallback is available
+    if (state.clone.isCloned === false && state.git.branches.length > 0) {
+      state.clone.apiFallbackAvailable = true;
+    }
+    
+    if (state.git.branches.length > 0) {
+      // Branches can be an array of objects with .name property or array of strings
+      const branchNames = state.git.branches.map((b: any) => typeof b === 'string' ? b : b.name);
+      
+      // Fetch the actual default branch from the API
+      try {
+        const defaultBranchData = await apiRequest<{ defaultBranch?: string; branch?: string }>(
+          `/api/repos/${state.npub}/${state.repo}/default-branch`
+        );
+        state.git.defaultBranch = defaultBranchData.defaultBranch || defaultBranchData.branch || null;
+      } catch (err) {
+        console.warn('Failed to fetch default branch, using fallback logic:', err);
+      }
+      
+      // Fallback: Detect default branch: prefer master, then main, then first branch
+      if (!state.git.defaultBranch) {
+        if (branchNames.includes('master')) {
+          state.git.defaultBranch = 'master';
+        } else if (branchNames.includes('main')) {
+          state.git.defaultBranch = 'main';
+        } else {
+          state.git.defaultBranch = branchNames[0];
+        }
+      }
+      
+      // Only update currentBranch if it's not set or if the current branch doesn't exist
+      // Also validate that currentBranch doesn't contain invalid characters (like '#')
+      if (!state.git.currentBranch || 
+          typeof state.git.currentBranch !== 'string' || 
+          state.git.currentBranch.includes('#') ||
+          !branchNames.includes(state.git.currentBranch)) {
+        state.git.currentBranch = state.git.defaultBranch;
+      }
+    } else {
+      // No branches exist - set currentBranch to null to show "no branches" in header
+      state.git.currentBranch = null;
+    }
+  } catch (err: any) {
+    // Handle 404 - repository not found or not cloned
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    if (errorMessage.includes('404') || errorMessage.includes('not found')) {
+      if (errorMessage.includes('not cloned locally')) {
+        // Repository is not cloned - check if API fallback might be available
+        if (repoCloneUrls && repoCloneUrls.length > 0) {
+          // We have clone URLs, so API fallback might work - mark as unknown for now
+          state.clone.apiFallbackAvailable = null;
+        } else {
+          // No clone URLs, API fallback won't work
+          state.repoNotFound = true;
+          state.clone.apiFallbackAvailable = false;
+          state.error = errorMessage || `Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`;
+        }
+      } else {
+        // Generic 404 - repository doesn't exist
+        state.repoNotFound = true;
+        state.clone.apiFallbackAvailable = false;
+        state.error = `Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`;
+      }
+    } else if (errorMessage.includes('403') || errorMessage.includes('Access denied')) {
+      // Access denied - don't set repoNotFound, allow retry after login
+      state.error = `Access denied: ${errorMessage}. You may need to log in or you may not have permission to view this repository.`;
+      console.warn('[Branches] Access denied, user may need to log in');
+    } else {
+      console.error('Failed to load branches:', err);
+    }
+  }
+}
+
+/**
+ * Handle branch change
+ */
+export async function handleBranchChange(
+  branch: string,
+  state: RepoState,
+  callbacks: BranchOperationsCallbacks
+): Promise<void> {
+  state.git.currentBranch = branch;
+  
+  // Reload all branch-dependent data
+  const reloadPromises: Promise<void>[] = [];
+  
+  // Always reload files (and current file if open)
+  if (state.files.currentFile) {
+    reloadPromises.push(callbacks.loadFile(state.files.currentFile).catch(err => console.warn('Failed to reload file after branch change:', err)));
+  } else {
+    reloadPromises.push(callbacks.loadFiles(state.files.currentPath).catch(err => console.warn('Failed to reload files after branch change:', err)));
+  }
+  
+  // Reload README (branch-specific)
+  reloadPromises.push(callbacks.loadReadme().catch(err => console.warn('Failed to reload README after branch change:', err)));
+  
+  // Reload commit history if history tab is active
+  if (state.ui.activeTab === 'history') {
+    reloadPromises.push(callbacks.loadCommitHistory().catch(err => console.warn('Failed to reload commit history after branch change:', err)));
+  }
+  
+  // Reload documentation if docs tab is active (might be branch-specific)
+  if (state.ui.activeTab === 'docs') {
+    // Reset documentation to force reload
+    state.docs.html = null;
+    state.docs.content = null;
+    state.docs.kind = null;
+    reloadPromises.push(callbacks.loadDocumentation().catch(err => console.warn('Failed to reload documentation after branch change:', err)));
+  }
+  
+  // Wait for all reloads to complete
+  await Promise.all(reloadPromises);
 }

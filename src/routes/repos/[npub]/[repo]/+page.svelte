@@ -80,11 +80,22 @@
   import {
     saveFile as saveFileService,
     createFile as createFileService,
-    deleteFile as deleteFileService
+    deleteFile as deleteFileService,
+    loadFiles as loadFilesService,
+    loadFile as loadFileService,
+    setupAutoSave as setupAutoSaveService,
+    autoSaveFile as autoSaveFileService
   } from './services/file-operations.js';
   import {
+    findReadmeFile as findReadmeFileUtil,
+    formatPubkey as formatPubkeyUtil,
+    getMimeType as getMimeTypeUtil
+  } from './utils/file-helpers.js';
+  import {
     createBranch as createBranchService,
-    deleteBranch as deleteBranchService
+    deleteBranch as deleteBranchService,
+    loadBranches as loadBranchesService,
+    handleBranchChange as handleBranchChangeService
   } from './services/branch-operations.js';
   import {
     loadTags as loadTagsService,
@@ -1509,88 +1520,7 @@
   }
 
   async function loadBranches() {
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/branches`, {
-        headers: buildApiHeaders()
-      });
-      if (response.ok) {
-        state.git.branches = await response.json();
-        
-        // If repo is not cloned but we got state.git.branches, API fallback is available
-        if (state.clone.isCloned === false && state.git.branches.length > 0) {
-          state.clone.apiFallbackAvailable = true;
-        }
-        if (state.git.branches.length > 0) {
-          // Branches can be an array of objects with .name property or array of strings
-          const branchNames = state.git.branches.map((b: any) => typeof b === 'string' ? b : b.name);
-          
-          // Fetch the actual default branch from the API
-          try {
-            const defaultBranchResponse = await fetch(`/api/repos/${state.npub}/${state.repo}/default-branch`, {
-              headers: buildApiHeaders()
-            });
-            if (defaultBranchResponse.ok) {
-              const defaultBranchData = await defaultBranchResponse.json();
-              state.git.defaultBranch = defaultBranchData.state.git.defaultBranch || defaultBranchData.branch || null;
-            }
-          } catch (err) {
-            console.warn('Failed to fetch default branch, using fallback logic:', err);
-          }
-          
-          // Fallback: Detect default branch: prefer master, then main, then first branch
-          if (!state.git.defaultBranch) {
-            if (branchNames.includes('master')) {
-              state.git.defaultBranch = 'master';
-            } else if (branchNames.includes('main')) {
-              state.git.defaultBranch = 'main';
-            } else {
-              state.git.defaultBranch = branchNames[0];
-            }
-          }
-          
-          // Only update state.git.currentBranch if it's not set or if the current branch doesn't exist
-          // Also validate that state.git.currentBranch doesn't contain invalid characters (like '#')
-          if (!state.git.currentBranch || 
-              typeof state.git.currentBranch !== 'string' || 
-              state.git.currentBranch.includes('#') ||
-              !branchNames.includes(state.git.currentBranch)) {
-            state.git.currentBranch = state.git.defaultBranch;
-          }
-        } else {
-          // No state.git.branches exist - set state.git.currentBranch to null to show "no state.git.branches" in header
-          state.git.currentBranch = null;
-        }
-      } else if (response.status === 404) {
-        // Check if this is a "not cloned" state.error - API fallback might be available
-        const errorText = await response.text().catch(() => '');
-        if (errorText.includes('not cloned locally')) {
-          // Repository is not cloned - check if API fallback might be available
-          if (repoCloneUrls && repoCloneUrls.length > 0) {
-            // We have clone URLs, so API fallback might work - mark as unknown for now
-            // It will be set to true if a subsequent request succeeds
-            state.clone.apiFallbackAvailable = null;
-            // Don't set state.repoNotFound or state.error yet - allow API fallback to be attempted
-          } else {
-            // No clone URLs, API fallback won't work
-            state.repoNotFound = true;
-            state.clone.apiFallbackAvailable = false;
-            state.error = errorText || `Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`;
-          }
-        } else {
-          // Generic 404 - repository doesn't exist
-          state.repoNotFound = true;
-          state.clone.apiFallbackAvailable = false;
-          state.error = `Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`;
-        }
-      } else if (response.status === 403) {
-        // Access denied - don't set state.repoNotFound, allow retry after login
-        const errorText = await response.text().catch(() => response.statusText);
-        state.error = `Access denied: ${errorText}. You may need to log in or you may not have permission to view this repository.`;
-        console.warn('[Branches] Access denied, user may need to log in');
-      }
-    } catch (err) {
-      console.error('Failed to load branches:', err);
-    }
+    await loadBranchesService(state, repoCloneUrls);
   }
 
   async function loadFiles(path: string = '') {
@@ -1668,7 +1598,7 @@
       // Auto-load README if we're in the root directory and no file is currently selected
       // Only attempt once per path to prevent loops
       if (path === '' && !state.files.currentFile && !state.metadata.readmeAutoLoadAttempted) {
-        const readmeFile = findReadmeFile(state.files.list);
+        const readmeFile = findReadmeFileUtil(state.files.list);
         if (readmeFile) {
           state.metadata.readmeAutoLoadAttempted = true;
           // Clear any existing timeout
@@ -1712,43 +1642,6 @@
     } finally {
       state.loading.main = false;
     }
-  }
-
-  // Helper function to find README file in file list
-  function findReadmeFile(fileList: Array<{ name: string; path: string; type: 'file' | 'directory' }>): { name: string; path: string; type: 'file' | 'directory' } | null {
-    // Priority order for README state.files.list (most common first)
-    const readmeExtensions = ['md', 'markdown', 'txt', 'adoc', 'asciidoc', 'rst', 'org'];
-    
-    // First, try to find README with extensions (prioritized order)
-    for (const ext of readmeExtensions) {
-      const readmeFile = fileList.find(file => 
-        file.type === 'file' && 
-        file.name.toLowerCase() === `readme.${ext}`
-      );
-      if (readmeFile) {
-        return readmeFile;
-      }
-    }
-    
-    // Then check for README without extension
-    const readmeNoExt = fileList.find(file => 
-      file.type === 'file' && 
-      file.name.toLowerCase() === 'readme'
-    );
-    if (readmeNoExt) {
-      return readmeNoExt;
-    }
-    
-    // Finally, check for any file starting with "readme." (case-insensitive)
-    const readmeAny = fileList.find(file => 
-      file.type === 'file' && 
-      file.name.toLowerCase().startsWith('readme.')
-    );
-    if (readmeAny) {
-      return readmeAny;
-    }
-    
-    return null;
   }
 
   async function loadFile(filePath: string) {
@@ -2113,7 +2006,11 @@
       getUserEmail,
       getUserName,
       loadFiles,
-      loadFile
+      loadFile,
+      renderFileAsHtml,
+      applySyntaxHighlighting,
+      findReadmeFile: findReadmeFileUtil,
+      rewriteImagePaths
     });
   }
 
@@ -2165,7 +2062,12 @@
     await createFileService(state, {
       getUserEmail,
       getUserName,
-      loadFiles
+      loadFiles,
+      loadFile,
+      renderFileAsHtml,
+      applySyntaxHighlighting,
+      findReadmeFile: findReadmeFileUtil,
+      rewriteImagePaths
     });
   }
 
@@ -2173,19 +2075,34 @@
     await deleteFileService(filePath, state, {
       getUserEmail,
       getUserName,
-      loadFiles
+      loadFiles,
+      loadFile,
+      renderFileAsHtml,
+      applySyntaxHighlighting,
+      findReadmeFile: findReadmeFileUtil,
+      rewriteImagePaths
     });
   }
 
   async function createBranch() {
     await createBranchService(state, repoAnnouncement, {
-      loadBranches
+      loadBranches,
+      loadFiles,
+      loadFile,
+      loadReadme,
+      loadCommitHistory,
+      loadDocumentation
     });
   }
 
   async function deleteBranch(branchName: string) {
     await deleteBranchService(branchName, state, {
-      loadBranches
+      loadBranches,
+      loadFiles,
+      loadFile,
+      loadReadme,
+      loadCommitHistory,
+      loadDocumentation
     });
   }
 
@@ -2328,7 +2245,7 @@
   
   // Initialize tab change effect
   const lastTab = { value: null as string | null };
-  useTabChangeEffect(state, lastTab, findReadmeFile, {
+  useTabChangeEffect(state, lastTab, findReadmeFileUtil, {
     loadFiles,
     loadFile,
     loadCommitHistory,
