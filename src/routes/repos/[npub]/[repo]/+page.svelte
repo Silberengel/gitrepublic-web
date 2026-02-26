@@ -651,8 +651,13 @@
   // README
 
   // Rewrite image paths in HTML to point to repository file API
+  // Uses the same pattern as DocsViewer which works correctly
   function rewriteImagePaths(html: string, filePath: string | null): string {
-    if (!html || !filePath) return html;
+    if (!html || !filePath) return html || '';
+    if (typeof html !== 'string') {
+      console.error('[rewriteImagePaths] Invalid html parameter:', typeof html, html);
+      return '';
+    }
     
     // Get the directory of the current file
     const fileDir = filePath.includes('/') 
@@ -663,17 +668,24 @@
     // If repo is empty (no branches), use null and let API handle it
     const branch = state.git.currentBranch || state.git.defaultBranch || null;
     
-    // Rewrite relative image paths
-    return html.replace(/<img([^>]*)\ssrc=["']([^"']+)["']([^>]*)>/gi, (match, before, src, after) => {
-      // Skip if it's already an absolute URL (http/https/data)
+    // Rewrite relative image paths - handle various img tag formats
+    // Match: <img src="...">, <img src='...'>, <img ... src="..." ...>, <img src="..." />, etc.
+    // Pattern: <img followed by optional space/attributes, then src="..." or src='...'
+    const imgTagPattern = /<img(\s+[^>]*?)?\s+src\s*=\s*["']([^"']+)["']([^>]*)>/gi;
+    let matchCount = 0;
+    const result = html.replace(imgTagPattern, (match, beforeAttrs, src, afterAttrs) => {
+      matchCount++;
+      console.log('[rewriteImagePaths] Matched img tag:', match.substring(0, 100), 'src:', src);
+      // Skip if it's already an absolute URL (http/https/data) or already an API URL
       if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:') || src.startsWith('/api/')) {
+        console.log('[rewriteImagePaths] Skipping absolute URL:', src);
         return match;
       }
       
       // Resolve relative path
       let imagePath: string;
       if (src.startsWith('/')) {
-        // Absolute path from repo root
+        // Absolute path from repo root (remove leading slash)
         imagePath = src.substring(1);
       } else if (src.startsWith('./')) {
         // Relative to current file directory
@@ -700,8 +712,24 @@
       const ref = branch || 'HEAD';
       const apiUrl = `/api/repos/${state.npub}/${state.repo}/raw?path=${encodeURIComponent(imagePath)}&ref=${encodeURIComponent(ref)}`;
       
-      return `<img${before} src="${apiUrl}"${after}>`;
+      console.log('[rewriteImagePaths] Rewriting:', src, '->', apiUrl);
+      // Reconstruct the img tag with the new src
+      // beforeAttrs might be undefined (if no attributes before src) or contain other attributes
+      const before = beforeAttrs ? beforeAttrs.trim() : '';
+      return `<img${before ? ' ' + before : ''} src="${apiUrl}"${afterAttrs}>`;
     });
+    if (matchCount === 0) {
+      console.warn('[rewriteImagePaths] No img tags matched in HTML. HTML sample:', html.substring(0, 500));
+      // Try alternative pattern in case the first one didn't match
+      const altPattern = /<img([^>]+)>/gi;
+      const altMatches = html.match(altPattern);
+      if (altMatches) {
+        console.log('[rewriteImagePaths] Found img tags with alternative pattern:', altMatches);
+      }
+    } else {
+      console.log('[rewriteImagePaths] Processed', matchCount, 'image tag(s)');
+    }
+    return result;
   }
 
   // Fork
@@ -812,9 +840,18 @@
 
   // Render markdown, asciidoc, or HTML files as HTML
   async function renderFileAsHtml(content: string, ext: string) {
-    await renderFileAsHtmlUtil(content, ext, state.files.currentFile, (html: string) => {
-      state.preview.file.html = html;
-    });
+    const branch = state.git.currentBranch || state.git.defaultBranch || null;
+    await renderFileAsHtmlUtil(
+      content, 
+      ext, 
+      state.files.currentFile, 
+      (html: string) => {
+        state.preview.file.html = html;
+      },
+      state.npub,
+      state.repo,
+      branch
+    );
   }
 
   // CSV and HTML utilities are now imported from utils/file-processing.ts
@@ -2075,8 +2112,9 @@
       </div>
     {/if}
 
-    <!-- Tabs -->
-    <div class="repo-layout">
+    <!-- Tabs - only show if we have repo data (header/clone section would be visible) -->
+    {#if repoOwnerPubkeyDerived}
+      <div class="repo-layout">
       <!-- Files Tab -->
       {#if state.ui.activeTab === 'files'}
         <FilesTab
@@ -2101,9 +2139,6 @@
             state.files.hasChanges = content !== state.files.content;
           }}
           isMaintainer={state.maintainers.isMaintainer}
-          readmeContent={state.preview.readme.content || null}
-          readmePath={state.preview.readme.path || null}
-          readmeHtml={state.preview.readme.html}
           showFilePreview={state.preview.file.showPreview}
           fileHtml={state.preview.file.html}
           highlightedFileContent={state.preview.file.highlightedContent}
@@ -2594,7 +2629,8 @@
 
 
         <!-- Docs tab content is now handled by DocsTab component -->
-    </div>
+      </div>
+    {/if}
   </main>
 
   <!-- Dialogs -->

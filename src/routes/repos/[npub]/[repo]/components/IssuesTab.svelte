@@ -5,6 +5,8 @@
   
   import StatusTabLayout from './StatusTabLayout.svelte';
   import { renderContent } from '../utils/content-renderer.js';
+  import NostrHtmlRenderer from '$lib/components/NostrHtmlRenderer.svelte';
+  import EventCopyButton from '$lib/components/EventCopyButton.svelte';
   
   interface Props {
     issues: Array<{
@@ -88,6 +90,7 @@
     <div class="issue-detail-header">
       <h2>{item.subject}</h2>
       <div class="issue-actions">
+        <EventCopyButton eventId={item.id} kind={item.kind} pubkey={(item as any).pubkey} />
         <select 
           value={currentStatus}
           onchange={(e) => onStatusUpdate(item.id, (e.target as HTMLSelectElement).value)}
@@ -103,7 +106,7 @@
       {#await contentPromise}
         <div class="loading">Rendering content...</div>
       {:then html}
-        {@html html}
+        <NostrHtmlRenderer html={html} />
       {:catch err}
         <div class="error">Failed to render content: {err instanceof Error ? err.message : String(err)}</div>
       {/await}
@@ -117,12 +120,15 @@
         {#each issueReplies as reply}
           {@const replyPromise = getRenderedContent(reply.content || '', reply.kind)}
           <div class="reply">
-            <div class="reply-author">{reply.author}</div>
+            <div class="reply-header">
+              <div class="reply-author">{reply.author}</div>
+              <EventCopyButton eventId={reply.id} kind={reply.kind} pubkey={(reply as any).pubkey} />
+            </div>
             <div class="reply-content">
               {#await replyPromise}
                 <div class="loading">Rendering...</div>
               {:then html}
-                {@html html}
+                <NostrHtmlRenderer html={html} />
               {:catch err}
                 {reply.content}
               {/await}
@@ -180,11 +186,42 @@
   
   .issue-detail-header {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
+    gap: 1rem;
     margin-bottom: 1rem;
     padding-bottom: 1rem;
     border-bottom: 1px solid var(--border-color);
+  }
+  
+  .issue-detail-header h2 {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+  }
+  
+  .issue-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+  }
+  
+  @media (max-width: 768px) {
+    .issue-detail-header {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    
+    .issue-detail-header h2 {
+      width: 100%;
+    }
+    
+    .issue-actions {
+      width: 100%;
+      justify-content: flex-start;
+    }
   }
   
   .issue-content {
@@ -205,9 +242,15 @@
     border-radius: 4px;
   }
   
+  .reply-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+  }
+  
   .reply-author {
     font-weight: 500;
-    margin-bottom: 0.5rem;
   }
   
   .reply-content {

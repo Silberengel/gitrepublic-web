@@ -1,12 +1,13 @@
 <script lang="ts">
   /**
    * Files tab component
-   * Handles file browser, editor, and README display
+   * Handles file browser and editor
    */
   
   import TabLayout from './TabLayout.svelte';
   import FileBrowser from './FileBrowser.svelte';
   import CodeEditor from '$lib/components/CodeEditor.svelte';
+  import NostrHtmlRenderer from '$lib/components/NostrHtmlRenderer.svelte';
   
   interface Props {
     files?: Array<{ name: string; path: string; type: 'file' | 'directory'; size?: number }>;
@@ -24,9 +25,6 @@
     onNavigateBack?: () => void;
     onContentChange?: (content: string) => void;
     isMaintainer?: boolean;
-    readmeContent?: string | null;
-    readmePath?: string | null;
-    readmeHtml?: string | null;
     showFilePreview?: boolean;
     fileHtml?: string | null;
     highlightedFileContent?: string | null;
@@ -68,9 +66,6 @@
     onNavigateBack = () => {},
     onContentChange = () => {},
     isMaintainer = false,
-    readmeContent = null,
-    readmePath = null,
-    readmeHtml = null,
     showFilePreview = false,
     fileHtml = null,
     highlightedFileContent = null,
@@ -103,7 +98,7 @@
   activeTab={activeTab}
   tabs={tabs}
   onTabChange={onTabChange}
-  title={currentFile ? `File: ${currentFile.split('/').pop()}` : (readmeContent ? 'README' : 'Files')}
+  title={currentFile ? `File: ${currentFile.split('/').pop()}` : 'Files'}
 >
   {#snippet leftPane()}
     <FileBrowser
@@ -117,36 +112,7 @@
   {/snippet}
   
   {#snippet rightPanel()}
-    {#if readmeContent && !currentFile}
-      <div class="readme-section">
-        <div class="readme-header">
-          <h3>README</h3>
-          <div class="readme-actions">
-            {#if readmePath && supportsPreview((readmePath.split('.').pop() || '').toLowerCase())}
-              <button 
-                onclick={onTogglePreview}
-                class="preview-toggle-button"
-                title={showFilePreview ? 'Show raw' : 'Show preview'}
-              >
-                {showFilePreview ? 'Raw' : 'Preview'}
-              </button>
-            {/if}
-            {#if readmePath}
-              <a href={`/api/repos/${readmePath}`} target="_blank" class="raw-link">View Raw</a>
-            {/if}
-          </div>
-        </div>
-        {#if showFilePreview && readmeHtml && readmeHtml.trim()}
-          <div class="readme-content markdown">
-            {@html readmeHtml}
-          </div>
-        {:else if readmeContent}
-          <div class="readme-content raw-content">
-            <pre><code class="hljs language-text">{readmeContent}</code></pre>
-          </div>
-        {/if}
-      </div>
-    {:else if currentFile}
+    {#if currentFile}
       <div class="file-editor">
         <div class="editor-header">
           <span class="file-path">{currentFile}</span>
@@ -237,7 +203,7 @@
                   </div>
                 {:else if currentFile && showFilePreview && fileHtml && supportsPreview((currentFile.split('.').pop() || '').toLowerCase())}
                   <div class="file-preview markdown">
-                    {@html fileHtml}
+                    <NostrHtmlRenderer html={fileHtml} />
                   </div>
                 {:else if highlightedFileContent}
                   <div class="raw-content">
@@ -259,13 +225,13 @@
           </div>
         {/if}
       </div>
-    {:else if files.length === 0 && !readmeContent}
+    {:else if files.length === 0}
       <div class="empty-state">
         <p>This repo is empty and contains no files.</p>
       </div>
     {:else}
       <div class="empty-state">
-        <p>Select a file to view or edit</p>
+        <p>Select a file from the left to view it on the right</p>
       </div>
     {/if}
   {/snippet}
@@ -399,13 +365,6 @@
     min-width: 0;
   }
   
-  .readme-content.raw-content {
-    max-width: 100%;
-    overflow-x: auto;
-    box-sizing: border-box;
-    width: 100%;
-  }
-  
   .editor-container {
     flex: 1;
     min-height: 0;
@@ -447,45 +406,6 @@
     max-width: 100%;
     min-width: 0;
     display: block;
-  }
-  
-  .readme-section {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    overflow: hidden;
-  }
-  
-  .readme-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid var(--border-color);
-    flex-shrink: 0;
-    width: 100%;
-  }
-  
-  .readme-header h3 {
-    margin: 0;
-    font-size: 1.25rem;
-    color: var(--text-primary);
-  }
-  
-  .readme-actions {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-  }
-  
-  .readme-content {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    width: 100%;
-    max-width: 100%;
-    padding: 1.5rem;
   }
   
   .file-editor .editor-actions {

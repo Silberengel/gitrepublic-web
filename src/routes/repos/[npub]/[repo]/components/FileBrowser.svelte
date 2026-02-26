@@ -89,6 +89,7 @@
     border: 1px solid var(--border-color);
     border-radius: 4px;
     cursor: pointer;
+    color: var(--text-primary);
   }
   
   .nav-back:hover {

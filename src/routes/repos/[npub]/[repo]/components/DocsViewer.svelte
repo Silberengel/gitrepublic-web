@@ -10,6 +10,7 @@
   import { KIND } from '$lib/types/nostr.js';
   import logger from '$lib/services/logger.js';
   import { renderContent } from '../utils/content-renderer.js';
+  import NostrHtmlRenderer from '$lib/components/NostrHtmlRenderer.svelte';
   
   // Rewrite image paths in HTML to point to repository file API
   function rewriteImagePaths(html: string, filePath: string, npub: string, repo: string, branch: string): string {
@@ -154,7 +155,7 @@
     />
   {:else if renderedContent}
     <div class="rendered-content" class:markdown={contentType === 'markdown'} class:asciidoc={contentType === 'asciidoc'}>
-      {@html renderedContent}
+      <NostrHtmlRenderer html={renderedContent} />
     </div>
   {:else}
     <div class="empty">No content to display</div>

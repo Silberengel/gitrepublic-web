@@ -284,7 +284,8 @@ export async function loadReadme(
       
       // Reset preview mode for README
       state.preview.file.showPreview = true;
-      state.preview.readme.html = '';
+      // DON'T reset readme.html here - keep existing HTML until new one is ready
+      // This prevents the component from falling back to DocsViewer with raw markdown
       
       // Render markdown or asciidoc if needed
       if (state.preview.readme.content) {
@@ -315,8 +316,27 @@ export async function loadReadme(
             });
             
             let rendered = md.render(state.preview.readme.content);
+            // Debug: check for image tags before rewrite
+            const imgBefore = rendered.match(/<img[^>]*>/gi);
+            if (imgBefore) {
+              console.log('[README] Images before rewrite:', imgBefore);
+            }
             // Rewrite image paths to point to repository API
+            const beforeRewrite = rendered;
             rendered = rewriteImagePaths(rendered, state.preview.readme.path);
+            // Debug: check for image tags after rewrite
+            const imgAfter = rendered.match(/<img[^>]*>/gi);
+            if (imgAfter) {
+              console.log('[README] Images after rewrite:', imgAfter);
+            }
+            if (beforeRewrite === rendered) {
+              console.warn('[README] rewriteImagePaths did not change HTML - images may not be rewritten');
+            }
+            // Safety check - ensure rendered is still a string
+            if (!rendered || typeof rendered !== 'string') {
+              console.error('[README] rewriteImagePaths returned invalid value, using original');
+              rendered = md.render(state.preview.readme.content); // Fallback to original
+            }
             state.preview.readme.html = rendered;
             console.log('[README] Markdown rendered successfully, HTML length:', state.preview.readme.html.length);
           } catch (err) {
@@ -349,7 +369,16 @@ export async function loadReadme(
         } else {
           state.preview.readme.html = '';
         }
+      } else {
+        // No content available, clear HTML
+        state.preview.readme.html = '';
       }
+    } else {
+      // README not found, clear state
+      state.preview.readme.content = null;
+      state.preview.readme.path = null;
+      state.preview.readme.html = '';
+      state.preview.readme.isMarkdown = false;
     }
   } catch (err) {
     console.error('Error loading README:', err);

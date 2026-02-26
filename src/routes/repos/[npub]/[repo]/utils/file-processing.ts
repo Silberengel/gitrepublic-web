@@ -124,25 +124,66 @@ export function isImageFileType(ext: string): boolean {
 /**
  * Rewrite image paths in HTML to be relative to file path
  */
-export function rewriteImagePaths(html: string, filePath: string | null): string {
+export function rewriteImagePaths(
+  html: string, 
+  filePath: string | null,
+  npub?: string,
+  repo?: string,
+  branch?: string | null
+): string {
   if (!filePath || !html) return html;
   
   // Get directory path (remove filename)
-  const dirPath = filePath.split('/').slice(0, -1).join('/');
-  const basePath = dirPath ? `/${dirPath}/` : '/';
+  const fileDir = filePath.includes('/') 
+    ? filePath.substring(0, filePath.lastIndexOf('/'))
+    : '';
   
-  // Rewrite relative image paths
-  // Match: src="image.png" or src='image.png' or src=image.png
-  html = html.replace(/src=["']([^"']+)["']/g, (match, path) => {
-    // Skip absolute URLs and data URLs
-    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:') || path.startsWith('/')) {
+  // Rewrite image paths in HTML to point to repository file API
+  // Match: <img src="...">, <img src='...'>, <img ... src="..." ...>, etc.
+  const imgTagPattern = /<img(\s+[^>]*?)?\s+src\s*=\s*["']([^"']+)["']([^>]*)>/gi;
+  
+  return html.replace(imgTagPattern, (match, beforeAttrs, src, afterAttrs) => {
+    // Skip if it's already an absolute URL (http/https/data) or already an API URL
+    if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:') || src.startsWith('/api/')) {
       return match;
     }
-    // Make path relative to file directory
-    return `src="${basePath}${path}"`;
+    
+    // Resolve relative path
+    let imagePath: string;
+    if (src.startsWith('/')) {
+      // Absolute path from repo root (remove leading slash)
+      imagePath = src.substring(1);
+    } else if (src.startsWith('./')) {
+      // Relative to current file directory
+      imagePath = fileDir ? `${fileDir}/${src.substring(2)}` : src.substring(2);
+    } else {
+      // Relative to current file directory
+      imagePath = fileDir ? `${fileDir}/${src}` : src;
+    }
+    
+    // Normalize path (remove .. and .)
+    const pathParts = imagePath.split('/').filter(p => p !== '.' && p !== '');
+    const normalizedPath: string[] = [];
+    for (const part of pathParts) {
+      if (part === '..') {
+        normalizedPath.pop();
+      } else {
+        normalizedPath.push(part);
+      }
+    }
+    imagePath = normalizedPath.join('/');
+    
+    // Build API URL if npub, repo, and branch are provided
+    if (npub && repo) {
+      const ref = branch || 'HEAD';
+      const apiUrl = `/api/repos/${npub}/${repo}/raw?path=${encodeURIComponent(imagePath)}&ref=${encodeURIComponent(ref)}`;
+      const before = beforeAttrs ? beforeAttrs.trim() : '';
+      return `<img${before ? ' ' + before : ''} src="${apiUrl}"${afterAttrs}>`;
+    }
+    
+    // Fallback: return original match if we don't have npub/repo
+    return match;
   });
-  
-  return html;
 }
 
 /**
@@ -289,7 +330,10 @@ export async function renderFileAsHtml(
   content: string,
   ext: string,
   filePath: string | null,
-  setHtml: (html: string) => void
+  setHtml: (html: string) => void,
+  npub?: string,
+  repo?: string,
+  branch?: string | null
 ): Promise<void> {
   try {
     const lowerExt = ext.toLowerCase();
@@ -319,7 +363,7 @@ export async function renderFileAsHtml(
       });
       
       let rendered = md.render(content);
-      rendered = rewriteImagePaths(rendered, filePath);
+      rendered = rewriteImagePaths(rendered, filePath, npub, repo, branch);
       setHtml(rendered);
     } else if (lowerExt === 'adoc' || lowerExt === 'asciidoc') {
       // Render asciidoc
@@ -332,12 +376,12 @@ export async function renderFileAsHtml(
         }
       });
       let rendered = typeof converted === 'string' ? converted : String(converted);
-      rendered = rewriteImagePaths(rendered, filePath);
+      rendered = rewriteImagePaths(rendered, filePath, npub, repo, branch);
       setHtml(rendered);
     } else if (lowerExt === 'html' || lowerExt === 'htm') {
       // HTML files - rewrite image paths
       let rendered = content;
-      rendered = rewriteImagePaths(rendered, filePath);
+      rendered = rewriteImagePaths(rendered, filePath, npub, repo, branch);
       setHtml(rendered);
     } else if (lowerExt === 'csv') {
       // Parse CSV and render as HTML table
