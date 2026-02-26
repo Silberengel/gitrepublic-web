@@ -33,18 +33,41 @@ export function getDiscussionEvent(eventId: string, events: Map<string, NostrEve
 }
 
 /**
- * Get referenced event from discussion
+ * Get referenced event from discussion (checks e-tag, a-tag, and q-tag)
  */
 export function getReferencedEventFromDiscussion(
   event: NostrEvent,
   events: Map<string, NostrEvent>
 ): NostrEvent | undefined {
-  // Check for 'e' tags (event references)
-  const eTags = event.tags.filter(t => t[0] === 'e' && t[1]);
-  if (eTags.length > 0) {
-    const referencedId = eTags[0][1] as string;
-    return events.get(referencedId);
+  // Check e-tag
+  const eTag = event.tags.find(t => t[0] === 'e' && t[1])?.[1];
+  if (eTag) {
+    const referenced = events.get(eTag);
+    if (referenced) return referenced;
   }
+  
+  // Check a-tag
+  const aTag = event.tags.find(t => t[0] === 'a' && t[1])?.[1];
+  if (aTag) {
+    const parts = aTag.split(':');
+    if (parts.length === 3) {
+      const kind = parseInt(parts[0]);
+      const pubkey = parts[1];
+      const dTag = parts[2];
+      return Array.from(events.values()).find(e => 
+        e.kind === kind && 
+        e.pubkey === pubkey && 
+        e.tags.find(t => t[0] === 'd' && t[1] === dTag)
+      );
+    }
+  }
+  
+  // Check q-tag
+  const qTag = event.tags.find(t => t[0] === 'q' && t[1])?.[1];
+  if (qTag) {
+    return events.get(qTag);
+  }
+  
   return undefined;
 }
 

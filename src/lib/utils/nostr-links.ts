@@ -201,7 +201,7 @@ export async function loadNostrLinks(
           const defaultEvents = await Promise.race([
             nostrClient.fetchEvents([{ ids: missingIds, limit: missingIds.length }]),
             new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 15000))
-          ]);
+      ]);
           events.push(...defaultEvents);
           defaultEvents.forEach(e => foundIds.add(e.id));
           console.log('[loadNostrLinks] Fetched', defaultEvents.length, 'additional events from default client');
@@ -250,9 +250,9 @@ export async function loadNostrLinks(
           // Fallback to default relays if no events found
           if (events.length === 0) {
             events = await Promise.race([
-              nostrClient.fetchEvents([{ kinds: [kind], authors: [pubkey], '#d': [dTag], limit: 1 }]),
-              new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 10000))
-            ]);
+            nostrClient.fetchEvents([{ kinds: [kind], authors: [pubkey], '#d': [dTag], limit: 1 }]),
+            new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 10000))
+          ]);
           }
           
           if (events.length > 0) {

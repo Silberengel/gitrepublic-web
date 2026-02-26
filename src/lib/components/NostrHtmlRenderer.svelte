@@ -79,9 +79,9 @@
     
     // Create and assign loading promise immediately
     loadingPromise = (async () => {
-      try {
+    try {
         await loadNostrLinks(currentHtml, nostrClient!, newEventCache, newProfileCache);
-        console.log('[NostrHtmlRenderer] After loadNostrLinks - events:', newEventCache.size, 'profiles:', newProfileCache.size);
+      console.log('[NostrHtmlRenderer] After loadNostrLinks - events:', newEventCache.size, 'profiles:', newProfileCache.size);
         
         // Only update if this is still the current HTML (prevent race conditions)
         if (currentHtml === html) {
@@ -91,8 +91,8 @@
           // Set lastHtml only after successful load to prevent re-triggering
           lastHtml = currentHtml;
         }
-      } catch (err) {
-        console.error('[NostrHtmlRenderer] Error loading nostr links:', err);
+    } catch (err) {
+      console.error('[NostrHtmlRenderer] Error loading nostr links:', err);
       } finally {
         // Only clear loading state if HTML hasn't changed (prevent race conditions)
         if (currentHtml === html) {
@@ -119,7 +119,7 @@
       // Only load if HTML actually changed (not just if we don't have data)
       // This prevents re-loading when component re-renders
       if (currentHtml !== lastHtml) {
-        loadEventsAndProfiles();
+      loadEventsAndProfiles();
       }
     } else if (!currentHtml) {
       loading = false;

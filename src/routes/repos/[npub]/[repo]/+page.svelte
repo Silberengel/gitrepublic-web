@@ -67,11 +67,16 @@
     renderCsvAsTable,
     escapeHtml,
     applySyntaxHighlighting as applySyntaxHighlightingUtil,
-    renderFileAsHtml as renderFileAsHtmlUtil
+    renderFileAsHtml as renderFileAsHtmlUtil,
+    rewriteImagePaths as rewriteImagePathsUtil
   } from './utils/file-processing.js';
   import {
-    parseNostrLinks
-  } from './utils/nostr-links.js';
+    parseNostrLinks,
+    loadNostrLinks as loadNostrLinksUtil,
+    getEventFromNostrLink as getEventFromNostrLinkUtil,
+    getPubkeyFromNostrLink as getPubkeyFromNostrLinkUtil,
+    processContentWithNostrLinks as processContentWithNostrLinksUtil
+  } from '$lib/utils/nostr-links.js';
   // formatDiscussionTime is defined locally (slightly different format than utility version)
   import {
     getUserEmail as getUserEmailUtil,
@@ -86,6 +91,14 @@
     setupAutoSave as setupAutoSaveService,
     autoSaveFile as autoSaveFileService
   } from './services/file-operations.js';
+  import {
+    safeAsync,
+    safeSync
+  } from './utils/safe-wrappers.js';
+  import {
+    createFileCallbacks,
+    createBranchCallbacks
+  } from './utils/repo-callbacks.js';
   import {
     findReadmeFile as findReadmeFileUtil,
     formatPubkey as formatPubkeyUtil,
@@ -104,7 +117,10 @@
   } from './utils/repo-handlers.js';
   import {
     countAllReplies as countAllRepliesUtil,
-    toggleThread as toggleThreadUtil
+    toggleThread as toggleThreadUtil,
+    getDiscussionEvent as getDiscussionEventUtil,
+    getReferencedEventFromDiscussion as getReferencedEventFromDiscussionUtil,
+    formatDiscussionTime as formatDiscussionTimeUtil
   } from './utils/discussion-utils.js';
   import {
     checkAuth as checkAuthService,
@@ -158,7 +174,8 @@
     loadDiscussions as loadDiscussionsService,
     createDiscussionThread as createDiscussionThreadService,
     createThreadReply as createThreadReplyService,
-    loadDocumentation as loadDocumentationService
+    loadDocumentation as loadDocumentationService,
+    loadDiscussionEvents as loadDiscussionEventsService
   } from './services/discussion-operations.js';
   import {
     checkCloneStatus as checkCloneStatusService,
@@ -293,25 +310,323 @@
   const lastTab = { value: null as string | null };
   const lastBranch = { value: null as string | null };
   
+  // Declare all functions first (before effects) to avoid hoisting issues
+  // Helper functions
+  const toggleWordWrap = () => toggleWordWrapUtil(state, { applySyntaxHighlighting });
+  const copyCloneUrl = () => copyCloneUrlUtil(state, $page.data, $page.url);
+  
+  // Create a nostrClient instance for fetching events
+  let nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+  let bookmarksService: BookmarksService | null = null;
+  
+  // Nostr link helpers
+  const loadNostrLinks = (content: string) => loadNostrLinksUtil(content, nostrClient, state.discussion.nostrLinkEvents, state.discussion.nostrLinkProfiles);
+  const getEventFromNostrLinkLocal = (link: string) => getEventFromNostrLinkUtil(link, state.discussion.nostrLinkEvents);
+  const getPubkeyFromNostrLinkLocal = (link: string) => getPubkeyFromNostrLinkUtil(link, state.discussion.nostrLinkProfiles);
+  const processContentWithNostrLinks = (content: string) => processContentWithNostrLinksUtil(content, state.discussion.nostrLinkEvents, state.discussion.nostrLinkProfiles);
+  const loadDiscussionEvents = (discussionsList: Array<{
+    type: string;
+    id: string;
+    title: string;
+    content: string;
+    author: string;
+    createdAt: number;
+    kind?: number;
+    pubkey?: string;
+    comments?: Array<{
+      id: string;
+      replies?: Array<{
+        id: string;
+        replies?: Array<{ id: string }>;
+      }>;
+    }>;
+  }>) => loadDiscussionEventsService(discussionsList, state, nostrClient);
+  const getDiscussionEvent = (eventId: string) => getDiscussionEventUtil(eventId, state.discussion.events);
+  const getReferencedEventFromDiscussion = (event: NostrEvent) => getReferencedEventFromDiscussionUtil(event, state.discussion.events);
+  const formatDiscussionTime = (timestamp: number) => formatDiscussionTimeUtil(timestamp);
+  
+  // Rewrite image paths helper
+  const rewriteImagePaths = (html: string, filePath: string | null) => {
+    const branch = state.git.currentBranch || state.git.defaultBranch || null;
+    return rewriteImagePathsUtil(html, filePath, state.npub, state.repo, branch);
+  };
+  
+  // User profile functions
+  let fetchingUserEmail = false;
+  let fetchingUserName = false;
+  async function getUserEmail(): Promise<string> {
+    return getUserEmailUtil(state.user.pubkeyHex, state.user.pubkey, { email: cachedUserEmail, name: cachedUserName }, { email: fetchingUserEmail, name: fetchingUserName });
+  }
+  async function getUserName(): Promise<string> {
+    return getUserNameUtil(state.user.pubkeyHex, state.user.pubkey, { email: cachedUserEmail, name: cachedUserName }, { email: fetchingUserEmail, name: fetchingUserName });
+  }
+  
+  // File operations
+  async function renderFileAsHtml(content: string, ext: string) {
+    const branch = state.git.currentBranch || state.git.defaultBranch || null;
+    await renderFileAsHtmlUtil(content, ext, state.files.currentFile, (html: string) => { state.preview.file.html = html; }, state.npub, state.repo, branch);
+  }
+  async function applySyntaxHighlighting(content: string, ext: string) {
+    await applySyntaxHighlightingUtil(content, ext, (html: string) => { state.preview.file.highlightedContent = html; });
+  }
+  async function loadFiles(path: string = '') {
+    const callbacks = createFileCallbacks(state, getUserEmail, getUserName, loadFiles, loadFile, renderFileAsHtml, applySyntaxHighlighting);
+    await loadFilesService(path, state, repoCloneUrls, readmeAutoLoadTimeout, callbacks);
+  }
+  async function loadFile(filePath: string) {
+    const callbacks = createFileCallbacks(state, getUserEmail, getUserName, loadFiles, loadFile, renderFileAsHtml, applySyntaxHighlighting);
+    await loadFileService(filePath, state, callbacks);
+  }
+  const handleContentChange = (value: string) => handleContentChangeUtil(value, state);
+  const handleFileClick = (file: { name: string; path: string; type: 'file' | 'directory' }) => handleFileClickUtil(file, state, { loadFiles, loadFile });
+  const copyFileContent = (event?: Event) => copyFileContentUtil(state, event);
+  const downloadFile = () => downloadFileUtil(state);
+  const handleBack = () => handleBackUtil(state, { loadFiles });
+  
+  // Branch operations
+  async function loadBranches() {
+    await loadBranchesService(state, repoCloneUrls);
+  }
+  async function loadReadme() {
+    await loadReadmeService(state, rewriteImagePaths);
+  }
+  function handleBranchChangeDirect(branch: string) {
+    const callbacks = createBranchCallbacks(loadBranches, loadFiles, loadFile, loadReadme, loadCommitHistory, loadDocumentation);
+    handleBranchChangeService(branch, state, callbacks).catch(err => console.warn('Failed to handle branch change:', err));
+  }
+  async function handleBranchChange(event: Event) {
+    const callbacks = createBranchCallbacks(loadBranches, loadFiles, loadFile, loadReadme, loadCommitHistory, loadDocumentation);
+    await handleBranchChangeService((event.target as HTMLSelectElement).value, state, callbacks);
+  }
+  
+  // Repo operations
+  const loadCloneUrlReachability = (forceRefresh = false) => loadCloneUrlReachabilityService(forceRefresh, state, repoCloneUrls);
+  const loadForkInfo = async () => {
+    try {
+      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/fork`, { headers: buildApiHeaders() });
+      if (response.ok) state.fork.info = await response.json();
+    } catch (err) {
+      console.error('Error loading fork info:', err);
+    }
+  };
+  async function checkCloneStatus(force = false) {
+    await checkCloneStatusService(force, state, repoCloneUrls);
+  }
+  async function cloneRepository() {
+    await cloneRepositoryService(state, { checkCloneStatus, loadBranches, loadFiles, loadReadme, loadTags, loadCommitHistory });
+  }
+  async function forkRepository() {
+    await forkRepositoryService(state);
+  }
+  
+  // Discussion operations
+  async function loadDiscussions() {
+    const callbacks = { loadDiscussions, loadNostrLinks, loadDiscussionEvents };
+    await loadDiscussionsService(state, repoOwnerPubkeyDerived, callbacks);
+  }
+  async function createDiscussionThread() {
+    const callbacks = { loadDiscussions, loadNostrLinks, loadDiscussionEvents };
+    await createDiscussionThreadService(state, repoOwnerPubkeyDerived, callbacks);
+  }
+  async function createThreadReply() {
+    nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+    const callbacks = { loadDiscussions, loadNostrLinks, loadDiscussionEvents };
+    await createThreadReplyService(state, repoOwnerPubkeyDerived, callbacks);
+  }
+  const toggleThread = (threadId: string) => {
+    toggleThreadUtil(threadId, state.ui.expandedThreads);
+    state.ui.expandedThreads = new Set(state.ui.expandedThreads);
+  };
+  async function loadDocumentation() {
+    await loadDocumentationService(state, repoOwnerPubkeyDerived, repoIsPrivate);
+  }
+  async function loadRepoImages() {
+    await loadRepoImagesService(state, repoOwnerPubkeyDerived, repoIsPrivate, $page.data);
+  }
+  
+  // Auth operations
+  async function checkAuth() {
+    await checkAuthService(state);
+    await checkMaintainerStatus();
+    await loadBookmarkStatus();
+  }
+  const login = () => loginService(state, { checkMaintainerStatus, loadBookmarkStatus });
+  async function loadBookmarkStatus() {
+    await loadBookmarkStatusService(state, bookmarksService);
+  }
+  async function toggleBookmark() {
+    await toggleBookmarkService(state, bookmarksService);
+  }
+  
+  // Maintainer operations
+  async function checkMaintainerStatus() {
+    await checkMaintainerStatusService(state);
+  }
+  async function loadAllMaintainers() {
+    await loadAllMaintainersService(state, repoOwnerPubkeyDerived, repoMaintainers);
+  }
+  
+  // Commit operations
+  async function loadCommitHistory() {
+    await loadCommitHistoryService(state, { verifyCommit });
+  }
+  async function verifyCommit(commitHash: string) {
+    await verifyCommitService(commitHash, state);
+  }
+  async function viewDiff(commitHash: string) {
+    await viewDiffService(commitHash, state);
+  }
+  
+  // Tag operations
+  async function loadTags() {
+    await loadTagsService(state, { loadTags });
+  }
+  async function createTag() {
+    await createTagService(state, { loadTags });
+  }
+  
+  // Release operations
+  async function loadReleases() {
+    await loadReleasesService(state, { loadReleases });
+  }
+  async function createRelease() {
+    await createReleaseService(state, repoOwnerPubkeyDerived, { loadReleases });
+    await loadTags();
+  }
+  
+  // Code search
+  async function performCodeSearch() {
+    await performCodeSearchService(state);
+  }
+  
+  // Issue operations
+  async function loadIssues() {
+    const callbacks = { loadIssues, loadIssueReplies, nostrClient };
+    await loadIssuesService(state, callbacks);
+  }
+  async function loadIssueReplies(issueId: string) {
+    const callbacks = { loadIssues, loadIssueReplies, nostrClient };
+    await loadIssueRepliesService(issueId, state, callbacks);
+  }
+  async function createIssue() {
+    const callbacks = { loadIssues, loadIssueReplies, nostrClient };
+    await createIssueService(state, callbacks);
+  }
+  async function updateIssueStatus(issueId: string, issueAuthor: string, status: 'open' | 'closed' | 'resolved' | 'draft') {
+    const callbacks = { loadIssues, loadIssueReplies, nostrClient };
+    await updateIssueStatusService(issueId, issueAuthor, status, state, callbacks);
+  }
+  
+  // PR operations
+  async function loadPRs() {
+    await loadPRsService(state, { loadPRs });
+  }
+  async function createPR() {
+    await createPRService(state, { loadPRs });
+  }
+  
+  // Patch operations
+  async function loadPatches() {
+    const callbacks = { loadPatches };
+    await loadPatchesService(state, callbacks);
+  }
+  async function createPatch() {
+    const callbacks = { loadPatches };
+    await createPatchService(state, callbacks);
+  }
+  async function updatePatchStatus(patchId: string, patchAuthor: string, status: string) {
+    const callbacks = { loadPatches };
+    await updatePatchStatusService(patchId, patchAuthor, status, state, callbacks);
+  }
+  async function loadPatchHighlights(patchId: string, patchAuthor: string) {
+    await loadPatchHighlightsService(patchId, patchAuthor, state);
+  }
+  function handlePatchCodeSelection(text: string, startLine: number, endLine: number, startPos: number, endPos: number) {
+    handlePatchCodeSelectionUtil(text, startLine, endLine, startPos, endPos, state);
+  }
+  async function createPatchHighlight() {
+    const callbacks = { loadPatches };
+    await createPatchHighlightService(state, highlightsService, callbacks);
+  }
+  function formatPubkey(pubkey: string): string {
+    return formatPubkeyUtil(pubkey);
+  }
+  function startPatchComment(parentId?: string) {
+    startPatchCommentUtil(parentId, state);
+  }
+  async function createPatchComment() {
+    const callbacks = { loadPatches };
+    await createPatchCommentService(state, highlightsService, callbacks);
+  }
+  
+  // File operations (continued)
+  async function setupAutoSave() {
+    await setupAutoSaveService(autoSaveInterval, () => autoSaveFile());
+  }
+  async function autoSaveFile() {
+    const callbacks = createFileCallbacks(state, getUserEmail, getUserName, loadFiles, loadFile, renderFileAsHtml, applySyntaxHighlighting);
+    await autoSaveFileService(state, needsClone, callbacks);
+  }
+  async function saveFile() {
+    const callbacks = createFileCallbacks(state, getUserEmail, getUserName, loadFiles, loadFile, renderFileAsHtml, applySyntaxHighlighting);
+    await saveFileService(state, callbacks);
+  }
+  async function createFile() {
+    const callbacks = createFileCallbacks(state, getUserEmail, getUserName, loadFiles, loadFile, renderFileAsHtml, applySyntaxHighlighting);
+    await createFileService(state, callbacks);
+  }
+  async function deleteFile(filePath: string) {
+    const callbacks = createFileCallbacks(state, getUserEmail, getUserName, loadFiles, loadFile, renderFileAsHtml, applySyntaxHighlighting);
+    await deleteFileService(filePath, state, callbacks);
+  }
+  
+  // Branch operations (continued)
+  async function createBranch() {
+    const callbacks = createBranchCallbacks(loadBranches, loadFiles, loadFile, loadReadme, loadCommitHistory, loadDocumentation);
+    await createBranchService(state, repoAnnouncement, callbacks);
+  }
+  async function deleteBranch(branchName: string) {
+    const callbacks = createBranchCallbacks(loadBranches, loadFiles, loadFile, loadReadme, loadCommitHistory, loadDocumentation);
+    await deleteBranchService(branchName, state, callbacks);
+  }
+  
+  // Repo operations (continued)
+  async function checkVerification() {
+    await checkVerificationService(state);
+  }
+  async function generateAnnouncementFileForRepo() {
+    await generateAnnouncementFileForRepoService(state, repoOwnerPubkeyDerived);
+  }
+  const copyVerificationToClipboard = () => copyVerificationToClipboardService(state);
+  async function verifyCloneUrl() {
+    await verifyCloneUrlService(state, repoOwnerPubkeyDerived, { checkVerification });
+  }
+  async function deleteAnnouncement() {
+    await deleteAnnouncementService(state, repoOwnerPubkeyDerived, announcementEventId);
+  }
+  const downloadVerificationFile = () => downloadVerificationFileService(state);
+  const downloadRepository = (ref?: string, filename?: string) => downloadRepoUtil({ npub: state.npub, repo: state.repo, ref, filename });
+  
+  // Safe wrapper functions for SSR
+  const safeCopyCloneUrl = () => safeAsync(() => copyCloneUrl());
+  const safeDeleteBranch = (branchName: string) => safeAsync(() => deleteBranch(branchName));
+  const safeToggleBookmark = () => safeAsync(() => toggleBookmark());
+  const safeForkRepository = () => safeAsync(() => forkRepository());
+  const safeCloneRepository = () => safeAsync(() => cloneRepository());
+  const safeHandleBranchChange = (branch: string) => safeSync(() => handleBranchChangeDirect(branch));
+  
   // Initialize activeTab from URL query parameter
-  // Sync activeTab to match URL state
   $effect(() => {
     if (typeof window === 'undefined' || !state.isMounted) return;
     const tabFromQuery = $page.url.searchParams.get('tab');
-    
     const validTabs = ['docs', 'files', 'issues', 'prs', 'patches', 'discussions', 'history', 'tags', 'code-search'];
-    
-    // Determine what tab the URL represents - default to 'docs' since it always works
     const urlTab = tabFromQuery && validTabs.includes(tabFromQuery) ? tabFromQuery : 'docs';
-    
-    // Only update if activeTab doesn't match URL state
     if (state.ui.activeTab !== urlTab) {
       state.ui.activeTab = urlTab as typeof state.ui.activeTab;
     }
   });
   
   // Initialize effects at component level (must be top-level, not in onMount)
-  // Hooks return effect callbacks that we call within $effect blocks
   $effect(usePageDataEffect(state, () => $page.data));
   $effect(usePageParamsEffect(state, () => $page.params as { npub?: string; repo?: string }));
   $effect(useMaintainersEffect(state, () => repoOwnerPubkeyDerived, () => repoMaintainers, loadAllMaintainers, () => $page.data));
@@ -349,11 +664,6 @@
     loadDocumentation
   }));
   
-  // Function to toggle word wrap and refresh highlighting
-  async function toggleWordWrap() {
-    await toggleWordWrapUtil(state, { applySyntaxHighlighting });
-  }
-  
   // Helper: Check if repo needs to be cloned for write operations
   const needsClone = $derived(state.clone.isCloned === false);
   // Helper: Check if we can use API fallback for read-only operations
@@ -361,13 +671,6 @@
   // Helper: Check if we have any way to view the repo (cloned or API fallback)
   const canViewRepo = $derived(state.clone.isCloned === true || canUseApiFallback);
   const cloneTooltip = 'Please clone this repo to use this feature.';
-  
-  // Copy clone URL to clipboard
-  async function copyCloneUrl() {
-    await copyCloneUrlUtil(state, $page.data, $page.url);
-  }
-  
-
   
   // Tabs menu - always show all tabs, let each tab component handle its own requirements
   const tabs = [
@@ -382,358 +685,7 @@
     { id: 'code-search', label: 'Code Search', icon: '/icons/search.svg' }
   ];
   
-  // Initialize tab switch effect (already done above, but keeping for clarity)
-  
   const highlightsService = new HighlightsService(DEFAULT_NOSTR_RELAYS);
-
-  // parseNostrLinks is now imported from utils/nostr-links.ts
-
-  // Load events/profiles from nostr: links
-  async function loadNostrLinks(content: string) {
-    const links = parseNostrLinks(content);
-    if (links.length === 0) return;
-
-    const eventIds: string[] = [];
-    const aTags: string[] = [];
-    const npubs: string[] = [];
-
-    for (const link of links) {
-      try {
-        if (link.type === 'nevent' || link.type === 'note1') {
-          const decoded = nip19.decode(link.value.replace('nostr:', ''));
-          if (decoded.type === 'nevent') {
-            eventIds.push(decoded.data.id);
-          } else if (decoded.type === 'note') {
-            eventIds.push(decoded.data as string);
-          }
-        } else if (link.type === 'naddr') {
-          const decoded = nip19.decode(link.value.replace('nostr:', ''));
-          if (decoded.type === 'naddr') {
-            const aTag = `${decoded.data.kind}:${decoded.data.pubkey}:${decoded.data.identifier}`;
-            aTags.push(aTag);
-          }
-        } else if (link.type === 'npub' || link.type === 'profile') {
-          const decoded = nip19.decode(link.value.replace('nostr:', ''));
-          if (decoded.type === 'npub') {
-            npubs.push(link.value);
-            state.discussion.nostrLinkProfiles.set(link.value, decoded.data as string);
-          }
-        }
-      } catch {
-        // Invalid nostr link, skip
-      }
-    }
-
-    // Fetch events
-    if (eventIds.length > 0) {
-      try {
-        const events = await Promise.race([
-          nostrClient.fetchEvents([{ ids: eventIds, limit: eventIds.length }]),
-          new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 10000))
-        ]);
-        
-        for (const event of events) {
-          state.discussion.nostrLinkEvents.set(event.id, event);
-        }
-      } catch {
-        // Ignore fetch errors
-      }
-    }
-
-    // Fetch a-tag events
-    if (aTags.length > 0) {
-      for (const aTag of aTags) {
-        const parts = aTag.split(':');
-        if (parts.length === 3) {
-          try {
-            const kind = parseInt(parts[0]);
-            const pubkey = parts[1];
-            const dTag = parts[2];
-            const events = await Promise.race([
-              nostrClient.fetchEvents([{ kinds: [kind], authors: [pubkey], '#d': [dTag], limit: 1 }]),
-              new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 10000))
-            ]);
-            
-            if (events.length > 0) {
-              state.discussion.nostrLinkEvents.set(events[0].id, events[0]);
-            }
-          } catch {
-            // Ignore fetch errors
-          }
-        }
-      }
-    }
-  }
-
-  // Get event from nostr: link (local version that uses state)
-  function getEventFromNostrLinkLocal(link: string): NostrEvent | undefined {
-    try {
-      if (link.startsWith('nostr:nevent1') || link.startsWith('nostr:note1')) {
-        const decoded = nip19.decode(link.replace('nostr:', ''));
-        if (decoded.type === 'nevent') {
-          return state.discussion.nostrLinkEvents.get(decoded.data.id);
-        } else if (decoded.type === 'note') {
-          return state.discussion.nostrLinkEvents.get(decoded.data as string);
-        }
-      } else if (link.startsWith('nostr:naddr1')) {
-        const decoded = nip19.decode(link.replace('nostr:', ''));
-        if (decoded.type === 'naddr') {
-          const eventId = `${decoded.data.kind}:${decoded.data.pubkey}:${decoded.data.identifier}`;
-          return Array.from(state.discussion.nostrLinkEvents.values()).find(e => {
-            const dTag = e.tags.find(t => t[0] === 'd')?.[1];
-            return e.kind === decoded.data.kind && 
-                   e.pubkey === decoded.data.pubkey && 
-                   dTag === decoded.data.identifier;
-          });
-        }
-      }
-    } catch {
-      // Invalid link
-    }
-    return undefined;
-  }
-
-  // Get pubkey from nostr: npub/profile link (local version that uses state)
-  function getPubkeyFromNostrLinkLocal(link: string): string | undefined {
-    return state.discussion.nostrLinkProfiles.get(link);
-  }
-
-  // Process content with nostr links into parts for rendering (local version that uses state)
-  function processContentWithNostrLinks(content: string): Array<{ type: 'text' | 'event' | 'profile' | 'placeholder'; value: string; event?: NostrEvent; pubkey?: string }> {
-    const links = parseNostrLinks(content);
-    if (links.length === 0) {
-      return [{ type: 'text', value: content }];
-    }
-
-    const parts: Array<{ type: 'text' | 'event' | 'profile' | 'placeholder'; value: string; event?: NostrEvent; pubkey?: string }> = [];
-    let lastIndex = 0;
-
-    for (const link of links) {
-      // Add text before link
-      if (link.start > lastIndex) {
-        const textPart = content.slice(lastIndex, link.start);
-        if (textPart) {
-          parts.push({ type: 'text', value: textPart });
-        }
-      }
-
-      // Add link
-      const event = getEventFromNostrLinkLocal(link.value);
-      const pubkey = getPubkeyFromNostrLinkLocal(link.value);
-      if (event) {
-        parts.push({ type: 'event', value: link.value, event });
-      } else if (pubkey) {
-        parts.push({ type: 'profile', value: link.value, pubkey });
-      } else {
-        parts.push({ type: 'placeholder', value: link.value });
-      }
-
-      lastIndex = link.end;
-    }
-
-    // Add remaining text
-    if (lastIndex < content.length) {
-      const textPart = content.slice(lastIndex);
-      if (textPart) {
-        parts.push({ type: 'text', value: textPart });
-      }
-    }
-
-    return parts;
-  }
-
-  // Load full events for state.discussions and comments to get state.git.tags for blurbs
-  async function loadDiscussionEvents(discussionsList: typeof state.discussions) {
-    const eventIds = new Set<string>();
-    
-    // Collect all event IDs
-    for (const discussion of discussionsList) {
-      if (discussion.id) {
-        eventIds.add(discussion.id);
-      }
-      if (discussion.comments) {
-        for (const comment of discussion.comments) {
-          if (comment.id) {
-            eventIds.add(comment.id);
-          }
-          if (comment.replies) {
-            for (const reply of comment.replies) {
-              if (reply.id) {
-                eventIds.add(reply.id);
-              }
-              if (reply.replies) {
-                for (const nestedReply of reply.replies) {
-                  if (nestedReply.id) {
-                    eventIds.add(nestedReply.id);
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
-    if (eventIds.size === 0) return;
-
-    try {
-      const events = await Promise.race([
-        nostrClient.fetchEvents([{ ids: Array.from(eventIds), limit: eventIds.size }]),
-        new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 10000))
-      ]);
-      
-      for (const event of events) {
-        state.discussion.events.set(event.id, event);
-      }
-    } catch {
-      // Ignore fetch errors
-    }
-  }
-
-  // Get discussion event by ID
-  function getDiscussionEvent(eventId: string): NostrEvent | undefined {
-    return state.discussion.events.get(eventId);
-  }
-
-  // Get referenced event from discussion event (e-tag, a-tag, q-tag)
-  function getReferencedEventFromDiscussion(event: NostrEvent): NostrEvent | undefined {
-    // Check e-tag
-    const eTag = event.tags.find(t => t[0] === 'e' && t[1])?.[1];
-    if (eTag) {
-      const referenced = state.discussion.events.get(eTag);
-      if (referenced) return referenced;
-    }
-    
-    // Check a-tag
-    const aTag = event.tags.find(t => t[0] === 'a' && t[1])?.[1];
-    if (aTag) {
-      const parts = aTag.split(':');
-      if (parts.length === 3) {
-        const kind = parseInt(parts[0]);
-        const pubkey = parts[1];
-        const dTag = parts[2];
-        return Array.from(state.discussion.events.values()).find(e => 
-          e.kind === kind && 
-          e.pubkey === pubkey && 
-          e.tags.find(t => t[0] === 'd' && t[1] === dTag)
-        );
-      }
-    }
-    
-    // Check q-tag
-    const qTag = event.tags.find(t => t[0] === 'q' && t[1])?.[1];
-    if (qTag) {
-      return state.discussion.events.get(qTag);
-    }
-    
-    return undefined;
-  }
-
-  // Format time for state.discussions
-  function formatDiscussionTime(timestamp: number): string {
-    const date = new Date(timestamp * 1000);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMins < 1) return 'just now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString();
-  }
-
-  // Create a nostrClient instance for fetching events
-  let nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
-
-  // README
-
-  // Rewrite image paths in HTML to point to repository file API
-  // Uses the same pattern as DocsViewer which works correctly
-  function rewriteImagePaths(html: string, filePath: string | null): string {
-    if (!html || !filePath) return html || '';
-    if (typeof html !== 'string') {
-      console.error('[rewriteImagePaths] Invalid html parameter:', typeof html, html);
-      return '';
-    }
-    
-    // Get the directory of the current file
-    const fileDir = filePath.includes('/') 
-      ? filePath.substring(0, filePath.lastIndexOf('/'))
-      : '';
-    
-    // Get current branch for the API URL
-    // If repo is empty (no branches), use null and let API handle it
-    const branch = state.git.currentBranch || state.git.defaultBranch || null;
-    
-    // Rewrite relative image paths - handle various img tag formats
-    // Match: <img src="...">, <img src='...'>, <img ... src="..." ...>, <img src="..." />, etc.
-    // Pattern: <img followed by optional space/attributes, then src="..." or src='...'
-    const imgTagPattern = /<img(\s+[^>]*?)?\s+src\s*=\s*["']([^"']+)["']([^>]*)>/gi;
-    let matchCount = 0;
-    const result = html.replace(imgTagPattern, (match, beforeAttrs, src, afterAttrs) => {
-      matchCount++;
-      console.log('[rewriteImagePaths] Matched img tag:', match.substring(0, 100), 'src:', src);
-      // Skip if it's already an absolute URL (http/https/data) or already an API URL
-      if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:') || src.startsWith('/api/')) {
-        console.log('[rewriteImagePaths] Skipping absolute URL:', src);
-        return match;
-      }
-      
-      // Resolve relative path
-      let imagePath: string;
-      if (src.startsWith('/')) {
-        // Absolute path from repo root (remove leading slash)
-        imagePath = src.substring(1);
-      } else if (src.startsWith('./')) {
-        // Relative to current file directory
-        imagePath = fileDir ? `${fileDir}/${src.substring(2)}` : src.substring(2);
-      } else {
-        // Relative to current file directory
-        imagePath = fileDir ? `${fileDir}/${src}` : src;
-      }
-      
-      // Normalize path (remove .. and .)
-      const pathParts = imagePath.split('/').filter(p => p !== '.' && p !== '');
-      const normalizedPath: string[] = [];
-      for (const part of pathParts) {
-        if (part === '..') {
-          normalizedPath.pop();
-        } else {
-          normalizedPath.push(part);
-        }
-      }
-      imagePath = normalizedPath.join('/');
-      
-      // Build API URL
-      // Use HEAD if branch is null (empty repo)
-      const ref = branch || 'HEAD';
-      const apiUrl = `/api/repos/${state.npub}/${state.repo}/raw?path=${encodeURIComponent(imagePath)}&ref=${encodeURIComponent(ref)}`;
-      
-      console.log('[rewriteImagePaths] Rewriting:', src, '->', apiUrl);
-      // Reconstruct the img tag with the new src
-      // beforeAttrs might be undefined (if no attributes before src) or contain other attributes
-      const before = beforeAttrs ? beforeAttrs.trim() : '';
-      return `<img${before ? ' ' + before : ''} src="${apiUrl}"${afterAttrs}>`;
-    });
-    if (matchCount === 0) {
-      console.warn('[rewriteImagePaths] No img tags matched in HTML. HTML sample:', html.substring(0, 500));
-      // Try alternative pattern in case the first one didn't match
-      const altPattern = /<img([^>]+)>/gi;
-      const altMatches = html.match(altPattern);
-      if (altMatches) {
-        console.log('[rewriteImagePaths] Found img tags with alternative pattern:', altMatches);
-      }
-    } else {
-      console.log('[rewriteImagePaths] Processed', matchCount, 'image tag(s)');
-    }
-    return result;
-  }
-
-  // Fork
-  let bookmarksService: BookmarksService | null = null;
   
   // Safe values for head section to prevent SSR errors
   const safeRepo = $derived(state.repo || 'Repository');
@@ -826,118 +778,6 @@
 
   // Repository owner pubkey (decoded from npub) - kept for backward compatibility with some functions
   let readmeAutoLoadTimeout = { value: null as ReturnType<typeof setTimeout> | null };
-
-  // Load clone URL reachability status
-  async function loadCloneUrlReachability(forceRefresh: boolean = false) {
-    await loadCloneUrlReachabilityService(forceRefresh, state, repoCloneUrls);
-  }
-
-  async function loadReadme() {
-    await loadReadmeService(state, rewriteImagePaths);
-  }
-
-  // File processing utilities are now imported from utils/file-processing.ts
-
-  // Render markdown, asciidoc, or HTML files as HTML
-  async function renderFileAsHtml(content: string, ext: string) {
-    const branch = state.git.currentBranch || state.git.defaultBranch || null;
-    await renderFileAsHtmlUtil(
-      content, 
-      ext, 
-      state.files.currentFile, 
-      (html: string) => {
-        state.preview.file.html = html;
-      },
-      state.npub,
-      state.repo,
-      branch
-    );
-  }
-
-  // CSV and HTML utilities are now imported from utils/file-processing.ts
-
-  async function applySyntaxHighlighting(content: string, ext: string) {
-    await applySyntaxHighlightingUtil(content, ext, (html: string) => {
-      state.preview.file.highlightedContent = html;
-    });
-  }
-
-  async function loadForkInfo() {
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/fork`, {
-        headers: buildApiHeaders()
-      });
-      if (response.ok) {
-        state.fork.info = await response.json();
-      }
-    } catch (err) {
-      console.error('Error state.loading.main fork info:', err);
-    }
-  }
-
-  // Helper function to count all replies recursively (including nested ones)
-
-  async function checkCloneStatus(force: boolean = false) {
-    await checkCloneStatusService(force, state, repoCloneUrls);
-  }
-
-  async function cloneRepository() {
-    await cloneRepositoryService(state, {
-      checkCloneStatus,
-      loadBranches,
-      loadFiles,
-      loadReadme,
-      loadTags,
-      loadCommitHistory
-    });
-  }
-
-  async function forkRepository() {
-    await forkRepositoryService(state);
-  }
-
-  async function loadDiscussions() {
-    await loadDiscussionsService(state, repoOwnerPubkeyDerived, {
-      loadDiscussions,
-      loadNostrLinks,
-      loadDiscussionEvents: loadDiscussionEvents as any
-    });
-  }
-
-
-  async function createDiscussionThread() {
-    await createDiscussionThreadService(state, repoOwnerPubkeyDerived, {
-      loadDiscussions,
-      loadNostrLinks,
-      loadDiscussionEvents: loadDiscussionEvents as any
-    });
-  }
-
-  async function createThreadReply() {
-    // Store nostrClient for use in other functions
-    const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
-    nostrClient = client;
-    
-    await createThreadReplyService(state, repoOwnerPubkeyDerived, {
-      loadDiscussions,
-      loadNostrLinks,
-      loadDiscussionEvents: loadDiscussionEvents as any
-    });
-  }
-
-  function toggleThread(threadId: string) {
-    toggleThreadUtil(threadId, state.ui.expandedThreads);
-    // Trigger reactivity
-    state.ui.expandedThreads = new Set(state.ui.expandedThreads);
-  }
-
-  async function loadDocumentation() {
-    await loadDocumentationService(state, repoOwnerPubkeyDerived, repoIsPrivate);
-  }
-
-  async function loadRepoImages() {
-    await loadRepoImagesService(state, repoOwnerPubkeyDerived, repoIsPrivate, $page.data);
-  }
 
   // Reactively update images when pageData changes (only once, when data becomes available)
   // Initialize repo images effect (moved to onMount)
@@ -1064,163 +904,6 @@
     });
   }
 
-  async function checkAuth() {
-    // Check userStore first
-    const currentUser = $userStore;
-    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
-      state.user.pubkey = currentUser.userPubkey;
-      state.user.pubkeyHex = currentUser.userPubkeyHex;
-      // Recheck maintainer status and bookmark status after auth
-      await checkMaintainerStatus();
-      await loadBookmarkStatus();
-      return;
-    }
-    
-    // Fallback: try NIP-07 if store doesn't have it
-    try {
-      if (isNIP07Available()) {
-        const pubkey = await getPublicKeyWithNIP07();
-        state.user.pubkey = pubkey;
-        // Convert to hex if needed
-        if (/^[0-9a-f]{64}$/i.test(pubkey)) {
-          state.user.pubkeyHex = pubkey.toLowerCase();
-        } else {
-          try {
-            const decoded = nip19.decode(pubkey);
-            if (decoded.type === 'npub') {
-              state.user.pubkeyHex = decoded.data as string;
-            }
-          } catch {
-            state.user.pubkeyHex = pubkey;
-          }
-        }
-        // Recheck maintainer status and bookmark status after auth
-        await checkMaintainerStatus();
-        await loadBookmarkStatus();
-      }
-    } catch (err) {
-      console.log('NIP-07 not available or user not connected');
-      state.user.pubkey = null;
-      state.user.pubkeyHex = null;
-    }
-  }
-
-  async function login() {
-    // Check userStore first
-    const currentUser = $userStore;
-    if (currentUser.userPubkey && currentUser.userPubkeyHex) {
-      state.user.pubkey = currentUser.userPubkey;
-      state.user.pubkeyHex = currentUser.userPubkeyHex;
-      // Re-check maintainer status and bookmark status after login
-      await checkMaintainerStatus();
-      await loadBookmarkStatus();
-      // Check for pending transfers (user is already logged in via store)
-      if (state.user.pubkeyHex) {
-        try {
-          const response = await fetch('/api/transfers/pending', {
-            headers: {
-              'X-User-Pubkey': state.user.pubkeyHex
-            }
-          });
-          if (response.ok) {
-            const data = await response.json();
-            if (data.pendingTransfers && data.pendingTransfers.length > 0) {
-              window.dispatchEvent(new CustomEvent('pendingTransfers', { 
-                detail: { transfers: data.pendingTransfers } 
-              }));
-            }
-          }
-        } catch (err) {
-          console.error('Failed to check for pending transfers:', err);
-        }
-      }
-      return;
-    }
-    
-    // Fallback: try NIP-07 - need to check write access and update store
-    try {
-      if (!isNIP07Available()) {
-        alert('NIP-07 extension not found. Please install a Nostr extension like Alby or nos2x.');
-        return;
-      }
-      const pubkey = await getPublicKeyWithNIP07();
-      let pubkeyHex: string;
-      // Convert to hex if needed
-      if (/^[0-9a-f]{64}$/i.test(pubkey)) {
-        pubkeyHex = pubkey.toLowerCase();
-        state.user.pubkey = pubkey;
-      } else {
-        try {
-          const decoded = nip19.decode(pubkey);
-          if (decoded.type === 'npub') {
-            pubkeyHex = decoded.data as string;
-            state.user.pubkey = pubkey;
-          } else {
-            throw new Error('Invalid pubkey format');
-          }
-        } catch {
-          state.error = 'Invalid public key format';
-          return;
-        }
-      }
-      
-      state.user.pubkeyHex = pubkeyHex;
-      
-      // Check write access and update user store
-      const { determineUserLevel } = await import('$lib/services/nostr/user-level-service.js');
-      const levelResult = await determineUserLevel(state.user.pubkey, state.user.pubkeyHex);
-      
-      // Update user store with write access level
-      userStore.setUser(
-        levelResult.userPubkey,
-        levelResult.userPubkeyHex,
-        levelResult.level,
-        levelResult.error || null
-      );
-      
-      // Update activity tracking
-      const { updateActivity } = await import('$lib/services/activity-tracker.js');
-      updateActivity();
-      
-      // Check for pending transfer events
-      if (state.user.pubkeyHex) {
-        try {
-          const response = await fetch('/api/transfers/pending', {
-            headers: {
-              'X-User-Pubkey': state.user.pubkeyHex
-            }
-          });
-          if (response.ok) {
-            const data = await response.json();
-            if (data.pendingTransfers && data.pendingTransfers.length > 0) {
-              window.dispatchEvent(new CustomEvent('pendingTransfers', { 
-                detail: { transfers: data.pendingTransfers } 
-              }));
-            }
-          }
-        } catch (err) {
-          console.error('Failed to check for pending transfers:', err);
-        }
-      }
-      
-      // Re-check maintainer status and bookmark status after login
-      await checkMaintainerStatus();
-      await loadBookmarkStatus();
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to connect';
-      console.error('Login error:', err);
-    }
-  }
-
-
-  async function loadBookmarkStatus() {
-    await loadBookmarkStatusService(state, bookmarksService);
-  }
-
-  async function toggleBookmark() {
-    await toggleBookmarkService(state, bookmarksService);
-  }
-
   async function copyEventId() {
     if (!state.metadata.address || !repoOwnerPubkeyDerived) {
       alert('Repository address not available');
@@ -1274,515 +957,6 @@
     }
   }
 
-  async function checkMaintainerStatus() {
-    await checkMaintainerStatusService(state);
-  }
-
-  async function loadAllMaintainers() {
-    await loadAllMaintainersService(state, repoOwnerPubkeyDerived, repoMaintainers);
-  }
-
-  async function checkVerification() {
-    await checkVerificationService(state);
-  }
-
-  async function generateAnnouncementFileForRepo() {
-    await generateAnnouncementFileForRepoService(state, repoOwnerPubkeyDerived);
-  }
-
-  function copyVerificationToClipboard() {
-    copyVerificationToClipboardService(state);
-  }
-
-  // Verify clone URL by committing announcement
-  async function verifyCloneUrl() {
-    await verifyCloneUrlService(state, repoOwnerPubkeyDerived, { checkVerification });
-  }
-
-  async function deleteAnnouncement() {
-    await deleteAnnouncementService(state, repoOwnerPubkeyDerived, announcementEventId);
-  }
-
-  function downloadVerificationFile() {
-    downloadVerificationFileService(state);
-  }
-
-  // buildApiHeaders is now imported from utils/api-client.ts - using it directly
-
-  // Safe wrapper functions for SSR - use function declarations that check at call time
-  // This ensures they're always defined and never null, even during SSR
-  function safeCopyCloneUrl() {
-    if (typeof window === 'undefined') return Promise.resolve();
-    try {
-      return copyCloneUrl();
-    } catch (err) {
-      console.warn('Error in copyCloneUrl:', err);
-      return Promise.resolve();
-    }
-  }
-
-  function safeDeleteBranch(branchName: string) {
-    if (typeof window === 'undefined') return Promise.resolve();
-    try {
-      return deleteBranch(branchName);
-    } catch (err) {
-      console.warn('Error in deleteBranch:', err);
-      return Promise.resolve();
-    }
-  }
-
-  function safeToggleBookmark() {
-    if (typeof window === 'undefined') return Promise.resolve();
-    try {
-      return toggleBookmark();
-    } catch (err) {
-      console.warn('Error in toggleBookmark:', err);
-      return Promise.resolve();
-    }
-  }
-
-  function safeForkRepository() {
-    if (typeof window === 'undefined') return Promise.resolve();
-    try {
-      return forkRepository();
-    } catch (err) {
-      console.warn('Error in forkRepository:', err);
-      return Promise.resolve();
-    }
-  }
-
-  function safeCloneRepository() {
-    if (typeof window === 'undefined') return Promise.resolve();
-    try {
-      return cloneRepository();
-    } catch (err) {
-      console.warn('Error in cloneRepository:', err);
-      return Promise.resolve();
-    }
-  }
-
-  function safeHandleBranchChange(branch: string) {
-    if (typeof window === 'undefined') return;
-    try {
-      handleBranchChangeDirect(branch);
-    } catch (err) {
-      console.warn('Error in handleBranchChangeDirect:', err);
-    }
-  }
-
-  // Download function - now using extracted utility
-  async function downloadRepository(ref?: string, filename?: string): Promise<void> {
-    await downloadRepoUtil({
-      npub: state.npub,
-      repo: state.repo,
-      ref,
-      filename
-    });
-  }
-
-  async function loadBranches() {
-    await loadBranchesService(state, repoCloneUrls);
-  }
-
-  async function loadFiles(path: string = '') {
-    await loadFilesService(path, state, repoCloneUrls, readmeAutoLoadTimeout, {
-      getUserEmail,
-      getUserName,
-      loadFiles,
-      loadFile,
-      renderFileAsHtml,
-      applySyntaxHighlighting,
-      findReadmeFile: findReadmeFileUtil,
-      rewriteImagePaths
-    });
-  }
-
-  async function loadFile(filePath: string) {
-    await loadFileService(filePath, state, {
-      getUserEmail,
-      getUserName,
-      loadFiles,
-      loadFile,
-      renderFileAsHtml,
-      applySyntaxHighlighting,
-      findReadmeFile: findReadmeFileUtil,
-      rewriteImagePaths
-    });
-  }
-
-  function handleContentChange(value: string) {
-    handleContentChangeUtil(value, state);
-  }
-
-  function handleFileClick(file: { name: string; path: string; type: 'file' | 'directory' }) {
-    handleFileClickUtil(file, state, { loadFiles, loadFile });
-  }
-
-  // Copy file content to clipboard
-  async function copyFileContent(event?: Event) {
-    await copyFileContentUtil(state, event);
-  }
-
-  // Download file
-  function downloadFile() {
-    downloadFileUtil(state);
-  }
-
-  function handleBack() {
-    handleBackUtil(state, { loadFiles });
-  }
-
-  // Cache for user profile email and name (already declared above)
-  let fetchingUserEmail = false;
-  let fetchingUserName = false;
-
-  async function getUserEmail(): Promise<string> {
-    return getUserEmailUtil(state.user.pubkeyHex, state.user.pubkey, { email: cachedUserEmail, name: cachedUserName }, { email: fetchingUserEmail, name: fetchingUserName });
-  }
-
-  async function getUserName(): Promise<string> {
-    return getUserNameUtil(state.user.pubkeyHex, state.user.pubkey, { email: cachedUserEmail, name: cachedUserName }, { email: fetchingUserEmail, name: fetchingUserName });
-  }
-
-  async function setupAutoSave() {
-    // Clear existing interval if any
-    if (autoSaveInterval.value) {
-      clearInterval(autoSaveInterval.value);
-      autoSaveInterval.value = null;
-    }
-    
-    // Check if auto-save is enabled
-    try {
-      const settings = await settingsStore.getSettings();
-      if (!settings.autoSave) {
-        return; // Auto-save disabled
-      }
-    } catch (err) {
-      console.warn('Failed to check auto-save setting:', err);
-      return;
-    }
-    
-    // Set up interval to auto-save every 10 minutes
-    autoSaveInterval.value = setInterval(async () => {
-      await autoSaveFile();
-    }, 10 * 60 * 1000); // 10 minutes
-  }
-  
-  async function autoSaveFile() {
-    // Only auto-save if:
-    // 1. There are changes
-    // 2. A file is open
-    // 3. User is logged in
-    // 4. User is a maintainer
-    // 5. Not currently state.saving
-    // 6. Not in clone state
-    if (!state.files.hasChanges || !state.files.currentFile || !state.user.pubkey || !state.maintainers.isMaintainer || state.saving || needsClone) {
-      return;
-    }
-    
-    // Check auto-save setting again (in case it changed)
-    try {
-      const settings = await settingsStore.getSettings();
-      if (!settings.autoSave) {
-        // Auto-save was disabled, clear interval
-        if (autoSaveInterval.value) {
-          clearInterval(autoSaveInterval.value);
-          autoSaveInterval.value = null;
-        }
-        return;
-      }
-    } catch (err) {
-      console.warn('Failed to check auto-save setting:', err);
-      return;
-    }
-    
-    // Generate a default commit message
-    const autoCommitMessage = `Auto-save: ${new Date().toLocaleString()}`;
-    
-    try {
-      // Get user email and name from settings
-      const authorEmail = await getUserEmail();
-      const authorName = await getUserName();
-      
-      // Sign commit with NIP-07 (client-side)
-      let commitSignatureEvent: NostrEvent | null = null;
-      if (isNIP07Available()) {
-        try {
-          const { KIND } = await import('$lib/types/nostr.js');
-          const timestamp = Math.floor(Date.now() / 1000);
-          const eventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
-            kind: KIND.COMMIT_SIGNATURE,
-            pubkey: '', // Will be filled by NIP-07
-            created_at: timestamp,
-            tags: [
-              ['author', authorName, authorEmail],
-              ['message', autoCommitMessage]
-            ],
-            content: `Signed commit: ${autoCommitMessage}`
-          };
-          commitSignatureEvent = await signEventWithNIP07(eventTemplate);
-        } catch (err) {
-          console.warn('Failed to sign commit with NIP-07:', err);
-          // Continue without signature if signing fails
-        }
-      }
-      
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/file`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...buildApiHeaders()
-        },
-        body: JSON.stringify({
-          path: state.files.currentFile,
-          content: state.files.editedContent,
-          message: autoCommitMessage,
-          authorName: authorName,
-          authorEmail: authorEmail,
-          branch: state.git.currentBranch,
-          userPubkey: state.user.pubkey,
-          commitSignatureEvent: commitSignatureEvent
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: response.statusText }));
-        console.warn('Auto-save failed:', errorData.message || 'Failed to save file');
-        return;
-      }
-
-      // Reload file to get updated content
-      await loadFile(state.files.currentFile);
-      // Note: We don't show an alert for auto-save, it's silent
-      console.log('Auto-saved file:', state.files.currentFile);
-    } catch (err) {
-      console.warn('Error during auto-save:', err);
-      // Don't show state.error to user, it's silent
-    }
-  }
-
-  async function saveFile() {
-    await saveFileService(state, {
-      getUserEmail,
-      getUserName,
-      loadFiles,
-      loadFile,
-      renderFileAsHtml,
-      applySyntaxHighlighting,
-      findReadmeFile: findReadmeFileUtil,
-      rewriteImagePaths
-    });
-  }
-
-  function handleBranchChangeDirect(branch: string) {
-    state.git.currentBranch = branch;
-    // Create a synthetic event for the existing handler
-    const syntheticEvent = {
-      target: { value: branch }
-    } as unknown as Event;
-    handleBranchChange(syntheticEvent);
-  }
-
-  async function handleBranchChange(event: Event) {
-    const target = event.target as HTMLSelectElement;
-    state.git.currentBranch = target.value;
-    
-    // Reload all branch-dependent data
-    const reloadPromises: Promise<void>[] = [];
-    
-    // Always reload state.files.list (and current file if open)
-    if (state.files.currentFile) {
-      reloadPromises.push(loadFile(state.files.currentFile).catch(err => console.warn('Failed to reload file after branch change:', err)));
-    } else {
-      reloadPromises.push(loadFiles(state.files.currentPath).catch(err => console.warn('Failed to reload state.files.list after branch change:', err)));
-    }
-    
-    // Reload README (branch-specific)
-    reloadPromises.push(loadReadme().catch(err => console.warn('Failed to reload README after branch change:', err)));
-    
-    // Reload commit history if history tab is active
-    if (state.ui.activeTab === 'history') {
-      reloadPromises.push(loadCommitHistory().catch(err => console.warn('Failed to reload commit history after branch change:', err)));
-    }
-    
-    // Reload documentation if docs tab is active (might be branch-specific)
-    if (state.ui.activeTab === 'docs') {
-      // Reset documentation to force reload
-      state.docs.html = null;
-      state.docs.content = null;
-      state.docs.kind = null;
-      reloadPromises.push(loadDocumentation().catch(err => console.warn('Failed to reload documentation after branch change:', err)));
-    }
-    
-    // Wait for all reloads to complete
-    await Promise.all(reloadPromises);
-  }
-
-  async function createFile() {
-    await createFileService(state, {
-      getUserEmail,
-      getUserName,
-      loadFiles,
-      loadFile,
-      renderFileAsHtml,
-      applySyntaxHighlighting,
-      findReadmeFile: findReadmeFileUtil,
-      rewriteImagePaths
-    });
-  }
-
-  async function deleteFile(filePath: string) {
-    await deleteFileService(filePath, state, {
-      getUserEmail,
-      getUserName,
-      loadFiles,
-      loadFile,
-      renderFileAsHtml,
-      applySyntaxHighlighting,
-      findReadmeFile: findReadmeFileUtil,
-      rewriteImagePaths
-    });
-  }
-
-  async function createBranch() {
-    await createBranchService(state, repoAnnouncement, {
-      loadBranches,
-      loadFiles,
-      loadFile,
-      loadReadme,
-      loadCommitHistory,
-      loadDocumentation
-    });
-  }
-
-  async function deleteBranch(branchName: string) {
-    await deleteBranchService(branchName, state, {
-      loadBranches,
-      loadFiles,
-      loadFile,
-      loadReadme,
-      loadCommitHistory,
-      loadDocumentation
-    });
-  }
-
-  async function loadCommitHistory() {
-    await loadCommitHistoryService(state, { verifyCommit });
-  }
-
-  async function verifyCommit(commitHash: string) {
-    await verifyCommitService(commitHash, state);
-  }
-
-  async function viewDiff(commitHash: string) {
-    await viewDiffService(commitHash, state);
-  }
-
-  async function loadTags() {
-    await loadTagsService(state, { loadTags });
-  }
-
-  async function createTag() {
-    await createTagService(state, { loadTags });
-  }
-
-  async function loadReleases() {
-    await loadReleasesService(state, { loadReleases });
-  }
-
-  async function createRelease() {
-    await createReleaseService(state, repoOwnerPubkeyDerived, {
-      loadReleases
-    });
-    // Reload tags to show release indicator
-    await loadTags();
-  }
-
-  async function performCodeSearch() {
-    await performCodeSearchService(state);
-  }
-
-  async function loadIssues() {
-    await loadIssuesService(state, {
-      loadIssues,
-      loadIssueReplies,
-      nostrClient
-    });
-  }
-
-  async function loadIssueReplies(issueId: string) {
-    await loadIssueRepliesService(issueId, state, {
-      loadIssues,
-      loadIssueReplies,
-      nostrClient
-    });
-  }
-
-  async function createIssue() {
-    await createIssueService(state, {
-      loadIssues,
-      loadIssueReplies,
-      nostrClient
-    });
-  }
-
-  async function updatePatchStatus(patchId: string, patchAuthor: string, status: string) {
-    await updatePatchStatusService(patchId, patchAuthor, status, state, { loadPatches });
-  }
-
-  async function updateIssueStatus(issueId: string, issueAuthor: string, status: 'open' | 'closed' | 'resolved' | 'draft') {
-    await updateIssueStatusService(issueId, issueAuthor, status, state, {
-      loadIssues,
-      loadIssueReplies,
-      nostrClient
-    });
-  }
-
-  async function loadPRs() {
-    await loadPRsService(state, { loadPRs });
-  }
-
-  async function createPR() {
-    await createPRService(state, { loadPRs });
-  }
-
-  async function createPatch() {
-    await createPatchService(state, { loadPatches });
-  }
-
-  async function loadPatches() {
-    await loadPatchesService(state, { loadPatches });
-  }
-
-  async function loadPatchHighlights(patchId: string, patchAuthor: string) {
-    await loadPatchHighlightsService(patchId, patchAuthor, state);
-  }
-
-  function handlePatchCodeSelection(
-    text: string,
-    startLine: number,
-    endLine: number,
-    startPos: number,
-    endPos: number
-  ) {
-    handlePatchCodeSelectionUtil(text, startLine, endLine, startPos, endPos, state);
-  }
-
-  async function createPatchHighlight() {
-    await createPatchHighlightService(state, highlightsService, { loadPatches });
-  }
-
-  function formatPubkey(pubkey: string): string {
-    return formatPubkeyUtil(pubkey);
-  }
-
-  function startPatchComment(parentId?: string) {
-    startPatchCommentUtil(parentId, state);
-  }
-
-  async function createPatchComment() {
-    await createPatchCommentService(state, highlightsService, { loadPatches });
-  }
 
 </script>
 

@@ -17,7 +17,7 @@ interface DiscussionOperationsCallbacks {
   loadDiscussions: () => Promise<void>;
   loadNostrLinks: (content: string) => Promise<void>;
   loadDiscussionEvents: (discussions: Array<{
-    type: 'thread' | 'comments' | string;
+    type: string;
     id: string;
     title: string;
     content: string;
@@ -25,7 +25,13 @@ interface DiscussionOperationsCallbacks {
     createdAt: number;
     kind?: number;
     pubkey?: string;
-    comments?: Array<any>;
+    comments?: Array<{
+      id: string;
+      replies?: Array<{
+        id: string;
+        replies?: Array<{ id: string }>;
+      }>;
+    }>;
   }>) => Promise<void>;
 }
 
@@ -424,6 +430,76 @@ export async function createThreadReply(
     console.error('Error creating reply:', err);
   } finally {
     state.creating.reply = false;
+  }
+}
+
+/**
+ * Load full events for discussions and comments to get tags for blurbs
+ */
+export async function loadDiscussionEvents(
+  discussionsList: Array<{
+    type: string;
+    id: string;
+    title: string;
+    content: string;
+    author: string;
+    createdAt: number;
+    kind?: number;
+    pubkey?: string;
+    comments?: Array<{
+      id: string;
+      replies?: Array<{
+        id: string;
+        replies?: Array<{ id: string }>;
+      }>;
+    }>;
+  }>,
+  state: RepoState,
+  nostrClient: NostrClient
+): Promise<void> {
+  const eventIds = new Set<string>();
+  
+  // Collect all event IDs
+  for (const discussion of discussionsList) {
+    if (discussion.id) {
+      eventIds.add(discussion.id);
+    }
+    if (discussion.comments) {
+      for (const comment of discussion.comments) {
+        if (comment.id) {
+          eventIds.add(comment.id);
+        }
+        if (comment.replies) {
+          for (const reply of comment.replies) {
+            if (reply.id) {
+              eventIds.add(reply.id);
+            }
+            if (reply.replies) {
+              for (const nestedReply of reply.replies) {
+                if (nestedReply.id) {
+                  eventIds.add(nestedReply.id);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (eventIds.size === 0) return;
+
+  try {
+    const events = await Promise.race([
+      nostrClient.fetchEvents([{ ids: Array.from(eventIds), limit: eventIds.size }]),
+      new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 10000))
+    ]);
+    
+    for (const event of events) {
+      state.discussion.events.set(event.id, event);
+    }
+  } catch {
+    // Ignore fetch errors
   }
 }
 

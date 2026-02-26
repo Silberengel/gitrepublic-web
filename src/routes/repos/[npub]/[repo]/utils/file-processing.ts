@@ -131,7 +131,11 @@ export function rewriteImagePaths(
   repo?: string,
   branch?: string | null
 ): string {
-  if (!filePath || !html) return html;
+  if (!html || !filePath) return html || '';
+  if (typeof html !== 'string') {
+    console.error('[rewriteImagePaths] Invalid html parameter:', typeof html, html);
+    return '';
+  }
   
   // Get directory path (remove filename)
   const fileDir = filePath.includes('/') 
@@ -395,3 +399,4 @@ export async function renderFileAsHtml(
     setHtml('');
   }
 }
+
