@@ -59,7 +59,7 @@ export function useRepoParams(
       if (p && state.isMounted) {
         const params = p.params as { npub?: string; repo?: string };
         if (params) {
-          if (params.npub && params.npub !== state.userPubkey) {
+          if (params.npub && params.npub !== state.npub) {
             setNpub(params.npub);
           }
           if (params.repo) {
