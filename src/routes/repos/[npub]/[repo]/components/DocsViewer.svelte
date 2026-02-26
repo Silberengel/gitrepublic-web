@@ -9,19 +9,78 @@
   import type { NostrEvent } from '$lib/types/nostr.js';
   import { KIND } from '$lib/types/nostr.js';
   import logger from '$lib/services/logger.js';
+  import { renderContent } from '../utils/content-renderer.js';
+  
+  // Rewrite image paths in HTML to point to repository file API
+  function rewriteImagePaths(html: string, filePath: string, npub: string, repo: string, branch: string): string {
+    if (!html || !filePath) return html;
+    
+    // Get the directory of the current file
+    const fileDir = filePath.includes('/') 
+      ? filePath.substring(0, filePath.lastIndexOf('/'))
+      : '';
+    
+    // Rewrite relative image paths
+    return html.replace(/<img([^>]*)\ssrc=["']([^"']+)["']([^>]*)>/gi, (match, before, src, after) => {
+      // Skip if it's already an absolute URL (http/https/data) or already an API URL
+      if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:') || src.startsWith('/api/')) {
+        return match;
+      }
+      
+      // Resolve relative path
+      let imagePath: string;
+      if (src.startsWith('/')) {
+        // Absolute path from repo root
+        imagePath = src.substring(1);
+      } else if (src.startsWith('./')) {
+        // Relative to current file directory
+        imagePath = fileDir ? `${fileDir}/${src.substring(2)}` : src.substring(2);
+      } else {
+        // Relative to current file directory
+        imagePath = fileDir ? `${fileDir}/${src}` : src;
+      }
+      
+      // Normalize path (remove .. and .)
+      const pathParts = imagePath.split('/').filter(p => p !== '.' && p !== '');
+      const normalizedPath: string[] = [];
+      for (const part of pathParts) {
+        if (part === '..') {
+          normalizedPath.pop();
+        } else {
+          normalizedPath.push(part);
+        }
+      }
+      imagePath = normalizedPath.join('/');
+      
+      // Build API URL
+      const apiUrl = `/api/repos/${npub}/${repo}/raw?path=${encodeURIComponent(imagePath)}&ref=${encodeURIComponent(branch)}`;
+      
+      return `<img${before} src="${apiUrl}"${after}>`;
+    });
+  }
   
   interface Props {
     content?: string;
     contentType?: 'markdown' | 'asciidoc' | 'text' | '30040';
     indexEvent?: NostrEvent | null;
     relays?: string[];
+    onItemClick?: ((item: any) => void) | null;
+    npub?: string;
+    repo?: string;
+    currentBranch?: string;
+    filePath?: string | null;
   }
   
   let {
     content = '',
     contentType = 'text',
     indexEvent = null,
-    relays = []
+    relays = [],
+    onItemClick = null,
+    npub = '',
+    repo = '',
+    currentBranch = 'HEAD',
+    filePath = null
   }: Props = $props();
   
   let renderedContent = $state('');
@@ -35,66 +94,29 @@
     }
     
     if (content) {
-      renderContent();
+      doRenderContent();
     }
   });
   
-  async function renderContent() {
+  async function doRenderContent() {
     loading = true;
     error = null;
     
     try {
       logger.operation('Rendering content', { contentType, length: content.length });
       
-      if (contentType === 'markdown') {
-        const MarkdownIt = (await import('markdown-it')).default;
-        const hljsModule = await import('highlight.js');
-        const hljs = hljsModule.default || hljsModule;
-        
-        const md = new MarkdownIt({
-          highlight: function (str: string, lang: string): string {
-            if (lang && hljs.getLanguage(lang)) {
-              try {
-                return '<pre class="hljs"><code>' +
-                       hljs.highlight(str, { language: lang }).value +
-                       '</code></pre>';
-              } catch (err) {
-                // Fallback to escaped HTML
-              }
-            }
-            return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
-          }
-        });
-        
-        renderedContent = md.render(content);
-        
-        // Add IDs to headings for anchor links
-        renderedContent = renderedContent.replace(/<h([1-6])>(.*?)<\/h[1-6]>/g, (match, level, text) => {
-          const textContent = text.replace(/<[^>]*>/g, '').trim();
-          const slug = textContent
-            .toLowerCase()
-            .replace(/[^\w\s-]/g, '')
-            .replace(/\s+/g, '-')
-            .replace(/-+/g, '-')
-            .replace(/^-|-$/g, '');
-          
-          return `<h${level} id="${slug}">${text}</h${level}>`;
-        });
-      } else if (contentType === 'asciidoc') {
-        const asciidoctor = (await import('asciidoctor')).default();
-        renderedContent = asciidoctor.convert(content, {
-          safe: 'safe',
-          attributes: {
-            'source-highlighter': 'highlight.js'
-          }
-        });
+      // Use the shared content renderer utility
+      // contentType '30040' is handled separately by PublicationIndexViewer
+      if (contentType === '30040') {
+        // Should not reach here, but handle gracefully
+        renderedContent = '';
       } else {
-        // Plain text - escape HTML
-        renderedContent = content
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/\n/g, '<br>');
+        renderedContent = await renderContent(content, contentType as 'markdown' | 'asciidoc' | 'text');
+        
+        // Rewrite image paths to use API endpoint
+        if (npub && repo && filePath) {
+          renderedContent = rewriteImagePaths(renderedContent, filePath, npub, repo, currentBranch);
+        }
       }
       
       logger.operation('Content rendered', { contentType });
@@ -107,10 +129,14 @@
   }
   
   function handleItemClick(item: any) {
-    logger.debug({ item }, 'Publication index item clicked');
-    // Could navigate to item URL or emit event
-    if (item.url) {
-      window.open(item.url, '_blank');
+    if (onItemClick) {
+      onItemClick(item);
+    } else {
+      logger.debug({ item }, 'Publication index item clicked');
+      // Could navigate to item URL or emit event
+      if (item.url) {
+        window.open(item.url, '_blank');
+      }
     }
   }
 </script>
@@ -137,8 +163,9 @@
 
 <style>
   .docs-viewer {
-    padding: 1rem;
+    width: 100%;
     max-width: 100%;
+    box-sizing: border-box;
   }
   
   .loading, .error, .empty {
@@ -152,7 +179,18 @@
   }
   
   .rendered-content {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     line-height: 1.6;
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+  }
+  
+  .rendered-content :global(img) {
+    max-width: 100%;
+    height: auto;
+    display: block;
   }
   
   .rendered-content :global(h1),
@@ -198,6 +236,8 @@
     border-radius: 4px;
     overflow-x: auto;
     margin: 1rem 0;
+    max-width: 100%;
+    box-sizing: border-box;
   }
   
   .rendered-content :global(pre code) {
@@ -233,8 +273,18 @@
   
   .rendered-content :global(table) {
     width: 100%;
+    max-width: 100%;
     border-collapse: collapse;
     margin: 1rem 0;
+    box-sizing: border-box;
+    display: table;
+    table-layout: auto;
+  }
+  
+  .rendered-content :global(table) :global(td),
+  .rendered-content :global(table) :global(th) {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
   }
   
   .rendered-content :global(th),

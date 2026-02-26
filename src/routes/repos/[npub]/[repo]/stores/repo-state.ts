@@ -582,7 +582,7 @@ export function createRepoState(): RepoState {
       pubkeyHex: null
     },
     ui: {
-      activeTab: 'files',
+      activeTab: 'docs',
       showRepoMenu: false,
       showFileListOnMobile: true,
       showLeftPanelOnMobile: true,

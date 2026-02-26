@@ -6,7 +6,7 @@ import { json } from '@sveltejs/kit';
 // @ts-ignore - SvelteKit generates this type
 import type { RequestHandler } from './$types';
 import { createRepoGetHandler } from '$lib/utils/api-handlers.js';
-import type { RepoRequestContext } from '$lib/utils/api-context.js';
+import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
 import { handleApiError } from '$lib/utils/error-handler.js';
 import { nostrClient, fileManager } from '$lib/services/service-registry.js';
 import { verifyCommitFromMessage } from '$lib/services/git/commit-signer.js';
@@ -18,8 +18,8 @@ const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   : '/repos';
 
 export const GET: RequestHandler = createRepoGetHandler(
-  async (context: RepoRequestContext) => {
-    const { hash } = context.params as { hash: string };
+  async (context: RepoRequestContext, event: RequestEvent) => {
+    const { hash } = event.params;
     
     if (!hash) {
       throw handleApiError(new Error('Missing commit hash'), { operation: 'verifyCommit', npub: context.npub, repo: context.repo }, 'Missing commit hash');

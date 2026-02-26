@@ -16,7 +16,7 @@
 <Modal {open} title="Repository Verification File" ariaLabel="Repository verification file" {onClose}>
   <div class="modal-body">
     <p class="verification-instructions">
-      The announcement event should be saved to <code>nostr/repo-events.jsonl</code> in your repository.
+      The announcement event should be saved to <code class="verification-code">nostr/repo-events.jsonl</code> in your repository.
       You can download the announcement event JSON below for reference.
     </p>
     <div class="verification-file-content">
@@ -45,7 +45,7 @@
     color: var(--text-secondary, #666);
   }
 
-  .verification-instructions code {
+  .verification-code {
     background: var(--bg-secondary, #f5f5f5);
     padding: 0.2rem 0.4rem;
     border-radius: 3px;

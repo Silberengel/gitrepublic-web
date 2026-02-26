@@ -22,13 +22,15 @@ export async function loadTags(
     const tags = await apiRequest<Array<{ name: string; hash: string; message?: string; date?: number }>>(
       `/api/repos/${state.npub}/${state.repo}/tags`
     );
-    state.git.tags = tags;
+    state.git.tags = tags || [];
     // Auto-select first tag if none selected
     if (state.git.tags.length > 0 && !state.git.selectedTag) {
       state.git.selectedTag = state.git.tags[0].name;
     }
   } catch (err) {
-    console.error('Failed to load tags:', err);
+    // If tags endpoint returns 404 or error, just set empty array (tags are optional)
+    console.warn('Failed to load tags (this is OK if repo has no tags):', err);
+    state.git.tags = [];
   }
 }
 

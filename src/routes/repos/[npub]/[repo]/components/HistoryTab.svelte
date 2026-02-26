@@ -22,6 +22,9 @@
     verifyingCommits?: Set<string>;
     showDiff?: boolean;
     diffData?: Array<{ file: string; additions: number; deletions: number; diff: string }>;
+    activeTab?: string;
+    tabs?: Array<{ id: string; label: string; icon?: string }>;
+    onTabChange?: (tab: string) => void;
   }
   
   let {
@@ -33,11 +36,21 @@
     onVerify = () => {},
     verifyingCommits = new Set(),
     showDiff = false,
-    diffData = []
+    diffData = [],
+    activeTab = '',
+    tabs = [],
+    onTabChange = () => {}
   }: Props = $props();
 </script>
 
-<TabLayout {loading} {error}>
+<TabLayout 
+  {loading} 
+  {error}
+  {activeTab}
+  {tabs}
+  {onTabChange}
+  title="Commit History"
+>
   {#snippet leftPane()}
     <div class="commits-list">
       <h3>Commits</h3>
@@ -218,6 +231,24 @@
   
   .commit-detail {
     padding: 1rem;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    min-width: 0;
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+  }
+  
+  .empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+    height: 100%;
+    color: var(--text-secondary);
+    box-sizing: border-box;
   }
   
   .commit-detail-header {
@@ -227,14 +258,34 @@
     margin-bottom: 1rem;
     padding-bottom: 1rem;
     border-bottom: 1px solid var(--border-color);
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  
+  .commit-detail-header h2 {
+    min-width: 0;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    flex: 1;
   }
   
   .commit-info {
     margin: 1rem 0;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
   }
   
   .info-row {
     margin: 1rem 0;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    box-sizing: border-box;
   }
   
   .commit-message-text {
@@ -243,21 +294,45 @@
     background: var(--bg-secondary);
     border-radius: 4px;
     white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow-x: hidden;
   }
   
   .files-list {
     margin-top: 0.5rem;
     padding-left: 1.5rem;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  
+  .files-list li {
+    word-break: break-word;
+    overflow-wrap: break-word;
+    max-width: 100%;
   }
   
   .diff-section {
     margin-top: 2rem;
     padding-top: 2rem;
     border-top: 1px solid var(--border-color);
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
   }
   
   .diff-file {
     margin: 1rem 0;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
   }
   
   .diff-header {
@@ -267,11 +342,22 @@
     padding: 0.5rem;
     background: var(--bg-secondary);
     border-radius: 4px 4px 0 0;
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  
+  .diff-header strong {
+    min-width: 0;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    flex: 1;
   }
   
   .diff-stats {
     font-family: monospace;
     font-size: 0.9rem;
+    flex-shrink: 0;
   }
   
   .diff-content {
@@ -280,7 +366,24 @@
     background: var(--bg-secondary);
     border-radius: 0 0 4px 4px;
     overflow-x: auto;
+    overflow-y: hidden;
     font-family: monospace;
     font-size: 0.85rem;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    white-space: pre-wrap;
+  }
+  
+  .diff-content code {
+    display: block;
+    max-width: 100%;
+    min-width: 0;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    white-space: pre-wrap;
+    box-sizing: border-box;
   }
 </style>

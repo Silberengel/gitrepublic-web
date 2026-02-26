@@ -4,49 +4,98 @@
    * Provides left-pane/right-panel structure for all tabs
    */
   
+  import TabsMenu from '$lib/components/TabsMenu.svelte';
+  
   interface Props {
     leftPane?: any;
     rightPanel?: any;
     loading?: boolean;
     error?: string | null;
+    activeTab?: string;
+    tabs?: Array<{ id: string; label: string; icon?: string }>;
+    onTabChange?: (tab: string) => void;
+    title?: string;
   }
   
   let {
     leftPane = null,
     rightPanel = null,
     loading = false,
-    error = null
+    error = null,
+    activeTab = '',
+    tabs = [],
+    onTabChange = () => {},
+    title = ''
   }: Props = $props();
 </script>
 
-<div class="tab-layout">
-  <div class="left-pane">
-    {#if loading}
-      <div class="loading">Loading...</div>
-    {:else if error}
-      <div class="error">{error}</div>
-    {:else}
-      {#if leftPane}
-        {@render leftPane()}
+<div class="tab-layout-wrapper">
+  {#if tabs.length > 0}
+    <div class="tab-header">
+      <TabsMenu 
+        activeTab={activeTab || ''} 
+        {tabs} 
+        onTabChange={(tab) => onTabChange(tab)}
+      />
+      {#if title}
+        <h2 class="tab-title">{title}</h2>
       {/if}
-    {/if}
-  </div>
+    </div>
+  {/if}
   
-  <div class="right-panel">
-    {#if rightPanel}
-      {@render rightPanel()}
-    {:else}
-      <div class="empty-state">
-        <p>Select an item to view details</p>
-      </div>
-    {/if}
+  <div class="tab-layout">
+    <div class="left-pane">
+      {#if loading}
+        <div class="loading">Loading...</div>
+      {:else if error}
+        <div class="error">{error}</div>
+      {:else}
+        {#if leftPane}
+          {@render leftPane()}
+        {/if}
+      {/if}
+    </div>
+    
+    <div class="right-panel">
+      {#if rightPanel}
+        {@render rightPanel()}
+      {:else}
+        <div class="empty-state">
+          <p>Select an item to view details</p>
+        </div>
+      {/if}
+    </div>
   </div>
 </div>
 
 <style>
+  .tab-layout-wrapper {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  
+  .tab-header {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--bg-primary);
+    flex-shrink: 0;
+  }
+  
+  .tab-title {
+    flex: 1;
+    margin: 0;
+    font-size: 1.2rem;
+    color: var(--text-primary);
+  }
+  
   .tab-layout {
     display: flex;
-    height: 100%;
+    flex: 1;
+    min-height: 0;
     gap: 1rem;
   }
   
@@ -59,8 +108,22 @@
   
   .right-panel {
     flex: 1;
+    min-width: 0;
+    width: 100%;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+  }
+  
+  .right-panel > * {
+    min-width: 0;
+    max-width: 100%;
+    width: 100%;
+    flex: 1;
+    box-sizing: border-box;
   }
   
   .loading, .error {
@@ -76,7 +139,11 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
     height: 100%;
     color: var(--text-secondary);
+    box-sizing: border-box;
   }
 </style>

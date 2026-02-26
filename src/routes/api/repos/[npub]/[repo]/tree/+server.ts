@@ -290,14 +290,29 @@ export const GET: RequestHandler = createRepoGetHandler(
       }
       
       // Log the actual error for debugging
-      logger.error({ error: err, npub: context.npub, repo: context.repo }, '[Tree] Error listing files');
-      // Check if it's a "not found" error
-      if (err instanceof Error && err.message.includes('not found')) {
+      logger.error({ error: err, npub: context.npub, repo: context.repo, path: context.path }, '[Tree] Error listing files');
+      
+      // For optional paths (like "docs"), return empty array instead of 404
+      // This allows components to gracefully handle missing directories
+      const optionalPaths = ['docs'];
+      if (context.path && optionalPaths.includes(context.path.toLowerCase())) {
+        logger.debug({ npub: context.npub, repo: context.repo, path: context.path }, '[Tree] Optional path not found, returning empty array');
+        return json([]);
+      }
+      
+      // Check if it's a "not found" error for the repo itself
+      if (err instanceof Error && (err.message.includes('Repository not found') || err.message.includes('not cloned'))) {
         throw handleNotFoundError(
           err.message,
           { operation: 'listFiles', npub: context.npub, repo: context.repo }
         );
       }
+      
+      // For other errors with optional paths, return empty array
+      if (context.path && optionalPaths.includes(context.path.toLowerCase())) {
+        return json([]);
+      }
+      
       // Otherwise, it's a server error
       throw handleApiError(
         err,

@@ -557,3 +557,267 @@ export async function loadRepoImages(
     console.error('Error loading repo images:', err);
   }
 }
+
+/**
+ * Generate announcement file for repository
+ */
+export async function generateAnnouncementFileForRepo(
+  state: RepoState,
+  repoOwnerPubkeyDerived: string | null
+): Promise<void> {
+  if (!repoOwnerPubkeyDerived || !state.user.pubkeyHex) {
+    state.error = 'Unable to generate announcement file: missing repository or user information';
+    return;
+  }
+
+  try {
+    // Fetch the repository announcement event
+    const { NostrClient } = await import('$lib/services/nostr/nostr-client.js');
+    const { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS } = await import('$lib/config.js');
+    const { KIND } = await import('$lib/types/nostr.js');
+    const nostrClient = new NostrClient([...new Set([...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS])]);
+    const events = await nostrClient.fetchEvents([
+      {
+        kinds: [KIND.REPO_ANNOUNCEMENT],
+        authors: [repoOwnerPubkeyDerived],
+        '#d': [state.repo],
+        limit: 1
+      }
+    ]);
+
+    if (events.length === 0) {
+      state.error = 'Repository announcement not found. Please ensure the repository is registered on Nostr.';
+      return;
+    }
+
+    const announcement = events[0] as NostrEvent;
+    // Generate announcement event JSON (for download/reference)
+    state.verification.fileContent = JSON.stringify(announcement, null, 2) + '\n';
+    state.openDialog = 'verification';
+  } catch (err) {
+    console.error('Failed to generate announcement file:', err);
+    state.error = `Failed to generate announcement file: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+/**
+ * Copy verification file content to clipboard
+ */
+export function copyVerificationToClipboard(state: RepoState): void {
+  if (!state.verification.fileContent) return;
+  
+  navigator.clipboard.writeText(state.verification.fileContent).then(() => {
+    alert('Verification file content copied to clipboard!');
+  }).catch((err) => {
+    console.error('Failed to copy:', err);
+    alert('Failed to copy to clipboard. Please select and copy manually.');
+  });
+}
+
+/**
+ * Download verification file
+ */
+export function downloadVerificationFile(state: RepoState): void {
+  if (!state.verification.fileContent) return;
+  
+  const blob = new Blob([state.verification.fileContent], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'announcement-event.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Verify clone URL
+ */
+export async function verifyCloneUrl(
+  state: RepoState,
+  repoOwnerPubkeyDerived: string | null,
+  callbacks: { checkVerification: () => Promise<void> }
+): Promise<void> {
+  if (!state.verification.selectedCloneUrl || !state.user.pubkey || !state.user.pubkeyHex) {
+    state.error = 'Unable to verify: missing information';
+    return;
+  }
+
+  if (!state.maintainers.isMaintainer && state.user.pubkeyHex !== repoOwnerPubkeyDerived) {
+    state.error = 'Only repository owners and maintainers can verify clone URLs';
+    return;
+  }
+
+  // selectedCloneUrl is already set when user selects it
+  state.error = null;
+
+  try {
+    const data = await apiRequest<{ message?: string }>(`/api/repos/${state.npub}/${state.repo}/verify`, {
+      method: 'POST'
+    } as RequestInit);
+    
+    // Close dialog
+    state.openDialog = null;
+    state.verification.selectedCloneUrl = null;
+
+    // Reload verification status after a short delay
+    setTimeout(() => {
+      callbacks.checkVerification().catch((err: unknown) => {
+        console.warn('Failed to reload verification status:', err);
+      });
+    }, 1000);
+
+    // Show success message
+    alert(data.message || 'Repository verification initiated. The verification status will update shortly.');
+  } catch (err) {
+    state.error = err instanceof Error ? err.message : 'Failed to verify repository';
+    console.error('Error verifying clone URL:', err);
+  } finally {
+    state.verification.selectedCloneUrl = null;
+  }
+}
+
+/**
+ * Delete repository announcement
+ */
+export async function deleteAnnouncement(
+  state: RepoState,
+  repoOwnerPubkeyDerived: string | null,
+  announcementEventId: { value: string | null }
+): Promise<void> {
+  if (!state.user.pubkey || !state.user.pubkeyHex) {
+    alert('Please connect your NIP-07 extension');
+    return;
+  }
+
+  if (!repoOwnerPubkeyDerived || state.user.pubkeyHex !== repoOwnerPubkeyDerived) {
+    alert('Only the repository owner can delete the announcement');
+    return;
+  }
+
+  // First confirmation
+  if (!confirm('WARNING: Are you sure you want to delete this repository announcement?\n\nThis will permanently delete the repository announcement from Nostr relays. This action CANNOT be undone.\n\nClick OK to continue, or Cancel to abort.')) {
+    return;
+  }
+
+  // Second confirmation for critical operation
+  if (!confirm('FINAL CONFIRMATION: This will permanently delete the repository announcement.\n\nAre you absolutely certain you want to proceed?\n\nThis action CANNOT be undone.')) {
+    return;
+  }
+
+  state.creating.announcement = true;
+  state.error = null;
+
+  try {
+    // Fetch the repository announcement to get its event ID
+    const { NostrClient } = await import('$lib/services/nostr/nostr-client.js');
+    const { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS, combineRelays } = await import('$lib/config.js');
+    const { getUserRelays } = await import('$lib/services/nostr/user-relays.js');
+    const { signEventWithNIP07 } = await import('$lib/services/nostr/nip07-signer.js');
+    const { KIND } = await import('$lib/types/nostr.js');
+    const nostrClient = new NostrClient([...new Set([...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS])]);
+    const events = await nostrClient.fetchEvents([
+      {
+        kinds: [KIND.REPO_ANNOUNCEMENT],
+        authors: [repoOwnerPubkeyDerived],
+        '#d': [state.repo],
+        limit: 1
+      }
+    ]);
+
+    if (events.length === 0) {
+      throw new Error('Repository announcement not found');
+    }
+
+    const announcement = events[0];
+    announcementEventId.value = announcement.id;
+
+    // Get user relays
+    const { outbox } = await getUserRelays(state.user.pubkeyHex, nostrClient);
+    const combinedRelays = combineRelays(outbox);
+
+    // Create deletion request (NIP-09)
+    const deletionRequestTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
+      kind: KIND.DELETION_REQUEST,
+      pubkey: state.user.pubkeyHex,
+      created_at: Math.floor(Date.now() / 1000),
+      content: `Requesting deletion of repository announcement for ${state.repo}`,
+      tags: [
+        ['e', announcement.id], // Reference to the announcement event
+        ['a', `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkeyDerived}:${state.repo}`], // Repository address
+        ['k', KIND.REPO_ANNOUNCEMENT.toString()] // Kind of event being deleted
+      ]
+    };
+
+    // Sign with NIP-07
+    const signedDeletionRequest = await signEventWithNIP07(deletionRequestTemplate);
+
+    // Publish to relays
+    const publishResult = await nostrClient.publishEvent(signedDeletionRequest, combinedRelays);
+
+    if (publishResult.success.length > 0) {
+      alert(`Deletion request published successfully to ${publishResult.success.length} relay(s).`);
+    } else {
+      throw new Error(`Failed to publish deletion request to any relay. Errors: ${publishResult.failed.map(f => `${f.relay}: ${f.error}`).join('; ')}`);
+    }
+  } catch (err) {
+    console.error('Failed to delete announcement:', err);
+    state.error = err instanceof Error ? err.message : 'Failed to send deletion request';
+    alert(state.error);
+  } finally {
+    state.creating.announcement = false;
+  }
+}
+
+/**
+ * Copy event ID to clipboard
+ */
+export async function copyEventId(
+  state: RepoState,
+  repoOwnerPubkeyDerived: string | null
+): Promise<void> {
+  if (!state.metadata.address || !repoOwnerPubkeyDerived) {
+    alert('Repository address not available');
+    return;
+  }
+
+  try {
+    const { nip19 } = await import('nostr-tools');
+    const { KIND } = await import('$lib/types/nostr.js');
+    
+    // Create naddr (NIP-19 address) for the repository
+    const naddr = nip19.naddrEncode({
+      kind: KIND.REPO_ANNOUNCEMENT,
+      pubkey: repoOwnerPubkeyDerived,
+      identifier: state.repo,
+      relays: []
+    });
+
+    // Try to use the Clipboard API
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(naddr);
+    } else {
+      // Fallback: use execCommand for older browsers or if clipboard API fails
+      const textArea = document.createElement('textarea');
+      textArea.value = naddr;
+      textArea.style.position = 'fixed';
+      textArea.style.opacity = '0';
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        textArea.remove();
+      } catch (execErr) {
+        textArea.remove();
+        throw new Error('Failed to copy to clipboard. Please copy manually: ' + naddr);
+      }
+    }
+    
+    // Show message with naddr
+    alert(`Event ID copied to clipboard!\n\nnaddr (repository address):\n${naddr}`);
+  } catch (err) {
+    console.error('Failed to copy event ID:', err);
+    alert(`Failed to copy event ID: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}

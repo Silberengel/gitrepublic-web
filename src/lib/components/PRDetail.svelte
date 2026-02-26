@@ -10,7 +10,16 @@
   import { KIND } from '../types/nostr.js';
   import { nip19 } from 'nostr-tools';
   import CommentRenderer from './CommentRenderer.svelte';
-  import type { Comment } from './CommentRenderer.svelte';
+  // Define Comment type locally to match CommentRenderer's export
+  type Comment = {
+    id: string;
+    content: string;
+    author: string;
+    createdAt: number;
+    kind: number;
+    pubkey: string;
+    replies?: Comment[];
+  };
   import { loadNostrLinks } from '../utils/nostr-links.js';
   import type { NostrEvent } from '../types/nostr.js';
 
@@ -129,12 +138,14 @@
           await loadNostrLinks(comment.content, nostrClient, nostrLinkEvents, nostrLinkProfiles);
         }
         for (const highlight of highlights) {
-          if (highlight.comment) {
+          if (highlight.comment && typeof highlight.comment === 'string') {
             await loadNostrLinks(highlight.comment, nostrClient, nostrLinkEvents, nostrLinkProfiles);
           }
           if (highlight.comments) {
             for (const comment of highlight.comments) {
-              await loadNostrLinks(comment.content, nostrClient, nostrLinkEvents, nostrLinkProfiles);
+              if (comment.content && typeof comment.content === 'string') {
+                await loadNostrLinks(comment.content, nostrClient, nostrLinkEvents, nostrLinkProfiles);
+              }
             }
           }
         }
@@ -734,7 +745,7 @@
     margin-bottom: 1rem;
   }
 
-  .add-comment-btn, .reply-btn {
+  .add-comment-btn {
     padding: 0.4rem 0.8rem;
     background: var(--button-primary);
     color: var(--accent-text, #ffffff);
@@ -746,11 +757,11 @@
     transition: background 0.2s ease;
   }
 
-  .add-comment-btn:hover, .reply-btn:hover {
+  .add-comment-btn:hover {
     background: var(--button-primary-hover);
   }
 
-  .highlight-item, .comment-item {
+  .highlight-item {
     margin-bottom: 1.5rem;
     padding: 1rem;
     background: var(--bg-secondary);
@@ -758,22 +769,7 @@
     border-left: 3px solid var(--accent);
   }
 
-  .comment-item.nested {
-    margin-left: 2rem;
-    margin-top: 0.75rem;
-    border-left-color: var(--success-text);
-    background: var(--bg-secondary);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
-  }
-
-  .comment-item.nested .comment-content {
-    border-left-color: var(--success-text);
-    background: var(--card-bg);
-    margin: 0.5rem 0;
-    padding: 0.875rem 1rem;
-  }
-
-  .highlight-header, .comment-header {
+  .highlight-header {
     display: flex;
     gap: 1rem;
     margin-bottom: 0.5rem;
@@ -781,7 +777,7 @@
     color: var(--text-muted);
   }
 
-  .highlight-author, .comment-author {
+  .highlight-author {
     font-weight: bold;
     color: var(--text-primary);
   }
@@ -844,17 +840,6 @@
     filter: brightness(0) saturate(100%) invert(1);
   }
 
-  .comment-content {
-    margin: 0.75rem 0;
-    padding: 1rem 1.25rem;
-    background: var(--bg-secondary);
-    border-radius: 6px;
-    border-left: 4px solid var(--accent);
-    color: var(--text-primary);
-    font-size: 1rem;
-    line-height: 1.6;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  }
 
   .highlight-comments {
     margin-top: 1rem;
@@ -1004,32 +989,6 @@
     background: var(--success-hover, #218838);
   }
 
-  .close-btn {
-    background: var(--error-text, #dc3545);
-    color: white;
-  }
-
-  .close-btn:hover:not(:disabled) {
-    background: var(--error-hover, #c82333);
-  }
-
-  .reopen-btn {
-    background: var(--accent, #007bff);
-    color: white;
-  }
-
-  .reopen-btn:hover:not(:disabled) {
-    background: var(--accent-hover, #0056b3);
-  }
-
-  .draft-btn {
-    background: var(--bg-tertiary, #6c757d);
-    color: white;
-  }
-
-  .draft-btn:hover:not(:disabled) {
-    background: var(--bg-secondary, #5a6268);
-  }
 
   @media (max-width: 768px) {
     .pr-actions {

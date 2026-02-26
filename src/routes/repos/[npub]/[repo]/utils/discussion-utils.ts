@@ -47,3 +47,33 @@ export function getReferencedEventFromDiscussion(
   }
   return undefined;
 }
+
+/**
+ * Count all replies recursively
+ */
+export function countAllReplies(comments: Array<{ replies?: Array<any> }> | undefined): number {
+  if (!comments || comments.length === 0) {
+    return 0;
+  }
+  let count = comments.length;
+  for (const comment of comments) {
+    if (comment.replies && comment.replies.length > 0) {
+      count += countAllReplies(comment.replies);
+    }
+  }
+  return count;
+}
+
+/**
+ * Toggle thread expansion
+ */
+export function toggleThread(
+  threadId: string,
+  expandedThreads: Set<string>
+): void {
+  if (expandedThreads.has(threadId)) {
+    expandedThreads.delete(threadId);
+  } else {
+    expandedThreads.add(threadId);
+  }
+}

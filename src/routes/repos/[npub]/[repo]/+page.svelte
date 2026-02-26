@@ -92,6 +92,29 @@
     getMimeType as getMimeTypeUtil
   } from './utils/file-helpers.js';
   import {
+    handleContentChange as handleContentChangeUtil,
+    handleFileClick as handleFileClickUtil,
+    copyFileContent as copyFileContentUtil,
+    downloadFile as downloadFileUtil,
+    handleBack as handleBackUtil,
+    toggleWordWrap as toggleWordWrapUtil
+  } from './utils/file-handlers.js';
+  import {
+    copyCloneUrl as copyCloneUrlUtil
+  } from './utils/repo-handlers.js';
+  import {
+    countAllReplies as countAllRepliesUtil,
+    toggleThread as toggleThreadUtil
+  } from './utils/discussion-utils.js';
+  import {
+    checkAuth as checkAuthService,
+    login as loginService
+  } from './services/auth-operations.js';
+  import {
+    handlePatchCodeSelection as handlePatchCodeSelectionUtil,
+    startPatchComment as startPatchCommentUtil
+  } from './services/patch-handlers.js';
+  import {
     createBranch as createBranchService,
     deleteBranch as deleteBranchService,
     loadBranches as loadBranchesService,
@@ -148,7 +171,13 @@
     loadBookmarkStatus as loadBookmarkStatusService,
     loadCloneUrlReachability as loadCloneUrlReachabilityService,
     loadForkInfo as loadForkInfoService,
-    loadRepoImages as loadRepoImagesService
+    loadRepoImages as loadRepoImagesService,
+    generateAnnouncementFileForRepo as generateAnnouncementFileForRepoService,
+    copyVerificationToClipboard as copyVerificationToClipboardService,
+    downloadVerificationFile as downloadVerificationFileService,
+    verifyCloneUrl as verifyCloneUrlService,
+    deleteAnnouncement as deleteAnnouncementService,
+    copyEventId as copyEventIdService
   } from './services/repo-operations.js';
   import {
     loadReadme as loadReadmeService
@@ -158,13 +187,9 @@
   let state = $state(createRepoState());
   
   // Local variables for component-specific state
-  let announcementEventId: string | null = null;
+  let announcementEventId = { value: null as string | null };
   let applying: Record<string, boolean> = {};
   
-  // Initialize effects
-  usePageDataEffect(state, () => $page.data);
-  usePageParamsEffect(state, () => $page.params as { npub?: string; repo?: string });
-
   // Extract fields from announcement for convenience
   const repoAnnouncement = $derived(state.pageData.announcement);
   const repoName = $derived(repoAnnouncement?.tags.find((t: string[]) => t[0] === 'name')?.[1] || state.repo);
@@ -261,15 +286,44 @@
   let cachedUserEmail: string | null = null;
   let cachedUserName: string | null = null;
   
-  // Initialize maintainers effect (using derived values directly in hook)
-  useMaintainersEffect(state, () => repoOwnerPubkeyDerived, () => repoMaintainers, loadAllMaintainers, () => $page.data);
-  
-  // Initialize auto-save effect
-  useAutoSaveEffect(state, autoSaveInterval, setupAutoSave);
-  
-  // Initialize user store sync effect
+  // Initialize user store sync effect (will be called in onMount to avoid SSR issues)
   const cachedUserData = { email: cachedUserEmail, name: cachedUserName };
-  useUserStoreEffect(state, cachedUserData, () => $userStore, {
+  
+  // Initialize patch highlights, tab change, and branch change effects
+  const lastTab = { value: null as string | null };
+  const lastBranch = { value: null as string | null };
+  
+  // Initialize activeTab from URL query parameter
+  $effect(() => {
+    if (typeof window === 'undefined' || !state.isMounted) return;
+    const tabFromQuery = $page.url.searchParams.get('tab');
+    
+    const validTabs = ['docs', 'files', 'issues', 'prs', 'patches', 'discussions', 'history', 'tags', 'code-search'];
+    
+    if (tabFromQuery && validTabs.includes(tabFromQuery)) {
+      // Update from URL query parameter
+      if (tabFromQuery !== state.ui.activeTab) {
+        state.ui.activeTab = tabFromQuery as typeof state.ui.activeTab;
+      }
+    } else if (!tabFromQuery) {
+      // No tab in query params - 'files' is the default (no param = files tab)
+      // Only set default if activeTab is not already a valid tab
+      if (!validTabs.includes(state.ui.activeTab)) {
+        state.ui.activeTab = 'files';
+      }
+      // If activeTab is already 'files', do nothing (user is on files tab)
+      // If activeTab is another valid tab but URL has no param, don't override
+      // This allows onTabChange handlers to manage state without interference
+    }
+  });
+  
+  // Initialize effects at component level (must be top-level, not in onMount)
+  // Hooks return effect callbacks that we call within $effect blocks
+  $effect(usePageDataEffect(state, () => $page.data));
+  $effect(usePageParamsEffect(state, () => $page.params as { npub?: string; repo?: string }));
+  $effect(useMaintainersEffect(state, () => repoOwnerPubkeyDerived, () => repoMaintainers, loadAllMaintainers, () => $page.data));
+  $effect(useAutoSaveEffect(state, autoSaveInterval, setupAutoSave));
+  $effect(useUserStoreEffect(state, cachedUserData, () => $userStore, {
     checkMaintainerStatus,
     loadBookmarkStatus,
     loadAllMaintainers,
@@ -279,23 +333,32 @@
     loadReadme,
     loadTags,
     loadDiscussions
-  });
+  }));
+  $effect(useRepoImagesEffect(state, () => $page.data));
+  $effect(usePatchHighlightsEffect(state, loadPatchHighlights));
+  $effect(useTabChangeEffect(state, lastTab, findReadmeFileUtil, {
+    loadFiles,
+    loadFile,
+    loadCommitHistory,
+    loadTags,
+    loadReleases,
+    loadIssues,
+    loadPRs,
+    loadDocumentation,
+    loadDiscussions,
+    loadPatches
+  }));
+  $effect(useBranchChangeEffect(state, lastBranch, {
+    loadReadme,
+    loadFile,
+    loadFiles,
+    loadCommitHistory,
+    loadDocumentation
+  }));
   
   // Function to toggle word wrap and refresh highlighting
   async function toggleWordWrap() {
-    state.ui.wordWrap = !state.ui.wordWrap;
-    console.log('Word wrap toggled:', state.ui.wordWrap);
-    // Force DOM update by accessing the element
-    await new Promise(resolve => {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(resolve);
-      });
-    });
-    // Re-apply syntax highlighting to refresh the display
-    if (state.files.currentFile && state.files.content) {
-      const ext = state.files.currentFile.split('.').pop() || '';
-      await applySyntaxHighlighting(state.files.content, ext);
-    }
+    await toggleWordWrapUtil(state, { applySyntaxHighlighting });
   }
   
   // Helper: Check if repo needs to be cloned for write operations
@@ -308,66 +371,25 @@
   
   // Copy clone URL to clipboard
   async function copyCloneUrl() {
-    if (state.clone.copyingUrl) return;
-    
-    state.clone.copyingUrl = true;
-    try {
-      // Use the current page URL to get the correct host and port
-      // This ensures we use the same domain/port the user is currently viewing
-      // Guard against SSR - $page store can only be accessed in component context
-      if (typeof window === 'undefined') return;
-      // Guard against SSR - $page.url might not be available
-      if (typeof window === 'undefined' || !$page?.url) {
-        return '';
-      }
-      const currentUrl = $page.url;
-      const host = currentUrl.host; // Includes port if present (e.g., "localhost:5173")
-      const protocol = currentUrl.protocol.slice(0, -1); // Remove trailing ":"
-      
-      // Use /api/git/ format for better compatibility with commit signing hook
-      const cloneUrl = `${protocol}://${host}/api/git/${state.npub}/${state.repo}.git`;
-      const cloneCommand = `git clone ${cloneUrl}`;
-      
-      // Try to use the Clipboard API
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(cloneCommand);
-        alert(`Clone command copied to clipboard!\n\n${cloneCommand}`);
-      } else {
-        // Fallback: create a temporary textarea
-        const textarea = document.createElement('textarea');
-        textarea.value = cloneCommand;
-        textarea.style.position = 'fixed';
-        textarea.style.opacity = '0';
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-        alert(`Clone command copied to clipboard!\n\n${cloneCommand}`);
-      }
-    } catch (err) {
-      console.error('Failed to copy clone command:', err);
-      alert('Failed to copy clone command to clipboard');
-    } finally {
-      state.clone.copyingUrl = false;
-    }
+    await copyCloneUrlUtil(state, $page.data, $page.url);
   }
   
 
   
   // Tabs menu - defined after state.issues and state.prs
-  // Order: Files, Issues, PRs, Patches, Discussion, History, Tags, Code Search, Docs
+  // Order: Docs, Files, Issues, PRs, Patches, Discussion, History, Tags, Code Search
   // Show tabs that require cloned repo when repo is cloned OR API fallback is available
   const tabs = $derived.by(() => {
     const allTabs = [
+      { id: 'docs', label: 'Documentation', icon: '/icons/book.svg', requiresClone: false },
       { id: 'files', label: 'Files', icon: '/icons/file-text.svg', requiresClone: true },
-      { id: 'state.issues', label: 'Issues', icon: '/icons/alert-circle.svg', requiresClone: false },
-      { id: 'state.prs', label: 'Pull Requests', icon: '/icons/git-pull-request.svg', requiresClone: false },
-      { id: 'state.patches', label: 'Patches', icon: '/icons/clipboard-list.svg', requiresClone: false },
-      { id: 'state.discussions', label: 'Discussions', icon: '/icons/message-circle.svg', requiresClone: false },
+      { id: 'issues', label: 'Issues', icon: '/icons/alert-circle.svg', requiresClone: false },
+      { id: 'prs', label: 'Pull Requests', icon: '/icons/git-pull-request.svg', requiresClone: false },
+      { id: 'patches', label: 'Patches', icon: '/icons/clipboard-list.svg', requiresClone: false },
+      { id: 'discussions', label: 'Discussions', icon: '/icons/message-circle.svg', requiresClone: false },
       { id: 'history', label: 'Commit History', icon: '/icons/git-commit.svg', requiresClone: true },
-      { id: 'state.git.tags', label: 'Tags', icon: '/icons/tag.svg', requiresClone: true },
-      { id: 'code-search', label: 'Code Search', icon: '/icons/search.svg', requiresClone: true },
-      { id: 'docs', label: 'Docs', icon: '/icons/book.svg', requiresClone: false }
+      { id: 'tags', label: 'Tags', icon: '/icons/tag.svg', requiresClone: true },
+      { id: 'code-search', label: 'Code Search', icon: '/icons/search.svg', requiresClone: true }
     ];
     
     // Show all tabs if repo is cloned OR API fallback is available
@@ -792,7 +814,7 @@
   });
 
   // Repository owner pubkey (decoded from npub) - kept for backward compatibility with some functions
-  let readmeAutoLoadTimeout: ReturnType<typeof setTimeout> | null = null;
+  let readmeAutoLoadTimeout = { value: null as ReturnType<typeof setTimeout> | null };
 
   // Load clone URL reachability status
   async function loadCloneUrlReachability(forceRefresh: boolean = false) {
@@ -834,18 +856,6 @@
   }
 
   // Helper function to count all replies recursively (including nested ones)
-  function countAllReplies(comments: Array<{ replies?: Array<any> }> | undefined): number {
-    if (!comments || comments.length === 0) {
-      return 0;
-    }
-    let count = comments.length;
-    for (const comment of comments) {
-      if (comment.replies && comment.replies.length > 0) {
-        count += countAllReplies(comment.replies);
-      }
-    }
-    return count;
-  }
 
   async function checkCloneStatus(force: boolean = false) {
     await checkCloneStatusService(force, state, repoCloneUrls);
@@ -896,11 +906,7 @@
   }
 
   function toggleThread(threadId: string) {
-    if (state.ui.expandedThreads.has(threadId)) {
-      state.ui.expandedThreads.delete(threadId);
-    } else {
-      state.ui.expandedThreads.add(threadId);
-    }
+    toggleThreadUtil(threadId, state.ui.expandedThreads);
     // Trigger reactivity
     state.ui.expandedThreads = new Set(state.ui.expandedThreads);
   }
@@ -914,8 +920,7 @@
   }
 
   // Reactively update images when pageData changes (only once, when data becomes available)
-  // Initialize repo images effect
-  useRepoImagesEffect(state, () => $page.data);
+  // Initialize repo images effect (moved to onMount)
 
   onMount(async () => {
     // Initialize bookmarks service
@@ -926,10 +931,12 @@
     
     // Decode npub to get repo owner pubkey for bookmark address
     try {
-      const decoded = nip19.decode(state.npub);
-      if (decoded.type === 'npub') {
-        state.metadata.ownerPubkey = decoded.data as string;
-        state.metadata.address = `${KIND.REPO_ANNOUNCEMENT}:${state.metadata.ownerPubkey}:${state.repo}`;
+      if (state.npub && state.npub.trim()) {
+        const decoded = nip19.decode(state.npub);
+        if (decoded.type === 'npub') {
+          state.metadata.ownerPubkey = decoded.data as string;
+          state.metadata.address = `${KIND.REPO_ANNOUNCEMENT}:${state.metadata.ownerPubkey}:${state.repo}`;
+        }
       }
     } catch (err) {
       console.warn('Failed to decode npub for bookmark address:', err);
@@ -1021,9 +1028,9 @@
           autoSaveInterval.value = null;
         }
         
-        if (readmeAutoLoadTimeout) {
-          clearTimeout(readmeAutoLoadTimeout);
-          readmeAutoLoadTimeout = null;
+        if (readmeAutoLoadTimeout.value) {
+          clearTimeout(readmeAutoLoadTimeout.value);
+          readmeAutoLoadTimeout.value = null;
         }
         
         // Clean up event listeners
@@ -1260,190 +1267,24 @@
   }
 
   async function generateAnnouncementFileForRepo() {
-    if (!repoOwnerPubkeyDerived || !state.user.pubkeyHex) {
-      state.error = 'Unable to generate announcement file: missing repository or user information';
-      return;
-    }
-
-    try {
-      // Fetch the repository announcement event
-      const nostrClient = new NostrClient([...new Set([...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS])]);
-      const events = await nostrClient.fetchEvents([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [repoOwnerPubkeyDerived],
-          '#d': [state.repo],
-          limit: 1
-        }
-      ]);
-
-      if (events.length === 0) {
-        state.error = 'Repository announcement not found. Please ensure the repository is registered on Nostr.';
-        return;
-      }
-
-      const announcement = events[0] as NostrEvent;
-      // Generate announcement event JSON (for download/reference)
-      state.verification.fileContent = JSON.stringify(announcement, null, 2) + '\n';
-      state.openDialog = 'verification';
-    } catch (err) {
-      console.error('Failed to generate announcement file:', err);
-      state.error = `Failed to generate announcement file: ${err instanceof Error ? err.message : String(err)}`;
-    }
+    await generateAnnouncementFileForRepoService(state, repoOwnerPubkeyDerived);
   }
 
   function copyVerificationToClipboard() {
-    if (!state.verification.fileContent) return;
-    
-    navigator.clipboard.writeText(state.verification.fileContent).then(() => {
-      alert('Verification file content copied to clipboard!');
-    }).catch((err) => {
-      console.error('Failed to copy:', err);
-      alert('Failed to copy to clipboard. Please select and copy manually.');
-    });
+    copyVerificationToClipboardService(state);
   }
 
   // Verify clone URL by committing announcement
   async function verifyCloneUrl() {
-    if (!state.verification.selectedCloneUrl || !state.user.pubkey || !state.user.pubkeyHex) {
-      state.error = 'Unable to verify: missing information';
-      return;
-    }
-
-    if (!state.maintainers.isMaintainer && state.user.pubkeyHex !== repoOwnerPubkeyDerived) {
-      state.error = 'Only repository owners and maintainers can verify clone URLs';
-      return;
-    }
-
-    // selectedCloneUrl is already set when user selects it
-    state.error = null;
-
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/verify`, {
-        method: 'POST',
-        headers: buildApiHeaders()
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || `Failed to verify: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      
-      // Close dialog
-      state.openDialog = null;
-      state.verification.selectedCloneUrl = null;
-
-      // Reload verification status after a short delay
-      setTimeout(() => {
-        checkVerification().catch((err: unknown) => {
-          console.warn('Failed to reload verification status:', err);
-        });
-      }, 1000);
-
-      // Show success message
-      alert(data.message || 'Repository verification initiated. The verification status will update shortly.');
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to verify repository';
-      console.error('Error verifying clone URL:', err);
-    } finally {
-      state.verification.selectedCloneUrl = null;
-    }
+    await verifyCloneUrlService(state, repoOwnerPubkeyDerived, { checkVerification });
   }
 
   async function deleteAnnouncement() {
-    if (!state.user.pubkey || !state.user.pubkeyHex) {
-      alert('Please connect your NIP-07 extension');
-      return;
-    }
-
-    if (!repoOwnerPubkeyDerived || state.user.pubkeyHex !== repoOwnerPubkeyDerived) {
-      alert('Only the repository owner can delete the announcement');
-      return;
-    }
-
-    // First confirmation
-    if (!confirm('WARNING: Are you sure you want to delete this repository announcement?\n\nThis will permanently delete the repository announcement from Nostr relays. This action CANNOT be undone.\n\nClick OK to continue, or Cancel to abort.')) {
-      return;
-    }
-
-    // Second confirmation for critical operation
-    if (!confirm('FINAL CONFIRMATION: This will permanently delete the repository announcement.\n\nAre you absolutely certain you want to proceed?\n\nThis action CANNOT be undone.')) {
-      return;
-    }
-
-    state.creating.announcement = true;
-    state.error = null;
-
-    try {
-      // Fetch the repository announcement to get its event ID
-      const nostrClient = new NostrClient([...new Set([...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS])]);
-      const events = await nostrClient.fetchEvents([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [repoOwnerPubkeyDerived],
-          '#d': [state.repo],
-          limit: 1
-        }
-      ]);
-
-      if (events.length === 0) {
-        throw new Error('Repository announcement not found');
-      }
-
-      const announcement = events[0];
-      announcementEventId = announcement.id;
-
-      // Get user relays
-      const { outbox } = await getUserRelays(state.user.pubkeyHex, nostrClient);
-      const combinedRelays = combineRelays(outbox);
-
-      // Create deletion request (NIP-09)
-      const deletionRequestTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
-        kind: KIND.DELETION_REQUEST,
-        pubkey: state.user.pubkeyHex,
-        created_at: Math.floor(Date.now() / 1000),
-        content: `Requesting deletion of repository announcement for ${state.repo}`,
-        tags: [
-          ['e', announcement.id], // Reference to the announcement event
-          ['a', `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkeyDerived}:${state.repo}`], // Repository address
-          ['k', KIND.REPO_ANNOUNCEMENT.toString()] // Kind of event being deleted
-        ]
-      };
-
-      // Sign with NIP-07
-      const signedDeletionRequest = await signEventWithNIP07(deletionRequestTemplate);
-
-      // Publish to relays
-      const publishResult = await nostrClient.publishEvent(signedDeletionRequest, combinedRelays);
-
-      if (publishResult.success.length > 0) {
-        alert(`Deletion request published successfully to ${publishResult.success.length} relay(s).`);
-      } else {
-        throw new Error(`Failed to publish deletion request to any relay. Errors: ${publishResult.failed.map(f => `${f.relay}: ${f.error}`).join('; ')}`);
-      }
-    } catch (err) {
-      console.error('Failed to delete announcement:', err);
-      state.error = err instanceof Error ? err.message : 'Failed to send deletion request';
-      alert(state.error);
-    } finally {
-      state.creating.announcement = false;
-    }
+    await deleteAnnouncementService(state, repoOwnerPubkeyDerived, announcementEventId);
   }
 
   function downloadVerificationFile() {
-    if (!state.verification.fileContent) return;
-    
-    const blob = new Blob([state.verification.fileContent], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'announcement-event.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadVerificationFileService(state);
   }
 
   // buildApiHeaders is now imported from utils/api-client.ts - using it directly
@@ -1524,352 +1365,51 @@
   }
 
   async function loadFiles(path: string = '') {
-    // Skip if repository doesn't exist
-    if (state.repoNotFound) return;
-    
-    state.loading.main = true;
-    state.error = null;
-    try {
-      // Validate and get a valid branch name
-      let branchName: string;
-      if (typeof state.git.currentBranch === 'string' && state.git.currentBranch.trim() !== '' && !state.git.currentBranch.includes('#')) {
-        const branchNames = state.git.branches.map((b: any) => typeof b === 'string' ? b : b.name);
-        if (branchNames.includes(state.git.currentBranch)) {
-          branchName = state.git.currentBranch;
-        } else {
-          branchName = state.git.defaultBranch || (state.git.branches.length > 0 
-            ? (typeof state.git.branches[0] === 'string' ? state.git.branches[0] : state.git.branches[0].name)
-            : 'HEAD');
-        }
-      } else {
-        branchName = state.git.defaultBranch || (state.git.branches.length > 0 
-          ? (typeof state.git.branches[0] === 'string' ? state.git.branches[0] : state.git.branches[0].name)
-          : 'HEAD');
-      }
-      
-      const url = `/api/repos/${state.npub}/${state.repo}/tree?ref=${encodeURIComponent(branchName)}&path=${encodeURIComponent(path)}`;
-      const response = await fetch(url, {
-        headers: buildApiHeaders()
-      });
-      
-      if (!response.ok) {
-        if (response.status === 404) {
-          // Check if this is a "not cloned" state.error - API fallback might be available
-          const errorText = await response.text().catch(() => '');
-          if (errorText.includes('not cloned locally')) {
-            // Repository is not cloned - check if API fallback might be available
-            if (repoCloneUrls && repoCloneUrls.length > 0) {
-              // We have clone URLs, so API fallback might work - mark as unknown for now
-              // It will be set to true if a subsequent request succeeds
-              state.clone.apiFallbackAvailable = null;
-              // Don't set state.repoNotFound - allow API fallback to be attempted
-            } else {
-              // No clone URLs, API fallback won't work
-              state.repoNotFound = true;
-              state.clone.apiFallbackAvailable = false;
-            }
-            // Throw state.error but use the actual state.error text from the API
-            throw new Error(errorText || 'Repository not found. This repository exists in Nostr but hasn\'t been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.');
-          } else {
-            // Generic 404 - repository doesn't exist
-            state.repoNotFound = true;
-            state.clone.apiFallbackAvailable = false;
-            throw new Error(`Repository not found. This repository exists in Nostr but hasn't been provisioned on this server yet. The server will automatically provision it soon, or you can contact the server administrator.`);
-          }
-        } else if (response.status === 403) {
-          // 403 means access denied - don't set state.repoNotFound, just show state.error
-          // This allows retry after login
-          const accessDeniedError = new Error(`Access denied: ${response.statusText}. You may need to log in or you may not have permission to view this repository.`);
-          // Log as info since this is normal client behavior (not logged in or no access)
-          console.info('Access denied (normal behavior):', accessDeniedError.message);
-          throw accessDeniedError;
-        }
-        throw new Error(`Failed to load files: ${response.statusText}`);
-      }
-
-      state.files.list = await response.json();
-      state.files.currentPath = path;
-      
-      // If repo is not cloned but we got state.files.list, API fallback is available
-      if (state.clone.isCloned === false && state.files.list.length > 0) {
-        state.clone.apiFallbackAvailable = true;
-      }
-      
-      // Auto-load README if we're in the root directory and no file is currently selected
-      // Only attempt once per path to prevent loops
-      if (path === '' && !state.files.currentFile && !state.metadata.readmeAutoLoadAttempted) {
-        const readmeFile = findReadmeFileUtil(state.files.list);
-        if (readmeFile) {
-          state.metadata.readmeAutoLoadAttempted = true;
-          // Clear any existing timeout
-          if (readmeAutoLoadTimeout) {
-            clearTimeout(readmeAutoLoadTimeout);
-          }
-          // Small delay to ensure UI is ready
-          readmeAutoLoadTimeout = setTimeout(() => {
-            loadFile(readmeFile.path).catch(err => {
-              // If load fails (e.g., 429 rate limit), reset the flag after a delay
-              // so we can retry later, but not immediately
-              if (err instanceof Error && err.message.includes('Too Many Requests')) {
-                console.warn('[README] Rate limited, will retry later');
-                setTimeout(() => {
-                  state.metadata.readmeAutoLoadAttempted = false;
-                }, 5000); // Retry after 5 seconds
-              } else {
-                // For other errors, reset immediately
-                state.metadata.readmeAutoLoadAttempted = false;
-              }
-            });
-            readmeAutoLoadTimeout = null;
-          }, 100);
-        }
-      } else if (path !== '' || state.files.currentFile) {
-        // Reset flag when navigating away from root or when a file is selected
-        state.metadata.readmeAutoLoadAttempted = false;
-        if (readmeAutoLoadTimeout) {
-          clearTimeout(readmeAutoLoadTimeout);
-          readmeAutoLoadTimeout = null;
-        }
-      }
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to load state.files.list';
-      // Only log as state.error if it's not a 403 (access denied), which is normal behavior
-      if (err instanceof Error && err.message.includes('Access denied')) {
-        // Already logged as info above, don't log again
-      } else {
-        console.error('Error loading files:', err);
-      }
-    } finally {
-      state.loading.main = false;
-    }
+    await loadFilesService(path, state, repoCloneUrls, readmeAutoLoadTimeout, {
+      getUserEmail,
+      getUserName,
+      loadFiles,
+      loadFile,
+      renderFileAsHtml,
+      applySyntaxHighlighting,
+      findReadmeFile: findReadmeFileUtil,
+      rewriteImagePaths
+    });
   }
 
   async function loadFile(filePath: string) {
-    state.loading.main = true;
-    state.error = null;
-    try {
-      // Ensure state.git.currentBranch is a string (branch name), not an object
-      // If state.git.currentBranch is not set, use the first available branch or 'master' as fallback
-      let branchName: string;
-      
-      if (typeof state.git.currentBranch === 'string' && state.git.currentBranch.trim() !== '') {
-        // Validate that state.git.currentBranch is actually a valid branch name
-        // Check if it exists in the state.git.branches list
-        const branchNames = state.git.branches.map((b: any) => typeof b === 'string' ? b : b.name);
-        if (branchNames.includes(state.git.currentBranch)) {
-          branchName = state.git.currentBranch;
-        } else {
-          // state.git.currentBranch is set but not in state.git.branches list, use state.git.defaultBranch or fallback
-          branchName = state.git.defaultBranch || (state.git.branches.length > 0 
-            ? (typeof state.git.branches[0] === 'string' ? state.git.branches[0] : state.git.branches[0].name)
-            : 'HEAD');
-        }
-      } else if (typeof state.git.currentBranch === 'object' && state.git.currentBranch !== null && 'name' in state.git.currentBranch) {
-        branchName = (state.git.currentBranch as { name: string }).name;
-      } else {
-        // state.git.currentBranch is null, undefined, or invalid - use state.git.defaultBranch or fallback
-        branchName = state.git.defaultBranch || (state.git.branches.length > 0 
-          ? (typeof state.git.branches[0] === 'string' ? state.git.branches[0] : state.git.branches[0].name)
-          : 'HEAD');
-      }
-      
-      // Final validation: ensure branchName is a valid string
-      // Note: We allow '#' in branch names for existing state.git.branches (they'll be URL-encoded)
-      // Only reject if it's empty or not a string
-      if (!branchName || typeof branchName !== 'string' || branchName.trim() === '') {
-        console.warn('[loadFile] Invalid branch name detected, using fallback:', branchName);
-        branchName = state.git.defaultBranch || (state.git.branches.length > 0 
-          ? (typeof state.git.branches[0] === 'string' ? state.git.branches[0] : state.git.branches[0].name)
-          : 'HEAD');
-      }
-      
-      // Determine language from file extension first to check if it's an image
-      const ext = filePath.split('.').pop()?.toLowerCase() || '';
-      
-      // Check if this is an image file BEFORE making the API call
-      state.preview.file.isImage = isImageFileType(ext);
-      
-      if (state.preview.file.isImage) {
-        // For image state.files.list, construct the raw file URL and skip state.loading.main text content
-        state.preview.file.imageUrl = `/api/repos/${state.npub}/${state.repo}/raw?path=${encodeURIComponent(filePath)}&ref=${encodeURIComponent(branchName)}`;
-        state.files.content = ''; // Clear content for images
-        state.files.editedContent = ''; // Clear edited content for images
-        state.preview.file.html = ''; // Clear HTML for images
-        state.preview.file.highlightedContent = ''; // Clear highlighted content
-        state.files.language = 'text';
-        state.files.currentFile = filePath;
-        state.files.hasChanges = false;
-      } else {
-        // Not an image, load file content normally
-        state.preview.file.imageUrl = null;
-        
-        const url = `/api/repos/${state.npub}/${state.repo}/file?path=${encodeURIComponent(filePath)}&ref=${encodeURIComponent(branchName)}`;
-        const response = await fetch(url, {
-          headers: buildApiHeaders()
-        });
-        
-        if (!response.ok) {
-          // Handle rate limiting specifically to prevent loops
-          if (response.status === 429) {
-            const error = new Error(`Failed to load file: Too Many Requests`);
-            console.warn('[File Load] Rate limited, please wait before retrying');
-            throw error;
-          }
-          throw new Error(`Failed to load file: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        state.files.content = data.content;
-        state.files.editedContent = data.content;
-        state.files.currentFile = filePath;
-        state.files.hasChanges = false;
-        
-        // Reset README auto-load flag when a file is successfully loaded
-        if (filePath && filePath.toLowerCase().includes('readme')) {
-          state.metadata.readmeAutoLoadAttempted = false;
-        }
-        
-        if (ext === 'md' || ext === 'markdown') {
-          state.files.language = 'markdown';
-        } else if (ext === 'adoc' || ext === 'asciidoc') {
-          state.files.language = 'asciidoc';
-        } else {
-          state.files.language = 'text';
-        }
-        
-        // Reset preview mode to default (preview) when state.loading.main a new file
-        state.preview.file.showPreview = true;
-        state.preview.file.html = '';
-        
-        // Render markdown/asciidoc/HTML/CSV state.files.list as HTML for preview
-        if (state.files.content && (ext === 'md' || ext === 'markdown' || ext === 'adoc' || ext === 'asciidoc' || ext === 'html' || ext === 'htm' || ext === 'csv')) {
-          await renderFileAsHtml(state.files.content, ext || '');
-        }
-        
-        // Apply syntax highlighting
-        // For state.files.list that support HTML preview (markdown, HTML, etc.), only show highlighting in raw mode
-        // For code state.files.list and other non-markup state.files.list, always show syntax highlighting
-        const hasHtmlPreview = supportsPreview(ext);
-        if (state.files.content) {
-          if (hasHtmlPreview) {
-            // Markup files: only show highlighting when not in preview mode (raw mode)
-            if (!state.preview.file.showPreview) {
-              await applySyntaxHighlighting(state.files.content, ext || '');
-            }
-          } else {
-            // Code files and other non-markup files: always show syntax highlighting
-            await applySyntaxHighlighting(state.files.content, ext || '');
-          }
-        }
-      }
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to load file';
-      console.error('Error state.loading.main file:', err);
-    } finally {
-      state.loading.main = false;
-    }
+    await loadFileService(filePath, state, {
+      getUserEmail,
+      getUserName,
+      loadFiles,
+      loadFile,
+      renderFileAsHtml,
+      applySyntaxHighlighting,
+      findReadmeFile: findReadmeFileUtil,
+      rewriteImagePaths
+    });
   }
 
   function handleContentChange(value: string) {
-    state.files.editedContent = value;
-    state.files.hasChanges = value !== state.files.content;
+    handleContentChangeUtil(value, state);
   }
 
   function handleFileClick(file: { name: string; path: string; type: 'file' | 'directory' }) {
-    if (file.type === 'directory') {
-      state.files.pathStack.push(state.files.currentPath);
-      loadFiles(file.path);
-    } else {
-      loadFile(file.path);
-      // On mobile, switch to file viewer when a file is clicked
-      if (window.innerWidth <= 768) {
-        state.ui.showFileListOnMobile = false;
-      }
-    }
+    handleFileClickUtil(file, state, { loadFiles, loadFile });
   }
 
   // Copy file content to clipboard
   async function copyFileContent(event?: Event) {
-    if (!state.files.content || state.preview.copying) return;
-    
-    state.preview.copying = true;
-    try {
-      await navigator.clipboard.writeText(state.files.content);
-      // Show temporary feedback
-      const button = event?.target as HTMLElement;
-      if (button) {
-        const originalTitle = button.getAttribute('title') || '';
-        button.setAttribute('title', 'Copied!');
-        setTimeout(() => {
-          button.setAttribute('title', originalTitle);
-        }, 2000);
-      }
-    } catch (err) {
-      console.error('Failed to copy file content:', err);
-      alert('Failed to copy file content to clipboard');
-    } finally {
-      state.preview.copying = false;
-    }
+    await copyFileContentUtil(state, event);
   }
 
   // Download file
   function downloadFile() {
-    if (!state.files.content || !state.files.currentFile) return;
-    
-    try {
-      // Determine MIME type based on file extension
-      const ext = state.files.currentFile.split('.').pop()?.toLowerCase() || '';
-      const mimeTypes: Record<string, string> = {
-        'js': 'text/javascript',
-        'ts': 'text/typescript',
-        'json': 'application/json',
-        'css': 'text/css',
-        'html': 'text/html',
-        'htm': 'text/html',
-        'md': 'text/markdown',
-        'txt': 'text/plain',
-        'csv': 'text/csv',
-        'xml': 'application/xml',
-        'svg': 'image/svg+xml',
-        'py': 'text/x-python',
-        'java': 'text/x-java-source',
-        'c': 'text/x-csrc',
-        'cpp': 'text/x-c++src',
-        'h': 'text/x-csrc',
-        'hpp': 'text/x-c++src',
-        'sh': 'text/x-shellscript',
-        'bash': 'text/x-shellscript',
-        'yaml': 'text/yaml',
-        'yml': 'text/yaml',
-        'toml': 'text/toml',
-        'ini': 'text/plain',
-        'conf': 'text/plain',
-        'log': 'text/plain'
-      };
-      
-      const mimeType = mimeTypes[ext] || 'text/plain';
-      const blob = new Blob([state.files.content], { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = state.files.currentFile.split('/').pop() || 'file';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Failed to download file:', err);
-      alert('Failed to download file');
-    }
+    downloadFileUtil(state);
   }
 
   function handleBack() {
-    if (state.files.pathStack.length > 0) {
-      const parentPath = state.files.pathStack.pop() || '';
-      loadFiles(parentPath);
-    } else {
-      loadFiles('');
-    }
+    handleBackUtil(state, { loadFiles });
   }
 
   // Cache for user profile email and name (already declared above)
@@ -2205,14 +1745,7 @@
     startPos: number,
     endPos: number
   ) {
-    if (!text.trim() || !state.user.pubkey) return;
-    
-    state.forms.patchHighlight.text = text;
-    state.forms.patchHighlight.startLine = startLine;
-    state.forms.patchHighlight.endLine = endLine;
-    state.forms.patchHighlight.startPos = startPos;
-    state.forms.patchHighlight.endPos = endPos;
-    state.openDialog = 'patchHighlight';
+    handlePatchCodeSelectionUtil(text, startLine, endLine, startPos, endPos, state);
   }
 
   async function createPatchHighlight() {
@@ -2220,53 +1753,17 @@
   }
 
   function formatPubkey(pubkey: string): string {
-    try {
-      return nip19.npubEncode(pubkey);
-    } catch {
-      return pubkey.slice(0, 8) + '...';
-    }
+    return formatPubkeyUtil(pubkey);
   }
 
   function startPatchComment(parentId?: string) {
-    if (!state.user.pubkey) {
-      alert('Please connect your NIP-07 extension');
-      return;
-    }
-    state.forms.patchComment.replyingTo = parentId || null;
-    state.openDialog = 'patchComment';
+    startPatchCommentUtil(parentId, state);
   }
 
   async function createPatchComment() {
     await createPatchCommentService(state, highlightsService, { loadPatches });
   }
 
-  // Initialize patch highlights effect
-  usePatchHighlightsEffect(state, loadPatchHighlights);
-  
-  // Initialize tab change effect
-  const lastTab = { value: null as string | null };
-  useTabChangeEffect(state, lastTab, findReadmeFileUtil, {
-    loadFiles,
-    loadFile,
-    loadCommitHistory,
-    loadTags,
-    loadReleases,
-    loadIssues,
-    loadPRs,
-    loadDocumentation,
-    loadDiscussions,
-    loadPatches
-  });
-  
-  // Initialize branch change effect
-  const lastBranch = { value: null as string | null };
-  useBranchChangeEffect(state, lastBranch, {
-    loadReadme,
-    loadFile,
-    loadFiles,
-    loadCommitHistory,
-    loadDocumentation
-  });
 </script>
 
 <svelte:head>
@@ -2414,7 +1911,7 @@
           </button>
           </div>
           <div class="clone-url-list" class:collapsed={!state.clone.urlsExpanded}>
-            {#if state.clone.isCloned === true}
+            {#if state.clone.isCloned === true && $page.data?.gitDomain && !$page.data.gitDomain.startsWith('localhost') && !$page.data.gitDomain.startsWith('127.0.0.1')}
               <button 
                 class="copy-clone-url-button"
                 onclick={() => copyCloneUrl()}
@@ -2670,6 +2167,19 @@
             handleBranchChangeDirect(branch);
           }}
           userPubkey={state.user.pubkey}
+          activeTab={state.ui.activeTab}
+          {tabs}
+          onTabChange={(tab: string) => {
+            state.ui.activeTab = tab as typeof state.ui.activeTab;
+            // Update URL query parameter without page reload
+            const url = new URL($page.url);
+            if (tab === 'files') {
+              url.searchParams.delete('tab');
+            } else {
+              url.searchParams.set('tab', tab);
+            }
+            goto(url.pathname + url.search, { replaceState: true, noScroll: true });
+          }}
         />
       {/if}
 
@@ -2699,6 +2209,19 @@
           verifyingCommits={state.git.verifyingCommits}
           showDiff={state.git.showDiff}
           diffData={state.git.diffData}
+          activeTab={state.ui.activeTab}
+          {tabs}
+          onTabChange={(tab: string) => {
+            state.ui.activeTab = tab as typeof state.ui.activeTab;
+            // Update URL query parameter without page reload
+            const url = new URL($page.url);
+            if (tab === 'files') {
+              url.searchParams.delete('tab');
+            } else {
+              url.searchParams.set('tab', tab);
+            }
+            goto(url.pathname + url.search, { replaceState: true, noScroll: true });
+          }}
         />
       {/if}
 
@@ -2721,7 +2244,17 @@
         {tabs}
         showLeftPanelOnMobile={state.ui.showLeftPanelOnMobile}
         onTagSelect={(tagName) => state.git.selectedTag = tagName}
-        onTabChange={(tab) => state.ui.activeTab = tab as typeof state.ui.activeTab}
+        onTabChange={(tab: string) => {
+          state.ui.activeTab = tab as typeof state.ui.activeTab;
+          // Update URL without page reload
+          const url = new URL($page.url);
+          if (tab === 'files') {
+            url.searchParams.delete('tab');
+          } else {
+            url.searchParams.set('tab', tab);
+          }
+          goto(url.pathname + url.search, { replaceState: true, noScroll: true });
+        }}
         onToggleMobilePanel={() => state.ui.showLeftPanelOnMobile = !state.ui.showLeftPanelOnMobile}
         onCreateTag={() => state.openDialog = 'createTag'}
         onCreateRelease={(tagName, tagHash) => {
@@ -2739,7 +2272,12 @@
           <TabsMenu 
             activeTab={state.ui.activeTab} 
             {tabs} 
-            onTabChange={(tab) => state.ui.activeTab = tab as typeof state.ui.activeTab}
+            onTabChange={(tab: string) => {
+              state.ui.activeTab = tab as typeof state.ui.activeTab;
+              // Update URL without page reload
+              const newPath = `/repos/${state.npub}/${state.repo}${tab === 'files' ? '' : `/${tab}`}`;
+              goto(newPath, { replaceState: true, noScroll: true });
+            }}
           />
           <h2>Code Search</h2>
           <button 
@@ -2774,6 +2312,19 @@
           }}
           issueReplies={state.issueReplies}
           loadingReplies={state.loading.issueReplies}
+          activeTab={state.ui.activeTab}
+          {tabs}
+          onTabChange={(tab: string) => {
+            state.ui.activeTab = tab as typeof state.ui.activeTab;
+            // Update URL query parameter without page reload
+            const url = new URL($page.url);
+            if (tab === 'files') {
+              url.searchParams.delete('tab');
+            } else {
+              url.searchParams.set('tab', tab);
+            }
+            goto(url.pathname + url.search, { replaceState: true, noScroll: true });
+          }}
         />
       {/if}
 
@@ -2821,8 +2372,21 @@
               }
             }
           }}
+          activeTab={state.ui.activeTab}
+          {tabs}
+          onTabChange={(tab: string) => {
+            state.ui.activeTab = tab as typeof state.ui.activeTab;
+            // Update URL query parameter without page reload
+            const url = new URL($page.url);
+            if (tab === 'files') {
+              url.searchParams.delete('tab');
+            } else {
+              url.searchParams.set('tab', tab);
+            }
+            goto(url.pathname + url.search, { replaceState: true, noScroll: true });
+          }}
         />
-        {/if}
+      {/if}
 
       <!-- Patches Tab -->
       {#if state.ui.activeTab === 'patches'}
@@ -2833,6 +2397,12 @@
           error={state.error}
           onSelect={(id) => {
             state.selected.patch = id;
+          }}
+          onStatusUpdate={async (id, status) => {
+            const patch = state.patches.find(p => p.id === id);
+            if (patch) {
+              await updatePatchStatus(id, patch.author, status);
+            }
           }}
           onApply={async (id) => {
             applying[id] = true;
@@ -2883,8 +2453,21 @@
             }
           }}
           {applying}
+          activeTab={state.ui.activeTab}
+          {tabs}
+          onTabChange={(tab: string) => {
+            state.ui.activeTab = tab as typeof state.ui.activeTab;
+            // Update URL query parameter without page reload
+            const url = new URL($page.url);
+            if (tab === 'files') {
+              url.searchParams.delete('tab');
+            } else {
+              url.searchParams.set('tab', tab);
+            }
+            goto(url.pathname + url.search, { replaceState: true, noScroll: true });
+          }}
         />
-              {/if}
+      {/if}
 
       <!-- Discussions Tab -->
       {#if state.ui.activeTab === 'discussions'}
@@ -2893,8 +2476,21 @@
           repo={state.repo}
           repoAnnouncement={repoAnnouncement}
           userPubkey={state.user.pubkey}
+          activeTab={state.ui.activeTab}
+          {tabs}
+          onTabChange={(tab: string) => {
+            state.ui.activeTab = tab as typeof state.ui.activeTab;
+            // Update URL query parameter without page reload
+            const url = new URL($page.url);
+            if (tab === 'files') {
+              url.searchParams.delete('tab');
+            } else {
+              url.searchParams.set('tab', tab);
+            }
+            goto(url.pathname + url.search, { replaceState: true, noScroll: true });
+          }}
         />
-        {/if}
+      {/if}
 
       <!-- Docs Tab -->
       {#if state.ui.activeTab === 'docs'}
@@ -2903,8 +2499,21 @@
           repo={state.repo}
           currentBranch={state.git.currentBranch || null}
           relays={[...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS]}
+          activeTab={state.ui.activeTab}
+          {tabs}
+          onTabChange={(tab: string) => {
+            state.ui.activeTab = tab as typeof state.ui.activeTab;
+            // Update URL query parameter without page reload
+            const url = new URL($page.url);
+            if (tab === 'files') {
+              url.searchParams.delete('tab');
+            } else {
+              url.searchParams.set('tab', tab);
+            }
+            goto(url.pathname + url.search, { replaceState: true, noScroll: true });
+          }}
         />
-        {/if}
+      {/if}
 
       <!-- Files tab content is now handled by FilesTab component -->
 

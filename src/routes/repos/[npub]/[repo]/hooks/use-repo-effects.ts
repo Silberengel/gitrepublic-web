@@ -6,17 +6,15 @@
  * where $page and $userStore runes are available
  */
 
-import { page } from '$app/stores';
-import { userStore } from '$lib/stores/user-store.js';
 import { settingsStore } from '$lib/services/settings-store.js';
 import type { RepoState } from '../stores/repo-state.js';
 
 /**
  * Sync pageData from $page store
- * Must be called from component context where $page is available
+ * Returns effect callback that should be called within $effect in component
  */
-export function usePageDataEffect(state: RepoState, getPageData: () => any): void {
-  $effect(() => {
+export function usePageDataEffect(state: RepoState, getPageData: () => any): () => void {
+  return () => {
     if (typeof window === 'undefined' || !state.isMounted) return;
     try {
       const data = getPageData();
@@ -28,15 +26,15 @@ export function usePageDataEffect(state: RepoState, getPageData: () => any): voi
         console.warn('Failed to update pageData:', err);
       }
     }
-  });
+  };
 }
 
 /**
  * Sync params from $page store
- * Must be called from component context where $page is available
+ * Returns effect callback that should be called within $effect in component
  */
-export function usePageParamsEffect(state: RepoState, getPageParams: () => { npub?: string; repo?: string }): void {
-  $effect(() => {
+export function usePageParamsEffect(state: RepoState, getPageParams: () => { npub?: string; repo?: string }): () => void {
+  return () => {
     if (typeof window === 'undefined' || !state.isMounted) return;
     try {
       const params = getPageParams();
@@ -58,12 +56,12 @@ export function usePageParamsEffect(state: RepoState, getPageParams: () => { npu
         // Ignore errors - params will be set eventually
       }
     }
-  });
+  };
 }
 
 /**
  * Load maintainers when repo data is available
- * Must be called from component context where $page is available
+ * Returns effect callback that should be called within $effect in component
  */
 export function useMaintainersEffect(
   state: RepoState,
@@ -71,8 +69,8 @@ export function useMaintainersEffect(
   getRepoMaintainers: () => string[],
   loadAllMaintainers: () => Promise<void>,
   getPageData: () => any
-): void {
-  $effect(() => {
+): () => void {
+  return () => {
     if (typeof window === 'undefined' || !state.isMounted) return;
     try {
       const data = getPageData();
@@ -107,18 +105,19 @@ export function useMaintainersEffect(
         console.warn('Maintainers effect error:', err);
       }
     }
-  });
+  };
 }
 
 /**
  * Watch auto-save settings and manage auto-save interval
+ * Returns effect callback that should be called within $effect in component
  */
 export function useAutoSaveEffect(
   state: RepoState,
   autoSaveInterval: { value: ReturnType<typeof setInterval> | null },
   setupAutoSave: () => void
-): void {
-  $effect(() => {
+): () => void {
+  return () => {
     if (!state.isMounted) return;
     settingsStore.getSettings().then(settings => {
       if (!state.isMounted) return;
@@ -135,12 +134,12 @@ export function useAutoSaveEffect(
         console.warn('Failed to check auto-save setting:', err);
       }
     });
-  });
+  };
 }
 
 /**
  * Sync user state from userStore and reload data on login/logout
- * Must be called from component context where $userStore is available
+ * Returns effect callback that should be called within $effect in component
  */
 export function useUserStoreEffect(
   state: RepoState,
@@ -157,8 +156,8 @@ export function useUserStoreEffect(
     loadTags: () => Promise<void>;
     loadDiscussions: () => Promise<void>;
   }
-): void {
-  $effect(() => {
+): () => void {
+  return () => {
     if (!state.isMounted) return;
     try {
       const currentUser = getUserStore();
@@ -245,18 +244,19 @@ export function useUserStoreEffect(
         console.warn('User store sync error:', err);
       }
     }
-  });
+  };
 }
 
 /**
  * Handle tab switching when clone status changes
+ * Returns effect callback that should be called within $effect in component
  */
 export function useTabSwitchEffect(
   state: RepoState,
   tabs: Array<{ id: string }>,
   canUseApiFallback: boolean
-): void {
-  $effect(() => {
+): () => void {
+  return () => {
     if (!state.isMounted) return;
     if (state.clone.isCloned === false && !canUseApiFallback && tabs.length > 0) {
       const currentTab = tabs.find(t => t.id === state.ui.activeTab);
@@ -264,15 +264,15 @@ export function useTabSwitchEffect(
         state.ui.activeTab = tabs[0].id as typeof state.ui.activeTab;
       }
     }
-  });
+  };
 }
 
 /**
  * Update repo images from pageData
- * Must be called from component context where $page is available
+ * Returns effect callback that should be called within $effect in component
  */
-export function useRepoImagesEffect(state: RepoState, getPageData: () => any): void {
-  $effect(() => {
+export function useRepoImagesEffect(state: RepoState, getPageData: () => any): () => void {
+  return () => {
     if (typeof window === 'undefined' || !state.isMounted) return;
     try {
       const data = getPageData();
@@ -290,17 +290,18 @@ export function useRepoImagesEffect(state: RepoState, getPageData: () => any): v
         console.warn('Image update effect error:', err);
       }
     }
-  });
+  };
 }
 
 /**
  * Load patch highlights when patch is selected
+ * Returns effect callback that should be called within $effect in component
  */
 export function usePatchHighlightsEffect(
   state: RepoState,
   loadPatchHighlights: (patchId: string, author: string) => Promise<void>
-): void {
-  $effect(() => {
+): () => void {
+  return () => {
     if (!state.isMounted || !state.selected.patch) return;
     const patch = state.patches.find(p => p.id === state.selected.patch);
     if (patch) {
@@ -308,11 +309,12 @@ export function usePatchHighlightsEffect(
         if (state.isMounted) console.warn('Failed to load patch highlights:', err);
       });
     }
-  });
+  };
 }
 
 /**
  * Load tab content when tab changes
+ * Returns effect callback that should be called within $effect in component
  */
 export function useTabChangeEffect(
   state: RepoState,
@@ -330,8 +332,8 @@ export function useTabChangeEffect(
     loadDiscussions: () => Promise<void>;
     loadPatches: () => Promise<void>;
   }
-): void {
-  $effect(() => {
+): () => void {
+  return () => {
     if (!state.isMounted) return;
     if (state.ui.activeTab !== lastTab.value) {
       lastTab.value = state.ui.activeTab;
@@ -389,11 +391,12 @@ export function useTabChangeEffect(
         });
       }
     }
-  });
+  };
 }
 
 /**
  * Reload branch-dependent data when branch changes
+ * Returns effect callback that should be called within $effect in component
  */
 export function useBranchChangeEffect(
   state: RepoState,
@@ -405,8 +408,8 @@ export function useBranchChangeEffect(
     loadCommitHistory: () => Promise<void>;
     loadDocumentation: () => Promise<void>;
   }
-): void {
-  $effect(() => {
+): () => void {
+  return () => {
     if (!state.isMounted) return;
     if (state.git.currentBranch && state.git.currentBranch !== lastBranch.value) {
       lastBranch.value = state.git.currentBranch;
@@ -443,5 +446,5 @@ export function useBranchChangeEffect(
         });
       }
     }
-  });
+  };
 }

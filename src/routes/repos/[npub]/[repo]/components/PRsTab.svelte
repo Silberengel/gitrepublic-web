@@ -4,6 +4,8 @@
    */
   
   import StatusTabLayout from './StatusTabLayout.svelte';
+  import { renderContent } from '../utils/content-renderer.js';
+  import { onMount } from 'svelte';
   
   interface Props {
     prs: Array<{
@@ -21,6 +23,9 @@
     error?: string | null;
     onSelect?: (id: string) => void;
     onStatusUpdate?: (id: string, status: string) => void;
+    activeTab?: string;
+    tabs?: Array<{ id: string; label: string; icon?: string }>;
+    onTabChange?: (tab: string) => void;
   }
   
   let {
@@ -29,20 +34,37 @@
     loading = false,
     error = null,
     onSelect = () => {},
-    onStatusUpdate = () => {}
+    onStatusUpdate = () => {},
+    activeTab = '',
+    tabs = [],
+    onTabChange = () => {}
   }: Props = $props();
   
   const items = $derived(prs.map(pr => ({
+    ...pr,
     id: pr.id,
     title: pr.subject,
-    status: pr.status,
-    ...pr
+    status: pr.status || 'open'
   })));
   
   const selectedId = $derived(selectedPR);
+  
+  // Cache for rendered content
+  let renderedContent = $state<Map<string, string>>(new Map());
+  
+  async function getRenderedContent(content: string, kind?: number): Promise<string> {
+    if (!content) return 'No content';
+    const cacheKey = `${kind || 'markdown'}:${content.slice(0, 50)}`;
+    if (renderedContent.has(cacheKey)) {
+      return renderedContent.get(cacheKey)!;
+    }
+    const rendered = await renderContent(content, kind);
+    renderedContent.set(cacheKey, rendered);
+    return rendered;
+  }
 </script>
 
-{#snippet itemRenderer({ item })}
+{#snippet itemRenderer({ item }: { item: any })}
   <div class="pr-item-content">
     <div class="pr-subject">{item.subject}</div>
     <div class="pr-meta">
@@ -55,13 +77,15 @@
   </div>
 {/snippet}
 
-{#snippet detailRenderer({ item })}
+{#snippet detailRenderer({ item }: { item: any })}
+  {@const contentPromise = getRenderedContent(item.content || '', item.kind)}
+  {@const currentStatus = item.status || 'open'}
   <div class="pr-detail">
     <div class="pr-detail-header">
       <h2>{item.subject}</h2>
       <div class="pr-actions">
         <select 
-          value={item.status}
+          value={currentStatus}
           onchange={(e) => onStatusUpdate(item.id, (e.target as HTMLSelectElement).value)}
         >
           <option value="open">Open</option>
@@ -72,7 +96,13 @@
     </div>
     
     <div class="pr-content">
-      {@html item.content || 'No content'}
+      {#await contentPromise}
+        <div class="loading">Rendering content...</div>
+      {:then html}
+        {@html html}
+      {:catch err}
+        <div class="error">Failed to render content: {err instanceof Error ? err.message : String(err)}</div>
+      {/await}
     </div>
     
     {#if item.commitId}
@@ -96,6 +126,10 @@
   ]}
   {itemRenderer}
   {detailRenderer}
+  {activeTab}
+  {tabs}
+  {onTabChange}
+  title="Pull Requests"
 />
 
 <style>

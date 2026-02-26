@@ -29,9 +29,20 @@
     repo: string;
     repoAnnouncement?: NostrEvent;
     userPubkey?: string | null;
+    activeTab?: string;
+    tabs?: Array<{ id: string; label: string; icon?: string }>;
+    onTabChange?: (tab: string) => void;
   }
 
-  let { npub, repo, repoAnnouncement, userPubkey }: Props = $props();
+  let { 
+    npub, 
+    repo, 
+    repoAnnouncement, 
+    userPubkey,
+    activeTab = '',
+    tabs = [],
+    onTabChange = () => {}
+  }: Props = $props();
 
   let discussions = $state<Discussion[]>([]);
   let loadingDiscussions = $state(false);
@@ -326,7 +337,12 @@
   }
 </script>
 
-<TabLayout>
+<TabLayout
+  {activeTab}
+  {tabs}
+  {onTabChange}
+  title="Discussions"
+>
   {#snippet leftPane()}
     <div class="discussions-sidebar">
       <div class="discussions-header">

@@ -25,7 +25,7 @@
     </p>
     {#if state.verification.selectedCloneUrl}
       <p style="margin: 1rem 0;">
-        <strong>Clone URL:</strong> <code>{state.verification.selectedCloneUrl}</code>
+        <strong>Clone URL:</strong> <code class="verification-code">{state.verification.selectedCloneUrl}</code>
       </p>
     {/if}
     {#if state.clone.isCloned !== true}
@@ -34,7 +34,7 @@
       </div>
     {:else}
       <p style="margin: 1rem 0; color: var(--text-secondary);">
-        This will commit the repository announcement event to <code>nostr/repo-events.jsonl</code> in the default branch, which verifies that you control this repository.
+        This will commit the repository announcement event to <code class="verification-code">nostr/repo-events.jsonl</code> in the default branch, which verifies that you control this repository.
       </p>
     {/if}
     {#if state.error}
@@ -71,7 +71,7 @@
     margin-bottom: 1rem;
   }
 
-  .verification-instructions code {
+  .verification-code {
     background: var(--bg-secondary, #f5f5f5);
     padding: 0.2rem 0.4rem;
     border-radius: 3px;

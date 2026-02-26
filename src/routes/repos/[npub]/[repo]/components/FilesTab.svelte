@@ -47,6 +47,9 @@
     defaultBranch?: string | null;
     onBranchChange?: (branch: string) => void;
     userPubkey?: string | null;
+    activeTab?: string;
+    tabs?: Array<{ id: string; label: string; icon?: string }>;
+    onTabChange?: (tab: string) => void;
   }
   
   let {
@@ -87,11 +90,21 @@
     currentBranch = null,
     defaultBranch = null,
     onBranchChange = () => {},
-    userPubkey = null
+    userPubkey = null,
+    activeTab = '',
+    tabs = [],
+    onTabChange = () => {}
   }: Props = $props();
 </script>
 
-<TabLayout {loading} {error}>
+<TabLayout 
+  {loading} 
+  {error}
+  activeTab={activeTab}
+  tabs={tabs}
+  onTabChange={onTabChange}
+  title={currentFile ? `File: ${currentFile.split('/').pop()}` : (readmeContent ? 'README' : 'Files')}
+>
   {#snippet leftPane()}
     <FileBrowser
       {files}
@@ -128,7 +141,7 @@
             {@html readmeHtml}
           </div>
         {:else if readmeContent}
-          <div class="readme-content">
+          <div class="readme-content raw-content">
             <pre><code class="hljs language-text">{readmeContent}</code></pre>
           </div>
         {/if}
@@ -227,9 +240,13 @@
                     {@html fileHtml}
                   </div>
                 {:else if highlightedFileContent}
-                  {@html highlightedFileContent}
+                  <div class="raw-content">
+                    {@html highlightedFileContent}
+                  </div>
                 {:else}
-                  <pre><code class="hljs">{fileContent}</code></pre>
+                  <div class="raw-content">
+                    <pre><code class="hljs">{fileContent}</code></pre>
+                  </div>
                 {/if}
               </div>
             {/if}
@@ -255,6 +272,36 @@
     height: 100%;
     display: flex;
     flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+  
+  .file-editor .editor-header {
+    display: flex !important;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+    width: 100%;
+    min-width: 0;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    position: relative;
+    z-index: 1;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+  
+  .file-path {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-right: 1rem;
   }
   
   .editor-footer {
@@ -274,5 +321,178 @@
     justify-content: center;
     height: 100%;
     color: var(--text-secondary);
+  }
+  
+  .raw-content {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: auto;
+    box-sizing: border-box;
+    contain: layout;
+    min-width: 0;
+  }
+  
+  .raw-content pre {
+    margin: 0;
+    padding: 1rem;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    overflow-x: auto;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+    max-width: 100%;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+  }
+  
+  .raw-content code {
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    word-break: break-word;
+    overflow-wrap: break-word;
+  }
+  
+  .raw-content :global(code.hljs) {
+    overflow-x: auto;
+    display: block;
+    max-width: 100% !important;
+    min-width: 0;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    white-space: pre-wrap;
+    box-sizing: border-box;
+  }
+  
+  .raw-content :global(code.hljs *),
+  .raw-content :global(code.hljs span),
+  .raw-content :global(code.hljs .hljs-tag),
+  .raw-content :global(code.hljs .hljs-name),
+  .raw-content :global(code.hljs .hljs-attr),
+  .raw-content :global(code.hljs .hljs-string),
+  .raw-content :global(code.hljs .hljs-section),
+  .raw-content :global(code.hljs .hljs-quote),
+  .raw-content :global(code.hljs .hljs-link),
+  .raw-content :global(code.hljs .hljs-code),
+  .raw-content :global(code.hljs .hljs-bullet),
+  .raw-content :global(code.hljs .language-xml) {
+    max-width: 100% !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: pre-wrap !important;
+    display: inline;
+    box-sizing: border-box;
+  }
+  
+  .raw-content :global(pre code.hljs) {
+    width: 100%;
+    max-width: 100% !important;
+    min-width: 0;
+  }
+  
+  .readme-content.raw-content {
+    max-width: 100%;
+    overflow-x: auto;
+    box-sizing: border-box;
+    width: 100%;
+  }
+  
+  .editor-container {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+  
+  .read-only-editor {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+  
+  .read-only-editor > .raw-content,
+  .read-only-editor > .file-preview {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+  
+  .read-only-editor > .raw-content > pre {
+    max-width: 100%;
+    min-width: 0;
+  }
+  
+  .read-only-editor > .raw-content > pre > code {
+    max-width: 100%;
+    min-width: 0;
+    display: block;
+  }
+  
+  .readme-section {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+  
+  .readme-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+    width: 100%;
+  }
+  
+  .readme-header h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    color: var(--text-primary);
+  }
+  
+  .readme-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+  
+  .readme-content {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    width: 100%;
+    max-width: 100%;
+    padding: 1.5rem;
+  }
+  
+  .file-editor .editor-actions {
+    display: flex !important;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+    visibility: visible !important;
+    opacity: 1 !important;
+    width: auto;
+    min-width: 0;
   }
 </style>

@@ -1,28 +1,47 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { page } from '$app/stores';
   import { isNIP07Available, getPublicKeyWithNIP07, signEventWithNIP07 } from '$lib/services/nostr/nip07-signer.js';
   import type { NostrEvent } from '$lib/types/nostr.js';
 
-  const browserExample = `// Get user's pubkey (hex format) from NIP-07 extension
+  // Get the actual domain from page data or current URL
+  const getApiBaseUrl = () => {
+    const gitDomain = $page.data?.gitDomain;
+    const currentHost = $page.url?.host;
+    
+    // Use gitDomain if available and not localhost, otherwise use current host
+    if (gitDomain && !gitDomain.startsWith('localhost') && !gitDomain.startsWith('127.0.0.1')) {
+      return `https://${gitDomain}`;
+    } else if (currentHost) {
+      const protocol = currentHost.startsWith('localhost') || currentHost.startsWith('127.0.0.1') ? 'http' : 'https';
+      return `${protocol}://${currentHost}`;
+    }
+    // Fallback
+    return typeof window !== 'undefined' ? window.location.origin : 'https://gitrepublic.imwald.eu';
+  };
+
+  const apiBaseUrl = $derived(getApiBaseUrl());
+
+  const browserExample = $derived(`// Get user's pubkey (hex format) from NIP-07 extension
 const userPubkey = await window.nostr.getPublicKey();
 // Convert npub to hex if needed
 const userPubkeyHex = /* convert npub to hex */;
 
 // Make API request
-const response = await fetch('/api/repos/list', {
+const response = await fetch('${apiBaseUrl}/api/repos/list', {
   headers: {
     'X-User-Pubkey': userPubkeyHex
   }
 });
-const data = await response.json();`;
+const data = await response.json();`);
 
-  const nip98Example = `// Create NIP-98 auth event
+  const nip98Example = $derived(`// Create NIP-98 auth event
 import { finalizeEvent } from 'nostr-tools';
 const authEvent = finalizeEvent({
   kind: 27235, // NIP-98 auth kind
   created_at: Math.floor(Date.now() / 1000),
   tags: [
-    ['u', 'https://gitrepublic.com/api/repos/list'],
+    ['u', '${apiBaseUrl}/api/repos/list'],
     ['method', 'GET']
   ],
   content: ''
@@ -32,11 +51,11 @@ const authEvent = finalizeEvent({
 const base64Event = btoa(JSON.stringify(authEvent));
 
 // Make API request
-const response = await fetch('https://gitrepublic.com/api/repos/list', {
+const response = await fetch('${apiBaseUrl}/api/repos/list', {
   headers: {
     'Authorization': \`Nostr \${base64Event}\`
   }
-});`;
+});`);
 
   onMount(() => {
     // Load Swagger UI from local static files

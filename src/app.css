@@ -1221,7 +1221,6 @@ button.theme-option.active img.theme-icon-option,
 .repo-badge:hover {
   background: var(--bg-secondary);
   border-color: var(--accent);
-  transform: translateY(-1px);
   box-shadow: 0 2px 4px var(--shadow-color-light);
   font-size: 0.9rem; /* Preserve font size on hover */
   color: var(--text-primary);

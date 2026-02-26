@@ -290,7 +290,7 @@
   }
 
   async function checkPendingTransfers(userPubkeyHex: string) {
-    if (!isMounted) return;
+    if (!isMounted || typeof window === 'undefined') return;
     
     try {
       // Add timeout to prevent hanging
@@ -313,14 +313,29 @@
           pendingTransfers = data.pendingTransfers.filter(
             (t: { eventId: string }) => !dismissedTransfers.has(t.eventId)
           );
+        } else if (isMounted) {
+          // Clear transfers if response is ok but no transfers
+          pendingTransfers = [];
         }
+      } else if (response.status === 404 && isMounted) {
+        // Endpoint doesn't exist - silently ignore
+        pendingTransfers = [];
       }
     } catch (err) {
-      // Only log if it's not an abort (timeout) and component is still mounted
-      if (isMounted && err instanceof Error && err.name !== 'AbortError') {
-        console.error('Failed to check for pending transfers:', err);
+      // Only log if it's not an abort (timeout), not a network error, and component is still mounted
+      if (isMounted && err instanceof Error) {
+        // Ignore expected errors
+        if (err.name === 'AbortError') {
+          // Timeout - silently ignore
+          return;
+        }
+        if (err.name === 'TypeError' && err.message.includes('NetworkError')) {
+          // Network error (server not available, CORS, etc.) - silently ignore
+          return;
+        }
+        // Log other unexpected errors
+        console.warn('Failed to check for pending transfers:', err);
       }
-      // Silently ignore timeouts - they're expected if the server is slow
     }
   }
 

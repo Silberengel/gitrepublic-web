@@ -4,6 +4,7 @@
    */
   
   import StatusTabLayout from './StatusTabLayout.svelte';
+  import { renderContent } from '../utils/content-renderer.js';
   
   interface Props {
     issues: Array<{
@@ -23,6 +24,9 @@
     onStatusUpdate?: (id: string, status: string) => void;
     issueReplies?: Array<any>;
     loadingReplies?: boolean;
+    activeTab?: string;
+    tabs?: Array<{ id: string; label: string; icon?: string }>;
+    onTabChange?: (tab: string) => void;
   }
   
   let {
@@ -33,20 +37,37 @@
     onSelect = () => {},
     onStatusUpdate = () => {},
     issueReplies = [],
-    loadingReplies = false
+    loadingReplies = false,
+    activeTab = '',
+    tabs = [],
+    onTabChange = () => {}
   }: Props = $props();
   
   const items = $derived(issues.map(issue => ({
+    ...issue,
     id: issue.id,
     title: issue.subject,
-    status: issue.status,
-    ...issue
+    status: issue.status || 'open'
   })));
   
   const selectedId = $derived(selectedIssue);
+  
+  // Cache for rendered content
+  let renderedContent = $state<Map<string, string>>(new Map());
+  
+  async function getRenderedContent(content: string, kind?: number): Promise<string> {
+    if (!content) return 'No content';
+    const cacheKey = `${kind || 'markdown'}:${content.slice(0, 50)}`;
+    if (renderedContent.has(cacheKey)) {
+      return renderedContent.get(cacheKey)!;
+    }
+    const rendered = await renderContent(content, kind);
+    renderedContent.set(cacheKey, rendered);
+    return rendered;
+  }
 </script>
 
-{#snippet itemRenderer({ item })}
+{#snippet itemRenderer({ item }: { item: any })}
   <div class="issue-item-content">
     <div class="issue-subject">{item.subject}</div>
     <div class="issue-meta">
@@ -56,41 +77,58 @@
   </div>
 {/snippet}
 
-{#snippet detailRenderer({ item })}
-    <div class="issue-detail">
-      <div class="issue-detail-header">
-        <h2>{item.subject}</h2>
-        <div class="issue-actions">
-          <select 
-            value={item.status}
-            onchange={(e) => onStatusUpdate(item.id, (e.target as HTMLSelectElement).value)}
-          >
-            <option value="open">Open</option>
-            <option value="closed">Closed</option>
-            <option value="resolved">Resolved</option>
-          </select>
-        </div>
+{#snippet detailRenderer({ item }: { item: any })}
+  {@const contentPromise = getRenderedContent(item.content || '', item.kind)}
+  {@const currentStatus = item.status || 'open'}
+  <div class="issue-detail">
+    <div class="issue-detail-header">
+      <h2>{item.subject}</h2>
+      <div class="issue-actions">
+        <select 
+          value={currentStatus}
+          onchange={(e) => onStatusUpdate(item.id, (e.target as HTMLSelectElement).value)}
+        >
+          <option value="open">Open</option>
+          <option value="closed">Closed</option>
+          <option value="resolved">Resolved</option>
+        </select>
       </div>
-      
-      <div class="issue-content">
-        {@html item.content || 'No content'}
-      </div>
-      
-      {#if loadingReplies}
-        <div class="loading">Loading replies...</div>
-      {:else if issueReplies.length > 0}
-        <div class="issue-replies">
-          <h3>Replies</h3>
-          {#each issueReplies as reply}
-            <div class="reply">
-              <div class="reply-author">{reply.author}</div>
-              <div class="reply-content">{reply.content}</div>
-              <div class="reply-date">{new Date(reply.created_at * 1000).toLocaleString()}</div>
-            </div>
-          {/each}
-        </div>
-      {/if}
     </div>
+    
+    <div class="issue-content">
+      {#await contentPromise}
+        <div class="loading">Rendering content...</div>
+      {:then html}
+        {@html html}
+      {:catch err}
+        <div class="error">Failed to render content: {err instanceof Error ? err.message : String(err)}</div>
+      {/await}
+    </div>
+    
+    {#if loadingReplies}
+      <div class="loading">Loading replies...</div>
+    {:else if issueReplies.length > 0}
+      <div class="issue-replies">
+        <h3>Replies</h3>
+        {#each issueReplies as reply}
+          {@const replyPromise = getRenderedContent(reply.content || '', reply.kind)}
+          <div class="reply">
+            <div class="reply-author">{reply.author}</div>
+            <div class="reply-content">
+              {#await replyPromise}
+                <div class="loading">Rendering...</div>
+              {:then html}
+                {@html html}
+              {:catch err}
+                {reply.content}
+              {/await}
+            </div>
+            <div class="reply-date">{new Date(reply.created_at * 1000).toLocaleString()}</div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </div>
 {/snippet}
 
 <StatusTabLayout
@@ -106,6 +144,10 @@
   ]}
   {itemRenderer}
   {detailRenderer}
+  {activeTab}
+  {tabs}
+  {onTabChange}
+  title="Issues"
 />
 
 <style>

@@ -4,6 +4,7 @@
    */
   
   import StatusTabLayout from './StatusTabLayout.svelte';
+  import { renderContent } from '../utils/content-renderer.js';
   
   interface Props {
     patches: Array<{
@@ -13,6 +14,7 @@
       status: string;
       author: string;
       created_at: number;
+      kind?: number;
       [key: string]: any;
     }>;
     selectedPatch?: string | null;
@@ -20,7 +22,11 @@
     error?: string | null;
     onSelect?: (id: string) => void;
     onApply?: (id: string) => void;
+    onStatusUpdate?: (id: string, status: string) => void;
     applying?: Record<string, boolean>;
+    activeTab?: string;
+    tabs?: Array<{ id: string; label: string; icon?: string }>;
+    onTabChange?: (tab: string) => void;
   }
   
   let {
@@ -30,20 +36,38 @@
     error = null,
     onSelect = () => {},
     onApply = () => {},
-    applying = {}
+    onStatusUpdate = () => {},
+    applying = {},
+    activeTab = '',
+    tabs = [],
+    onTabChange = () => {}
   }: Props = $props();
   
   const items = $derived(patches.map(patch => ({
+    ...patch,
     id: patch.id,
     title: patch.subject,
-    status: patch.status || 'open',
-    ...patch
+    status: patch.status || 'open'
   })));
   
   const selectedId = $derived(selectedPatch);
+  
+  // Cache for rendered content
+  let renderedContent = $state<Map<string, string>>(new Map());
+  
+  async function getRenderedContent(content: string, kind?: number): Promise<string> {
+    if (!content) return 'No content';
+    const cacheKey = `${kind || 'markdown'}:${content.slice(0, 50)}`;
+    if (renderedContent.has(cacheKey)) {
+      return renderedContent.get(cacheKey)!;
+    }
+    const rendered = await renderContent(content, kind);
+    renderedContent.set(cacheKey, rendered);
+    return rendered;
+  }
 </script>
 
-{#snippet itemRenderer({ item })}
+{#snippet itemRenderer({ item }: { item: any })}
   <div class="patch-item-content">
     <div class="patch-subject">{item.subject}</div>
     <div class="patch-meta">
@@ -53,12 +77,23 @@
   </div>
 {/snippet}
 
-{#snippet detailRenderer({ item })}
+{#snippet detailRenderer({ item }: { item: any })}
+  {@const contentPromise = getRenderedContent(item.content || '', item.kind)}
+  {@const currentStatus = item.status || 'open'}
   <div class="patch-detail">
     <div class="patch-detail-header">
       <h2>{item.subject}</h2>
       <div class="patch-actions">
-        {#if item.status === 'open'}
+        <select 
+          value={currentStatus}
+          onchange={(e) => onStatusUpdate(item.id, (e.target as HTMLSelectElement).value)}
+          class="status-select"
+        >
+          <option value="open">Open</option>
+          <option value="applied">Applied</option>
+          <option value="rejected">Rejected</option>
+        </select>
+        {#if currentStatus === 'open'}
           <button 
             onclick={() => onApply(item.id)}
             disabled={applying[item.id]}
@@ -71,7 +106,13 @@
     </div>
     
     <div class="patch-content">
-      <pre><code>{item.content}</code></pre>
+      {#await contentPromise}
+        <div class="loading">Rendering content...</div>
+      {:then html}
+        {@html html}
+      {:catch err}
+        <div class="error">Failed to render content: {err instanceof Error ? err.message : String(err)}</div>
+      {/await}
     </div>
   </div>
 {/snippet}
@@ -89,6 +130,10 @@
   ]}
   {itemRenderer}
   {detailRenderer}
+  {activeTab}
+  {tabs}
+  {onTabChange}
+  title="Patches"
 />
 
 <style>
@@ -124,15 +169,7 @@
   
   .patch-content {
     margin: 1rem 0;
-  }
-  
-  .patch-content pre {
-    background: var(--bg-secondary);
-    padding: 1rem;
-    border-radius: 4px;
-    overflow-x: auto;
-    font-family: monospace;
-    font-size: 0.9rem;
+    line-height: 1.6;
   }
   
   .apply-button {
@@ -147,5 +184,14 @@
   .apply-button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+  
+  .status-select {
+    padding: 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    margin-right: 0.5rem;
   }
 </style>

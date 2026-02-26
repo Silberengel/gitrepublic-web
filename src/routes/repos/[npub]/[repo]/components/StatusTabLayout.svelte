@@ -20,6 +20,10 @@
     statusGroups?: Array<{ label: string; value: string }>;
     itemRenderer?: import('svelte').Snippet<[{ item: { id: string; title: string; status: string; [key: string]: any } }]>;
     detailRenderer?: import('svelte').Snippet<[{ item: { id: string; title: string; status: string; [key: string]: any } }]>;
+    activeTab?: string;
+    tabs?: Array<{ id: string; label: string; icon?: string }>;
+    onTabChange?: (tab: string) => void;
+    title?: string;
   }
   
   let {
@@ -33,7 +37,11 @@
       { label: 'Closed', value: 'closed' }
     ],
     itemRenderer,
-    detailRenderer
+    detailRenderer,
+    activeTab = '',
+    tabs = [],
+    onTabChange = () => {},
+    title = ''
   }: Props = $props();
   
   let selectedItem = $derived(items.find(item => item.id === selectedId) || null);
@@ -58,7 +66,14 @@
   const grouped = $derived(groupByStatus());
 </script>
 
-<TabLayout {loading} {error}>
+<TabLayout 
+  {loading} 
+  {error}
+  {activeTab}
+  {tabs}
+  {onTabChange}
+  {title}
+>
   {#snippet leftPane()}
     <div class="status-groups">
       {#each statusGroups as { label, value }}
@@ -104,6 +119,10 @@
           <pre>{JSON.stringify(selectedItem, null, 2)}</pre>
         </div>
       {/if}
+    {:else}
+      <div class="empty-state">
+        <p>Select an item to view details</p>
+      </div>
     {/if}
   {/snippet}
 </TabLayout>
@@ -167,9 +186,24 @@
   
   .detail-view {
     padding: 1rem;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
   }
   
   .detail-view h2 {
     margin-top: 0;
+  }
+  
+  .empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+    height: 100%;
+    color: var(--text-secondary);
+    box-sizing: border-box;
   }
 </style>

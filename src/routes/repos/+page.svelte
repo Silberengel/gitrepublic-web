@@ -637,38 +637,57 @@
 <div class="container">
   <main>
     {#if userPubkey && myRepos.length > 0}
-      <div class="my-repos-section">
-        <h3>My Repositories</h3>
-        <div class="my-repos-badges">
+      <!-- My Repositories Section -->
+      <div class="repo-section">
+        <div class="section-header">
+          <h3>My Repositories</h3>
+          <span class="section-badge">{myRepos.length}</span>
+        </div>
+        <div class="repos-list">
           {#each myRepos as item}
             {@const repo = item.event}
             {@const repoImage = getRepoImage(repo)}
             {@const isTransferred = item.transferred || false}
-            <a 
-              href="/repos/{item.npub}/{item.repoName}" 
-              class="repo-badge"
-              class:transferred={isTransferred}
-              title={isTransferred ? 'Transferred to another owner' : ''}
-            >
-              {#if repoImage}
-                <img src={repoImage} alt={getRepoName(repo)} class="repo-badge-image" />
-              {:else}
-                <img src="/icons/package.svg" alt="Repository" class="repo-badge-icon" />
-              {/if}
-              <span class="repo-badge-name">{getRepoName(repo)}</span>
-              {#if isTransferred}
-                <span class="transferred-badge" title="Transferred">↗</span>
-              {/if}
-            </a>
+            <div class="repo-card repo-card-my" class:transferred={isTransferred}>
+              <div class="repo-card-content">
+                <div class="repo-header">
+                  <div class="repo-header-text">
+                    <div class="repo-title-row">
+                      {#if repoImage}
+                        <img src={repoImage} alt="Repository" class="repo-avatar" />
+                      {/if}
+                      <h3>{getRepoName(repo)}</h3>
+                      {#if isTransferred}
+                        <span class="transferred-badge" title="Transferred to another owner">↗</span>
+                      {/if}
+                    </div>
+                    {#if getRepoDescription(repo)}
+                      <p class="description">{getRepoDescription(repo)}</p>
+                    {/if}
+                  </div>
+                  <a href="/repos/{item.npub}/{item.repoName}" class="view-button" title="View repository">
+                    <img src="/icons/arrow-right.svg" alt="View" />
+                  </a>
+                </div>
+                <div class="repo-meta">
+                  <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
+                  {#if getForkCount(repo) > 0}
+                    {@const forkCount = getForkCount(repo)}
+                    <span class="fork-count">🍴 {forkCount} fork{forkCount === 1 ? '' : 's'}</span>
+                  {/if}
+                </div>
+              </div>
+            </div>
           {/each}
         </div>
       </div>
     {/if}
 
     <!-- Most Favorited Repositories -->
-    <div class="most-favorited-section">
+    <div class="repo-section">
       <div class="section-header">
         <h3>Most Favorited Repositories</h3>
+        <span class="section-badge">{mostFavoritedRepos.length}</span>
         {#if loadingMostFavorited}
           <span class="loading-indicator">Loading...</span>
         {/if}
@@ -678,24 +697,38 @@
       {:else if mostFavoritedRepos.length === 0}
         <div class="empty">No favorited repositories found.</div>
       {:else}
-        <div class="most-favorited-list">
+        <div class="repos-list">
           {#each mostFavoritedRepos as item}
             {@const repo = item.event}
             {@const repoImage = getRepoImage(repo)}
-            <a href="/repos/{item.npub}/{item.repoName}" class="most-favorited-item">
-              {#if repoImage}
-                <img src={repoImage} alt={getRepoName(repo)} class="most-favorited-image" />
-              {:else}
-                <img src="/icons/package.svg" alt="Repository" class="most-favorited-icon" />
-              {/if}
-              <div class="most-favorited-info">
-                <h4>{getRepoName(repo)}</h4>
-                {#if getRepoDescription(repo)}
-                  <p class="most-favorited-description">{getRepoDescription(repo)}</p>
-                {/if}
-                <span class="most-favorited-count">{item.favoriteCount} {item.favoriteCount === 1 ? 'favorite' : 'favorites'}</span>
+            <div class="repo-card repo-card-favorited">
+              <div class="repo-card-content">
+                <div class="repo-header">
+                  <div class="repo-header-text">
+                    <div class="repo-title-row">
+                      {#if repoImage}
+                        <img src={repoImage} alt="Repository" class="repo-avatar" />
+                      {/if}
+                      <h3>{getRepoName(repo)}</h3>
+                    </div>
+                    {#if getRepoDescription(repo)}
+                      <p class="description">{getRepoDescription(repo)}</p>
+                    {/if}
+                  </div>
+                  <a href="/repos/{item.npub}/{item.repoName}" class="view-button" title="View repository">
+                    <img src="/icons/arrow-right.svg" alt="View" />
+                  </a>
+                </div>
+                <div class="repo-meta">
+                  <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
+                  <span class="favorite-count">⭐ {item.favoriteCount} {item.favoriteCount === 1 ? 'favorite' : 'favorites'}</span>
+                  {#if getForkCount(repo) > 0}
+                    {@const forkCount = getForkCount(repo)}
+                    <span class="fork-count">🍴 {forkCount} fork{forkCount === 1 ? '' : 's'}</span>
+                  {/if}
+                </div>
               </div>
-            </a>
+            </div>
           {/each}
         </div>
         {#if mostFavoritedCache && mostFavoritedCache.data.length > 10}
@@ -745,13 +778,7 @@
             {#each registeredRepos as item}
               {@const repo = item.event}
               {@const repoImage = getRepoImage(repo)}
-              {@const repoBanner = getRepoBanner(repo)}
               <div class="repo-card repo-card-registered">
-                {#if repoBanner}
-                  <div class="repo-card-banner">
-                    <img src={repoBanner} alt="Banner" />
-                  </div>
-                {/if}
                 <div class="repo-card-content">
                   <div class="repo-header">
                     <div class="repo-header-text">
@@ -799,14 +826,8 @@
             {#each localRepos as item}
               {@const repo = item.announcement}
               {@const repoImage = repo ? getRepoImage(repo) : null}
-              {@const repoBanner = repo ? getRepoBanner(repo) : null}
               {@const canDelete = isOwner(item.npub, item.repoName)}
               <div class="repo-card repo-card-local">
-                {#if repoBanner}
-                  <div class="repo-card-banner">
-                    <img src={repoBanner} alt="Banner" />
-                  </div>
-                {/if}
                 <div class="repo-card-content">
                   <div class="repo-header">
                     <div class="repo-header-text">
@@ -859,103 +880,9 @@
 </div>
 
 <style>
-  .most-favorited-section {
-    margin: 2rem 0;
-    padding: 1.5rem;
-    background: var(--card-bg, #ffffff);
-    border: 1px solid var(--border-color, #e0e0e0);
-    border-radius: 0.5rem;
-  }
-
-  .most-favorited-section .section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1rem;
-  }
-
-  .most-favorited-section .section-header h3 {
-    margin: 0;
-    font-size: 1.25rem;
-    color: var(--text-primary, #1a1a1a);
-  }
-
   .loading-indicator {
     color: var(--text-secondary, #666);
     font-size: 0.875rem;
-  }
-
-  .most-favorited-list {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .most-favorited-item {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 1rem;
-    background: var(--bg-secondary, #f5f5f5);
-    border: 1px solid var(--border-color, #e0e0e0);
-    border-radius: 0.5rem;
-    text-decoration: none;
-    color: inherit;
-    transition: all 0.2s ease;
-  }
-
-  .most-favorited-item:hover {
-    background: var(--bg-tertiary, #eeeeee);
-    border-color: var(--accent, #007bff);
-    transform: translateY(-2px);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  }
-
-  .most-favorited-image,
-  .most-favorited-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: 0.25rem;
-    object-fit: cover;
-    flex-shrink: 0;
-  }
-
-  .most-favorited-icon {
-    padding: 8px;
-    background: var(--bg-tertiary, #eeeeee);
-  }
-
-  .most-favorited-info {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .most-favorited-info h4 {
-    margin: 0 0 0.5rem 0;
-    font-size: 1.1rem;
-    color: var(--text-primary, #1a1a1a);
-  }
-
-  .most-favorited-description {
-    margin: 0 0 0.5rem 0;
-    color: var(--text-secondary, #666);
-    font-size: 0.9rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
-  }
-
-  .most-favorited-count {
-    display: inline-block;
-    padding: 0.25rem 0.5rem;
-    background: var(--accent, #007bff);
-    color: var(--accent-text, #ffffff);
-    border-radius: 0.25rem;
-    font-size: 0.875rem;
-    font-weight: 500;
   }
 
   .pagination {
@@ -981,7 +908,6 @@
 
   .pagination button:hover:not(:disabled) {
     background: var(--accent-hover, #0056b3);
-    transform: translateY(-1px);
   }
 
   .pagination button:disabled {
@@ -1006,27 +932,15 @@
     border: 1px solid var(--border-color, #e0e0e0);
     border-radius: 0.5rem;
     overflow: hidden;
-    transition: all 0.2s ease;
+    transition: box-shadow 0.2s ease;
     display: flex;
     flex-direction: column;
+    min-height: 160px;
+    height: 100%;
   }
 
   .repo-card:hover {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-    transform: translateY(-2px);
-  }
-
-  .repo-card-banner {
-    width: 100%;
-    height: 120px;
-    overflow: hidden;
-    background: var(--bg-secondary, #f5f5f5);
-  }
-
-  .repo-card-banner img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
   }
 
   .repo-card-content {
@@ -1034,6 +948,7 @@
     flex: 1;
     display: flex;
     flex-direction: column;
+    min-height: 0;
   }
 
   .repo-header {
@@ -1103,7 +1018,6 @@
 
   .view-button:hover {
     background: var(--accent-hover, #0056b3);
-    transform: translateX(2px);
   }
 
   .view-button img {
@@ -1152,6 +1066,26 @@
 
   .fork-count {
     color: var(--text-secondary, #666);
+  }
+
+  .favorite-count {
+    color: var(--text-secondary, #666);
+    font-weight: 500;
+  }
+
+  .transferred-badge {
+    font-size: 0.875rem;
+    color: var(--text-secondary, #666);
+    margin-left: 0.5rem;
+    opacity: 0.7;
+  }
+
+  .repo-card.transferred {
+    opacity: 0.7;
+  }
+
+  .repo-card.transferred:hover {
+    opacity: 0.9;
   }
 
   .repo-section {
