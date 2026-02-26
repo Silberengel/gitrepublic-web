@@ -99,6 +99,36 @@
     verifyCommit as verifyCommitService,
     viewDiff as viewDiffService
   } from './services/commit-operations.js';
+  import {
+    loadIssues as loadIssuesService,
+    loadIssueReplies as loadIssueRepliesService,
+    createIssue as createIssueService,
+    updateIssueStatus as updateIssueStatusService
+  } from './services/issue-operations.js';
+  import {
+    loadPRs as loadPRsService,
+    createPR as createPRService
+  } from './services/pr-operations.js';
+  import {
+    loadPatches as loadPatchesService,
+    createPatch as createPatchService,
+    updatePatchStatus as updatePatchStatusService
+  } from './services/patch-operations.js';
+  import {
+    loadDiscussions as loadDiscussionsService,
+    createDiscussionThread as createDiscussionThreadService,
+    createThreadReply as createThreadReplyService,
+    loadDocumentation as loadDocumentationService
+  } from './services/discussion-operations.js';
+  import {
+    checkCloneStatus as checkCloneStatusService,
+    cloneRepository as cloneRepositoryService,
+    forkRepository as forkRepositoryService,
+    toggleBookmark as toggleBookmarkService,
+    checkMaintainerStatus as checkMaintainerStatusService,
+    loadAllMaintainers as loadAllMaintainersService,
+    checkVerification as checkVerificationService
+  } from './services/repo-operations.js';
 
   // Consolidated state - all state variables in one object
   let state = $state(createRepoState());
@@ -919,532 +949,51 @@
   }
 
   async function checkCloneStatus(force: boolean = false) {
-    if (state.clone.checking) return;
-    if (!force && state.clone.isCloned !== null) {
-      console.log(`[Clone Status] Skipping check - already checked: ${state.clone.isCloned}, force: ${force}`);
-      return;
-    }
-    
-    state.clone.checking = true;
-    try {
-      // Check if repo exists locally by trying to fetch state.git.branches
-      // Use skipApiFallback parameter to ensure we only check local repo, not API fallback
-      // 404 = repo not cloned, 403 = repo exists but access denied (cloned), 200 = cloned and accessible
-      const url = `/api/repos/${state.npub}/${state.repo}/branches?skipApiFallback=true`;
-      console.log(`[Clone Status] Checking clone status for ${state.npub}/${state.repo}...`);
-      const response = await fetch(url, {
-        headers: buildApiHeaders()
-      });
-      // If response is 403, repo exists (cloned) but user doesn't have access
-      // If response is 404, repo doesn't exist (not cloned)
-      // If response is 200, repo exists and is accessible (cloned)
-      const wasCloned = response.status !== 404;
-      state.clone.isCloned = wasCloned;
-      
-      // If repo is not cloned, check if API fallback is available
-      if (!wasCloned) {
-        // Try to detect API fallback by checking if we have clone URLs
-        if (repoCloneUrls && repoCloneUrls.length > 0) {
-          // We have clone URLs, so API fallback might work - will be detected when loadBranches() runs
-          state.clone.apiFallbackAvailable = null; // Will be set to true if a subsequent request succeeds
-        } else {
-          state.clone.apiFallbackAvailable = false;
-        }
-      } else {
-        // Repo is cloned, API fallback not needed
-        state.clone.apiFallbackAvailable = false;
-      }
-      
-      console.log(`[Clone Status] Repo ${wasCloned ? 'is cloned' : 'is not cloned'} (status: ${response.status}), API fallback: ${state.clone.apiFallbackAvailable}`);
-    } catch (err) {
-      // On state.error, assume not cloned
-      console.warn('[Clone Status] Error checking clone status:', err);
-      state.clone.isCloned = false;
-      state.clone.apiFallbackAvailable = false;
-    } finally {
-      state.clone.checking = false;
-    }
+    await checkCloneStatusService(force, state, repoCloneUrls);
   }
 
   async function cloneRepository() {
-    if (state.clone.cloning) return;
-    
-    state.clone.cloning = true;
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/clone`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...buildApiHeaders()
-        }
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: response.statusText }));
-        throw new Error(errorData.message || `Failed to clone repository: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      
-      if (data.alreadyExists) {
-        alert('Repository already exists locally.');
-        // Force refresh clone status
-        await checkCloneStatus(true);
-      } else {
-        alert('Repository cloned successfully! The repository is now available on this server.');
-        // Force refresh clone status
-        await checkCloneStatus(true);
-        // Reset API fallback status since repo is now cloned
-        state.clone.apiFallbackAvailable = false;
-        // Reload data to use the cloned repo instead of API
-        await Promise.all([
-          loadBranches(),
-          loadFiles(state.files.currentPath),
-          loadReadme(),
-          loadTags(),
-          loadCommitHistory()
-        ]);
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to clone repository';
-      alert(`Error: ${errorMessage}`);
-      console.error('Error state.clone.cloning repository:', err);
-    } finally {
-      state.clone.cloning = false;
-    }
+    await cloneRepositoryService(state, {
+      checkCloneStatus,
+      loadBranches,
+      loadFiles,
+      loadReadme,
+      loadTags,
+      loadCommitHistory
+    });
   }
 
   async function forkRepository() {
-    if (!state.user.pubkey) {
-      alert('Please connect your NIP-07 extension');
-      return;
-    }
-
-    state.fork.forking = true;
-    state.error = null;
-
-    try {
-      // Security: Truncate npub in logs
-      const truncatedNpub = state.npub.length > 16 ? `${state.npub.slice(0, 12)}...` : state.npub;
-      console.log(`[Fork UI] Starting fork of ${truncatedNpub}/${state.repo}...`);
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/fork`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...buildApiHeaders()
-        },
-        body: JSON.stringify({ userPubkey: state.user.pubkey })
-      });
-
-      const data = await response.json();
-      
-      if (response.ok && data.success !== false) {
-        const message = data.message || `Repository forked successfully! Published to ${data.fork?.publishedTo?.announcement || 0} relay(s).`;
-        console.log(`[Fork UI] ✓ ${message}`);
-        // Security: Truncate npub in logs
-        const truncatedForkNpub = data.fork.npub.length > 16 ? `${data.fork.npub.slice(0, 12)}...` : data.fork.npub;
-        console.log(`[Fork UI]   - Fork location: /repos/${truncatedForkNpub}/${data.fork.repo}`);
-        console.log(`[Fork UI]   - Announcement ID: ${data.fork.announcementId}`);
-        console.log(`[Fork UI]   - Ownership Transfer ID: ${data.fork.ownershipTransferId}`);
-        
-        alert(`${message}\n\nRedirecting to your fork...`);
-        goto(`/repos/${data.fork.npub}/${data.fork.repo}`);
-      } else {
-        const errorMessage = data.state.error || 'Failed to fork repository';
-        const errorDetails = data.details ? `\n\nDetails: ${data.details}` : '';
-        const fullError = `${errorMessage}${errorDetails}`;
-        
-        console.error(`[Fork UI] ✗ Fork failed: ${errorMessage}`);
-        if (data.details) {
-          console.error(`[Fork UI] Details: ${data.details}`);
-        }
-        if (data.eventName) {
-          console.error(`[Fork UI] Failed event: ${data.eventName}`);
-        }
-        
-        state.error = fullError;
-        alert(`Fork failed!\n\n${fullError}`);
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to fork repository';
-      console.error(`[Fork UI] ✗ Unexpected error: ${errorMessage}`, err);
-      state.error = errorMessage;
-      alert(`Fork failed!\n\n${errorMessage}`);
-    } finally {
-      state.fork.forking = false;
-    }
+    await forkRepositoryService(state);
   }
 
   async function loadDiscussions() {
-    if (state.repoNotFound) return;
-    state.loading.discussions = true;
-    state.error = null;
-    try {
-      const decoded = nip19.decode(state.npub);
-      if (decoded.type !== 'npub') {
-        throw new Error('Invalid npub format');
-      }
-      const repoOwnerPubkey = decoded.data as string;
-
-      // Fetch repo announcement to get project-relay tags and announcement ID
-      const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
-      const events = await client.fetchEvents([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [repoOwnerPubkeyDerived],
-          '#d': [state.repo],
-          limit: 1
-        }
-      ]);
-
-      if (events.length === 0) {
-        state.discussions = [];
-        return;
-      }
-
-      const announcement = events[0];
-      const chatRelays = announcement.tags
-        .filter(t => t[0] === 'project-relay')
-        .flatMap(t => t.slice(1))
-        .filter(url => url && typeof url === 'string') as string[];
-
-      // Get default relays
-      const { getGitUrl } = await import('$lib/config.js');
-      const { DiscussionsService } = await import('$lib/services/nostr/discussions-service.js');
-      
-      // Get user's relays if available
-      let userRelays: string[] = [];
-      const currentUserPubkey = $userStore.userPubkey || state.user.pubkey;
-      if (currentUserPubkey) {
-        try {
-          const { outbox } = await getUserRelays(currentUserPubkey, client);
-          userRelays = outbox;
-        } catch (err) {
-          console.warn('Failed to get user relays, using defaults:', err);
-        }
-      }
-
-      // Combine all available relays: default + search + chat + user relays
-      const allRelays = [...new Set([
-        ...DEFAULT_NOSTR_RELAYS,
-        ...DEFAULT_NOSTR_SEARCH_RELAYS,
-        ...chatRelays,
-        ...userRelays
-      ])];
-      
-      console.log('[Discussions] Using all available relays for threads:', allRelays);
-      console.log('[Discussions] Project relays from announcement:', chatRelays);
-
-      const discussionsService = new DiscussionsService(allRelays);
-      const discussionEntries = await discussionsService.getDiscussions(
-        repoOwnerPubkey,
-        state.repo,
-        announcement.id,
-        announcement.pubkey,
-        allRelays, // Use all relays for threads
-        allRelays  // Use all relays for comments too
-      );
-      
-      console.log('[Discussions] Found', discussionEntries.length, 'discussion entries');
-
-      state.discussions = discussionEntries.map(entry => ({
-        type: entry.type,
-        id: entry.id,
-        title: entry.title,
-        content: entry.content,
-        author: entry.author,
-        createdAt: entry.createdAt,
-        kind: entry.kind,
-        pubkey: entry.pubkey,
-        comments: entry.comments
-      }));
-
-      // Fetch full events for state.discussions and comments to get state.git.tags for blurbs
-      await loadDiscussionEvents(state.discussions);
-      
-      // Fetch nostr: links from discussion content
-      for (const discussion of state.discussions) {
-        if (discussion.content) {
-          await loadNostrLinks(discussion.content);
-        }
-        if (discussion.comments) {
-          for (const comment of discussion.comments) {
-            if (comment.content) {
-              await loadNostrLinks(comment.content);
-            }
-            if (comment.replies) {
-              for (const reply of comment.replies) {
-                if (reply.content) {
-                  await loadNostrLinks(reply.content);
-                }
-                if (reply.replies) {
-                  for (const nestedReply of reply.replies) {
-                    if (nestedReply.content) {
-                      await loadNostrLinks(nestedReply.content);
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to load state.discussions';
-      console.error('Error state.loading.main state.discussions:', err);
-    } finally {
-      state.loading.discussions = false;
-    }
+    await loadDiscussionsService(state, repoOwnerPubkeyDerived, {
+      loadDiscussions,
+      loadNostrLinks,
+      loadDiscussionEvents: loadDiscussionEvents as any
+    });
   }
 
 
   async function createDiscussionThread() {
-    if (!state.user.pubkey || !state.user.pubkeyHex) {
-      state.error = 'You must be logged in to create a discussion thread';
-      return;
-    }
-
-    if (!state.forms.discussion.threadTitle.trim()) {
-      state.error = 'Thread title is required';
-      return;
-    }
-
-    state.creating.thread = true;
-    state.error = null;
-
-    try {
-      const decoded = nip19.decode(state.npub);
-      if (decoded.type !== 'npub') {
-        throw new Error('Invalid npub format');
-      }
-      const repoOwnerPubkey = decoded.data as string;
-
-      // Get repo announcement to get the repo address
-      const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
-      const events = await client.fetchEvents([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [repoOwnerPubkeyDerived],
-          '#d': [state.repo],
-          limit: 1
-        }
-      ]);
-
-      if (events.length === 0) {
-        throw new Error('Repository announcement not found');
-      }
-
-      const announcement = events[0];
-      state.metadata.address = `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkey}:${state.repo}`;
-
-      // Get project relays from announcement, or use default relays
-      const chatRelays = announcement.tags
-        .filter(t => t[0] === 'project-relay')
-        .flatMap(t => t.slice(1))
-        .filter(url => url && typeof url === 'string') as string[];
-
-      // Combine all available relays
-      let allRelays = [...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS, ...chatRelays];
-      if (state.user.pubkey) {
-        try {
-          const { outbox } = await getUserRelays(state.user.pubkey, client);
-          allRelays = [...allRelays, ...outbox];
-        } catch (err) {
-          console.warn('Failed to get user relays:', err);
-        }
-      }
-      allRelays = [...new Set(allRelays)]; // Deduplicate
-
-      // Create kind 11 thread event
-      const threadEventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
-        kind: KIND.THREAD,
-        pubkey: state.user.pubkeyHex,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [
-          ['a', state.metadata.address],
-          ['title', state.forms.discussion.threadTitle.trim()],
-          ['t', 'repo']
-        ],
-        content: state.forms.discussion.threadContent.trim() || ''
-      };
-
-      // Sign the event using NIP-07
-      const signedEvent = await signEventWithNIP07(threadEventTemplate);
-
-      // Publish to all available relays
-      const publishClient = new NostrClient(allRelays);
-      const result = await publishClient.publishEvent(signedEvent, allRelays);
-
-      if (result.failed.length > 0 && result.success.length === 0) {
-        throw new Error('Failed to publish thread to all relays');
-      }
-
-      // Clear form and close dialog
-      state.forms.discussion.threadTitle = '';
-      state.forms.discussion.threadContent = '';
-      state.openDialog = null;
-
-      // Reload discussions
-      await loadDiscussions();
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to create discussion thread';
-      console.error('Error creating discussion thread:', err);
-    } finally {
-      state.creating.thread = false;
-    }
+    await createDiscussionThreadService(state, repoOwnerPubkeyDerived, {
+      loadDiscussions,
+      loadNostrLinks,
+      loadDiscussionEvents: loadDiscussionEvents as any
+    });
   }
 
   async function createThreadReply() {
-    if (!state.user.pubkey || !state.user.pubkeyHex) {
-      state.error = 'You must be logged in to reply';
-      return;
-    }
-
-    if (!state.forms.discussion.replyContent.trim()) {
-      state.error = 'Reply content is required';
-      return;
-    }
-
-    if (!state.discussion.replyingToThread && !state.discussion.replyingToComment) {
-      state.error = 'Must reply to either a thread or a comment';
-      return;
-    }
-
-    state.creating.reply = true;
-    state.error = null;
-
-    try {
-      const decoded = nip19.decode(state.npub);
-      if (decoded.type !== 'npub') {
-        throw new Error('Invalid npub format');
-      }
-      const repoOwnerPubkey = decoded.data as string;
-
-      // Get repo announcement to get the repo address and relays
-      const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
-      nostrClient = client; // Store for use in other functions
-      const events = await client.fetchEvents([
-        {
-          kinds: [KIND.REPO_ANNOUNCEMENT],
-          authors: [repoOwnerPubkeyDerived],
-          '#d': [state.repo],
-          limit: 1
-        }
-      ]);
-
-      if (events.length === 0) {
-        throw new Error('Repository announcement not found');
-      }
-
-      const announcement = events[0];
-      
-      // Get project relays from announcement, or use default relays
-      const chatRelays = announcement.tags
-        .filter(t => t[0] === 'project-relay')
-        .flatMap(t => t.slice(1))
-        .filter(url => url && typeof url === 'string') as string[];
-
-      // Combine all available relays
-      let allRelays = [...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS, ...chatRelays];
-      if (state.user.pubkey) {
-        try {
-          const { outbox } = await getUserRelays(state.user.pubkey, client);
-          allRelays = [...allRelays, ...outbox];
-        } catch (err) {
-          console.warn('Failed to get user relays:', err);
-        }
-      }
-      allRelays = [...new Set(allRelays)]; // Deduplicate
-
-      let rootEventId: string;
-      let rootKind: number;
-      let rootPubkey: string;
-      let parentEventId: string;
-      let parentKind: number;
-      let parentPubkey: string;
-
-      if (state.discussion.replyingToComment) {
-        // Replying to a comment - use the comment object we already have
-        const comment = state.discussion.replyingToComment;
-        
-        // Determine root: if we have a thread, use it as root; otherwise use announcement
-        if (state.discussion.replyingToThread) {
-          rootEventId = state.discussion.replyingToThread.id;
-          rootKind = state.discussion.replyingToThread.kind || KIND.THREAD;
-          rootPubkey = state.discussion.replyingToThread.pubkey || state.discussion.replyingToThread.author;
-        } else {
-          // Comment is directly on announcement (in "Comments" pseudo-thread)
-          rootEventId = announcement.id;
-          rootKind = KIND.REPO_ANNOUNCEMENT;
-          rootPubkey = announcement.pubkey;
-        }
-
-        // Parent is the comment we're replying to
-        parentEventId = comment.id;
-        parentKind = comment.kind || KIND.COMMENT;
-        parentPubkey = comment.pubkey || comment.author;
-      } else if (state.discussion.replyingToThread) {
-        // Replying directly to a thread - use the thread object we already have
-        rootEventId = state.discussion.replyingToThread.id;
-        rootKind = state.discussion.replyingToThread.kind || KIND.THREAD;
-        rootPubkey = state.discussion.replyingToThread.pubkey || state.discussion.replyingToThread.author;
-        parentEventId = state.discussion.replyingToThread.id;
-        parentKind = state.discussion.replyingToThread.kind || KIND.THREAD;
-        parentPubkey = state.discussion.replyingToThread.pubkey || state.discussion.replyingToThread.author;
-      } else {
-        throw new Error('Must specify thread or comment to reply to');
-      }
-
-      // Create kind 1111 comment event
-      const commentEventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
-        kind: KIND.COMMENT,
-          pubkey: state.user.pubkeyHex,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [
-          ['e', parentEventId, '', 'reply'], // Parent event
-          ['k', parentKind.toString()], // Parent kind
-          ['p', parentPubkey], // Parent pubkey
-          ['E', rootEventId], // Root event
-          ['K', rootKind.toString()], // Root kind
-          ['P', rootPubkey] // Root pubkey
-        ],
-        content: state.forms.discussion.replyContent.trim()
-      };
-
-      // Sign the event using NIP-07
-      const signedEvent = await signEventWithNIP07(commentEventTemplate);
-
-      // Publish to all available relays
-      const publishClient = new NostrClient(allRelays);
-      const result = await publishClient.publishEvent(signedEvent, allRelays);
-
-      if (result.failed.length > 0 && result.success.length === 0) {
-        throw new Error('Failed to publish reply to all relays');
-      }
-
-      // Save thread ID before clearing (for expanding after reload)
-      const threadIdToExpand = state.discussion.replyingToThread?.id;
-
-      // Clear form and close dialog
-      state.forms.discussion.replyContent = '';
-      state.openDialog = null;
-      state.discussion.replyingToThread = null;
-      state.discussion.replyingToComment = null;
-
-      // Reload state.discussions to show the new reply
-      await loadDiscussions();
-      
-      // Expand the thread if we were replying to a thread
-      if (threadIdToExpand) {
-        state.ui.expandedThreads.add(threadIdToExpand);
-        state.ui.expandedThreads = new Set(state.ui.expandedThreads); // Trigger reactivity
-      }
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to create reply';
-      console.error('Error creating reply:', err);
-    } finally {
-      state.creating.reply = false;
-    }
+    // Store nostrClient for use in other functions
+    const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
+    nostrClient = client;
+    
+    await createThreadReplyService(state, repoOwnerPubkeyDerived, {
+      loadDiscussions,
+      loadNostrLinks,
+      loadDiscussionEvents: loadDiscussionEvents as any
+    });
   }
 
   function toggleThread(threadId: string) {
@@ -1458,147 +1007,7 @@
   }
 
   async function loadDocumentation() {
-    if (state.loading.docs) return;
-    // Reset documentation when reloading
-    state.docs.html = null;
-    state.docs.content = null;
-    state.docs.kind = null;
-    
-    state.loading.docs = true;
-    try {
-      // Guard against SSR - $page store can only be accessed in component context
-      if (typeof window === 'undefined') return;
-      // Check if repo is private and user has access
-      const data = $page.data as typeof state.pageData;
-      if (repoIsPrivate) {
-        // Check access via API
-        const accessResponse = await fetch(`/api/repos/${state.npub}/${state.repo}/access`, {
-          headers: buildApiHeaders()
-        });
-        if (accessResponse.ok) {
-          const accessData = await accessResponse.json();
-          if (!accessData.canView) {
-            // User doesn't have access, don't load documentation
-            state.loading.docs = false;
-            return;
-          }
-        } else {
-          // Access check failed, don't load documentation
-          state.loading.docs = false;
-          return;
-        }
-      }
-      
-      const decoded = nip19.decode(state.npub);
-      if (decoded.type === 'npub') {
-        const repoOwnerPubkey = decoded.data as string;
-        const client = new NostrClient(DEFAULT_NOSTR_RELAYS);
-        
-        // First, get the repo announcement to find the documentation tag
-        const announcementEvents = await client.fetchEvents([
-          {
-            kinds: [KIND.REPO_ANNOUNCEMENT],
-            authors: [repoOwnerPubkeyDerived],
-            '#d': [state.repo],
-            limit: 1
-          }
-        ]);
-
-        if (announcementEvents.length === 0) {
-          state.loading.docs = false;
-          return;
-        }
-
-        const announcement = announcementEvents[0];
-        
-        // Look for documentation tag in the announcement
-        const documentationTag = announcement.tags.find(t => t[0] === 'documentation');
-        
-        state.docs.kind = null;
-        
-        if (documentationTag && documentationTag[1]) {
-          // Parse the a-tag format: kind:pubkey:identifier
-          const docAddress = documentationTag[1];
-          const parts = docAddress.split(':');
-          
-          if (parts.length >= 3) {
-            state.docs.kind = parseInt(parts[0]);
-            const docPubkey = parts[1];
-            const docIdentifier = parts.slice(2).join(':'); // In case identifier contains ':'
-            
-            // Fetch the documentation event
-            const docEvents = await client.fetchEvents([
-              {
-                kinds: [state.docs.kind],
-                authors: [docPubkey],
-                '#d': [docIdentifier],
-                limit: 1
-              }
-            ]);
-            
-            if (docEvents.length > 0) {
-              state.docs.content = docEvents[0].content || null;
-            } else {
-              console.warn('Documentation event not found:', docAddress);
-              state.docs.content = null;
-            }
-          } else {
-            console.warn('Invalid documentation tag format:', docAddress);
-            state.docs.content = null;
-          }
-        } else {
-          // No documentation tag, try to use announcement content as fallback
-          state.docs.content = announcement.content || null;
-          // Announcement is kind 30617, not a doc kind, so keep state.docs.kind as null
-        }
-        
-        // Render content based on kind: AsciiDoc for 30041 or 30818, Markdown otherwise
-        if (state.docs.content) {
-          // Check if we should use AsciiDoc parser (kinds 30041 or 30818)
-          const useAsciiDoc = state.docs.kind === 30041 || state.docs.kind === 30818;
-          
-          if (useAsciiDoc) {
-            // Use AsciiDoc parser
-            const Asciidoctor = (await import('@asciidoctor/core')).default;
-            const asciidoctor = Asciidoctor();
-            const converted = asciidoctor.convert(state.docs.content, {
-              safe: 'safe',
-              attributes: {
-                'source-highlighter': 'highlight.js'
-              }
-            });
-            // Convert to string if it's a Document object
-            state.docs.html = typeof converted === 'string' ? converted : String(converted);
-          } else {
-            // Use Markdown parser
-            const MarkdownIt = (await import('markdown-it')).default;
-            const hljsModule = await import('highlight.js');
-            const hljs = hljsModule.default || hljsModule;
-            
-            const md = new MarkdownIt({
-              highlight: function (str: string, lang: string): string {
-                if (lang && hljs.getLanguage(lang)) {
-                  try {
-                    return hljs.highlight(str, { language: lang }).value;
-                  } catch (__) {}
-                }
-                return '';
-              }
-            });
-            
-            state.docs.html = md.render(state.docs.content);
-          }
-        } else {
-          // No content found, clear HTML
-          state.docs.html = null;
-        }
-      }
-    } catch (err) {
-      console.error('Error state.loading.main documentation:', err);
-      state.docs.html = null;
-    } finally {
-      state.loading.docs = false;
-    }
+    await loadDocumentationService(state, repoOwnerPubkeyDerived, repoIsPrivate);
   }
 
   async function loadRepoImages() {
@@ -1974,35 +1383,7 @@
   }
 
   async function toggleBookmark() {
-    if (!state.user.pubkey || !state.metadata.address || !bookmarksService || state.loading.bookmark) return;
-    
-    state.loading.bookmark = true;
-    try {
-      // Get user's relays for publishing
-      const { getUserRelays } = await import('$lib/services/nostr/user-relays.js');
-      const allSearchRelays = [...new Set([...DEFAULT_NOSTR_SEARCH_RELAYS, ...DEFAULT_NOSTR_RELAYS])];
-      const fullRelayClient = new NostrClient(allSearchRelays);
-      const { outbox, inbox } = await getUserRelays(state.user.pubkey, fullRelayClient);
-      const userRelays = combineRelays(outbox.length > 0 ? outbox : inbox, DEFAULT_NOSTR_RELAYS);
-      
-      let success = false;
-      if (state.bookmark.isBookmarked) {
-        success = await bookmarksService.removeBookmark(state.user.pubkey, state.metadata.address, userRelays);
-      } else {
-        success = await bookmarksService.addBookmark(state.user.pubkey, state.metadata.address, userRelays);
-      }
-      
-      if (success) {
-        state.bookmark.isBookmarked = !state.bookmark.isBookmarked;
-      } else {
-        alert(`Failed to ${state.bookmark.isBookmarked ? 'remove' : 'add'} bookmark. Please try again.`);
-      }
-    } catch (err) {
-      console.error('Failed to toggle bookmark:', err);
-      alert(`Failed to ${state.bookmark.isBookmarked ? 'remove' : 'add'} bookmark: ${String(err)}`);
-    } finally {
-      state.loading.bookmark = false;
-    }
+    await toggleBookmarkService(state, bookmarksService);
   }
 
   async function copyEventId() {
@@ -2059,119 +1440,15 @@
   }
 
   async function checkMaintainerStatus() {
-    if (state.repoNotFound || !state.user.pubkey) {
-      state.maintainers.isMaintainer = false;
-      return;
-    }
-
-    state.loading.maintainerStatus = true;
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/maintainers?userPubkey=${encodeURIComponent(state.user.pubkey)}`);
-      if (response.ok) {
-        const data = await response.json();
-        state.maintainers.isMaintainer = data.state.maintainers.isMaintainer || false;
-      }
-    } catch (err) {
-      console.error('Failed to check maintainer status:', err);
-      state.maintainers.isMaintainer = false;
-    } finally {
-      state.loading.maintainerStatus = false;
-    }
+    await checkMaintainerStatusService(state);
   }
 
   async function loadAllMaintainers() {
-    if (state.repoNotFound || state.loading.maintainers) return;
-    
-    state.loading.maintainers = true;
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/maintainers`);
-      if (response.ok) {
-        const data = await response.json();
-        const owner = data.owner;
-        const maintainers = data.maintainers || [];
-        
-        // Create array with all maintainers, marking the owner
-        const allMaintainersList: Array<{ pubkey: string; isOwner: boolean }> = [];
-        const seen = new Set<string>();
-        const ownerLower = owner?.toLowerCase();
-        
-        // Process all maintainers, marking owner and deduplicating
-        for (const maintainer of maintainers) {
-          const maintainerLower = maintainer.toLowerCase();
-          
-          // Skip if we've already added this pubkey (case-insensitive check)
-          if (seen.has(maintainerLower)) {
-            continue;
-          }
-          
-          // Mark as seen
-          seen.add(maintainerLower);
-          
-          // Determine if this is the owner
-          const isOwner = ownerLower && maintainerLower === ownerLower;
-          
-          // Add to list
-          allMaintainersList.push({ 
-            pubkey: maintainer, 
-            isOwner: !!isOwner
-          });
-        }
-        
-        // Sort: owner first, then other maintainers
-        allMaintainersList.sort((a, b) => {
-          if (a.isOwner && !b.isOwner) return -1;
-          if (!a.isOwner && b.isOwner) return 1;
-          return 0;
-        });
-        
-        // Ensure owner is always included (in case they weren't in maintainers list)
-        if (owner && !seen.has(ownerLower)) {
-          allMaintainersList.unshift({ pubkey: owner, isOwner: true });
-        }
-        
-        state.maintainers.all = allMaintainersList;
-      }
-    } catch (err) {
-      console.error('Failed to load maintainers:', err);
-      state.maintainers.loaded = false; // Reset flag on state.error
-      // Fallback to pageData if available
-      if (repoOwnerPubkeyDerived) {
-        state.maintainers.all = [{ pubkey: repoOwnerPubkeyDerived, isOwner: true }];
-        if (repoMaintainers) {
-          for (const maintainer of repoMaintainers) {
-            if (maintainer.toLowerCase() !== repoOwnerPubkeyDerived.toLowerCase()) {
-              state.maintainers.all.push({ pubkey: maintainer, isOwner: false });
-            }
-          }
-        }
-      }
-    } finally {
-      state.loading.maintainers = false;
-    }
+    await loadAllMaintainersService(state, repoOwnerPubkeyDerived, repoMaintainers);
   }
 
   async function checkVerification() {
-    if (state.repoNotFound) return;
-    state.loading.verification = true;
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/verify`, {
-        headers: buildApiHeaders()
-      });
-      if (response.ok) {
-        const data = await response.json();
-        console.log('[Verification] Response:', data);
-        state.verification.status = data;
-      } else {
-        console.warn('[Verification] Response not OK:', response.status, response.statusText);
-        state.verification.status = { verified: false, error: `Verification check failed: ${response.status}` };
-      }
-    } catch (err) {
-      console.error('[Verification] Failed to check verification:', err);
-      state.verification.status = { verified: false, error: 'Failed to check verification' };
-    } finally {
-      state.loading.verification = false;
-      console.log('[Verification] Status after check:', state.verification.status);
-    }
+    await checkVerificationService(state);
   }
 
   async function generateAnnouncementFileForRepo() {
@@ -3195,426 +2472,55 @@
   }
 
   async function loadIssues() {
-    state.loading.issues = true;
-    state.error = null;
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/issues`, {
-        headers: buildApiHeaders()
-      });
-      if (response.ok) {
-        const data = await response.json();
-        state.issues = data.map((issue: { id: string; tags: string[][]; content: string; status?: string; pubkey: string; created_at: number; kind?: number }) => ({
-          id: issue.id,
-          subject: issue.tags.find((t: string[]) => t[0] === 'subject')?.[1] || 'Untitled',
-          content: issue.content,
-          status: issue.status || 'open',
-          author: issue.pubkey,
-          created_at: issue.created_at,
-          kind: issue.kind || KIND.ISSUE,
-          tags: issue.tags || []
-        }));
-        // Auto-select first issue if none selected
-        if (state.issues.length > 0 && !state.selected.issue) {
-          state.selected.issue = state.issues[0].id;
-          loadIssueReplies(state.issues[0].id);
-        }
-      } else {
-        // Handle non-OK responses
-        const errorText = await response.text().catch(() => response.statusText);
-        let errorMessage = `Failed to load state.issues: ${response.status} ${response.statusText}`;
-        try {
-          const errorData = JSON.parse(errorText);
-          if (errorData.message) {
-            errorMessage = errorData.message;
-          }
-        } catch {
-          // If parsing fails, use the text as-is
-          if (errorText) {
-            errorMessage = errorText;
-          }
-        }
-        console.error('[Issues] Failed to load:', errorMessage);
-        state.error = errorMessage;
-        // Don't clear state.issues array - keep existing state.issues if any
-        // state.issues = []; // Only clear if you want to show empty state on state.error
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to load state.issues';
-      console.error('[Issues] Error state.loading.main state.issues:', err);
-      state.error = errorMessage;
-    } finally {
-      state.loading.issues = false;
-    }
+    await loadIssuesService(state, {
+      loadIssues,
+      loadIssueReplies,
+      nostrClient
+    });
   }
 
   async function loadIssueReplies(issueId: string) {
-    state.loading.issueReplies = true;
-    try {
-      const replies = await nostrClient.fetchEvents([
-        {
-          kinds: [KIND.COMMENT],
-          '#e': [issueId],
-          limit: 100
-        }
-      ]) as NostrEvent[];
-      
-      state.issueReplies = replies.map(reply => ({
-        id: reply.id,
-        content: reply.content,
-        author: reply.pubkey,
-        created_at: reply.created_at,
-        tags: reply.tags || []
-      })).sort((a, b) => a.created_at - b.created_at);
-    } catch (err) {
-      console.error('[Issues] Error state.loading.main replies:', err);
-      state.issueReplies = [];
-    } finally {
-      state.loading.issueReplies = false;
-    }
+    await loadIssueRepliesService(issueId, state, {
+      loadIssues,
+      loadIssueReplies,
+      nostrClient
+    });
   }
 
   async function createIssue() {
-    if (!state.forms.issue.subject.trim() || !state.forms.issue.content.trim()) {
-      alert('Please enter a subject and content');
-      return;
-    }
-
-    if (!state.user.pubkey) {
-      alert('Please connect your NIP-07 extension');
-      return;
-    }
-
-    state.saving = true;
-    state.error = null;
-
-    try {
-      const { IssuesService } = await import('$lib/services/nostr/issues-service.js');
-      
-      const decoded = nip19.decode(state.npub);
-      if (decoded.type !== 'npub') {
-        throw new Error('Invalid npub format');
-      }
-      const repoOwnerPubkey = decoded.data as string;
-
-      // Get user's relays and combine with defaults
-      const tempClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
-      const { outbox } = await getUserRelays(state.user.pubkey, tempClient);
-      const combinedRelays = combineRelays(outbox);
-
-      const issuesService = new IssuesService(combinedRelays);
-      const issue = await issuesService.createIssue(
-        repoOwnerPubkey,
-        state.repo,
-        state.forms.issue.subject.trim(),
-        state.forms.issue.content.trim(),
-        state.forms.issue.labels.filter(l => l.trim())
-      );
-
-      state.openDialog = null;
-      state.forms.issue.subject = '';
-      state.forms.issue.content = '';
-      state.forms.issue.labels = [''];
-      await loadIssues();
-      alert('Issue created successfully!');
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to create issue';
-      console.error('Error creating issue:', err);
-    } finally {
-      state.saving = false;
-    }
+    await createIssueService(state, {
+      loadIssues,
+      loadIssueReplies,
+      nostrClient
+    });
   }
 
   async function updatePatchStatus(patchId: string, patchAuthor: string, status: string) {
-    if (!state.user.pubkey || !state.user.pubkeyHex) {
-      state.error = 'Please log in to update patch status';
-      return;
-    }
-
-    state.statusUpdates.patch[patchId] = true;
-    state.error = null;
-
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/patches`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          ...buildApiHeaders()
-        },
-        body: JSON.stringify({
-          patchId,
-          patchAuthor,
-          status
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `Failed to update patch status: ${response.statusText}`);
-      }
-
-      // Reload state.patches to get updated status
-      await loadPatches();
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to update patch status';
-      console.error('Error updating patch status:', err);
-    } finally {
-      state.statusUpdates.patch[patchId] = false;
-    }
+    await updatePatchStatusService(patchId, patchAuthor, status, state, { loadPatches });
   }
 
   async function updateIssueStatus(issueId: string, issueAuthor: string, status: 'open' | 'closed' | 'resolved' | 'draft') {
-    if (!state.user.pubkeyHex) {
-      alert('Please connect your NIP-07 extension');
-      return;
-    }
-
-    // Check if user is maintainer or issue author
-    const isAuthor = state.user.pubkeyHex === issueAuthor;
-    if (!state.maintainers.isMaintainer && !isAuthor) {
-      alert('Only repository maintainers or issue authors can update issue status');
-      return;
-    }
-
-    state.statusUpdates.issue = { ...state.statusUpdates.issue, [issueId]: true };
-    state.error = null;
-
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/issues`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          issueId,
-          issueAuthor,
-          status
-        })
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.state.error || 'Failed to update issue status');
-      }
-
-      await loadIssues();
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to update issue status';
-      console.error('Error updating issue status:', err);
-    } finally {
-      state.statusUpdates.issue = { ...state.statusUpdates.issue, [issueId]: false };
-    }
+    await updateIssueStatusService(issueId, issueAuthor, status, state, {
+      loadIssues,
+      loadIssueReplies,
+      nostrClient
+    });
   }
 
   async function loadPRs() {
-    state.loading.prs = true;
-    state.error = null;
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/prs`, {
-        headers: buildApiHeaders()
-      });
-      if (response.ok) {
-        const data = await response.json();
-        state.prs = data.map((pr: { id: string; tags: string[][]; content: string; status?: string; pubkey: string; created_at: number; commitId?: string; kind?: number }) => ({
-          id: pr.id,
-          subject: pr.tags.find((t: string[]) => t[0] === 'subject')?.[1] || 'Untitled',
-          content: pr.content,
-          status: pr.status || 'open',
-          author: pr.pubkey,
-          created_at: pr.created_at,
-          commitId: pr.tags.find((t: string[]) => t[0] === 'c')?.[1],
-          kind: pr.kind || KIND.PULL_REQUEST
-        }));
-      }
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to load pull requests';
-    } finally {
-      state.loading.prs = false;
-    }
+    await loadPRsService(state, { loadPRs });
   }
 
   async function createPR() {
-    if (!state.forms.pr.subject.trim() || !state.forms.pr.content.trim() || !state.forms.pr.commitId.trim()) {
-      alert('Please enter a subject, content, and commit ID');
-      return;
-    }
-
-    if (!state.user.pubkey) {
-      alert('Please connect your NIP-07 extension');
-      return;
-    }
-
-    state.saving = true;
-    state.error = null;
-
-    try {
-      const { PRsService } = await import('$lib/services/nostr/prs-service.js');
-      const { getGitUrl } = await import('$lib/config.js');
-      
-      const decoded = nip19.decode(state.npub);
-      if (decoded.type !== 'npub') {
-        throw new Error('Invalid npub format');
-      }
-      const repoOwnerPubkey = decoded.data as string;
-
-      // Get user's relays and combine with defaults
-      const tempClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
-      const { outbox } = await getUserRelays(state.user.pubkey, tempClient);
-      const combinedRelays = combineRelays(outbox);
-
-      const cloneUrl = getGitUrl(state.npub, state.repo);
-      const prsService = new PRsService(combinedRelays);
-      const pr = await prsService.createPullRequest(
-        repoOwnerPubkey,
-        state.repo,
-        state.forms.pr.subject.trim(),
-        state.forms.pr.content.trim(),
-        state.forms.pr.commitId.trim(),
-        cloneUrl,
-        state.forms.pr.branchName.trim() || undefined,
-        state.forms.pr.labels.filter(l => l.trim())
-      );
-
-      state.openDialog = null;
-      state.forms.pr.subject = '';
-      state.forms.pr.content = '';
-      state.forms.pr.commitId = '';
-      state.forms.pr.branchName = '';
-      state.forms.pr.labels = [''];
-      await loadPRs();
-      alert('Pull request created successfully!');
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to create pull request';
-      console.error('Error creating PR:', err);
-    } finally {
-      state.saving = false;
-    }
+    await createPRService(state, { loadPRs });
   }
 
   async function createPatch() {
-    if (!state.forms.patch.content.trim()) {
-      alert('Please enter patch content');
-      return;
-    }
-
-    if (!state.user.pubkey || !state.user.pubkeyHex) {
-      alert('Please connect your NIP-07 extension');
-      return;
-    }
-
-    state.creating.patch = true;
-    state.error = null;
-
-    try {
-      const decoded = nip19.decode(state.npub);
-      if (decoded.type !== 'npub') {
-        throw new Error('Invalid npub format');
-      }
-      const repoOwnerPubkey = decoded.data as string;
-      state.metadata.address = `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkey}:${state.repo}`;
-
-      // Get user's relays and combine with defaults
-      const tempClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
-      const { outbox } = await getUserRelays(state.user.pubkey, tempClient);
-      const combinedRelays = combineRelays(outbox);
-
-      // Create patch event (kind 1617)
-      const patchEventTemplate: Omit<NostrEvent, 'sig' | 'id'> = {
-        kind: KIND.PATCH,
-        pubkey: state.user.pubkeyHex,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [
-          ['a', state.metadata.address],
-          ['p', repoOwnerPubkey],
-          ['t', 'root']
-        ],
-        content: state.forms.patch.content.trim()
-      };
-
-      // Add subject if provided
-      if (state.forms.patch.subject.trim()) {
-        patchEventTemplate.tags.push(['subject', state.forms.patch.subject.trim()]);
-      }
-
-      // Sign the event using NIP-07
-      const signedEvent = await signEventWithNIP07(patchEventTemplate);
-
-      // Publish to all available relays
-      const publishClient = new NostrClient(combinedRelays);
-      const result = await publishClient.publishEvent(signedEvent, combinedRelays);
-
-      if (result.failed.length > 0 && result.success.length === 0) {
-        throw new Error('Failed to publish patch to all relays');
-      }
-
-      state.openDialog = null;
-      state.forms.patch.content = '';
-      state.forms.patch.subject = '';
-      alert('Patch created successfully!');
-      // Reload state.patches
-      await loadPatches();
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to create patch';
-      console.error('Error creating patch:', err);
-    } finally {
-      state.creating.patch = false;
-    }
+    await createPatchService(state, { loadPatches });
   }
 
   async function loadPatches() {
-    if (state.repoNotFound) return;
-    state.loading.patches = true;
-    state.error = null;
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/patches`, {
-        headers: buildApiHeaders()
-      });
-      if (response.ok) {
-        const data = await response.json();
-        state.patches = data.map((patch: { id: string; tags: string[][]; content: string; pubkey: string; created_at: number; kind?: number; status?: string }) => {
-          // Extract subject/title from various sources
-          let subject = patch.tags.find((t: string[]) => t[0] === 'subject')?.[1];
-          const description = patch.tags.find((t: string[]) => t[0] === 'description')?.[1];
-          const alt = patch.tags.find((t: string[]) => t[0] === 'alt')?.[1];
-          
-          // If no subject tag, try description or alt
-          if (!subject) {
-            if (description) {
-              subject = description.trim();
-            } else if (alt) {
-              // Remove "git patch: " prefix if present
-              subject = alt.replace(/^git patch:\s*/i, '').trim();
-            } else {
-              // Try to extract from patch content (git patch format)
-              const subjectMatch = patch.content.match(/^Subject:\s*\[PATCH[^\]]*\]\s*(.+)$/m);
-              if (subjectMatch) {
-                subject = subjectMatch[1].trim();
-              } else {
-                // Try simpler Subject: line
-                const simpleSubjectMatch = patch.content.match(/^Subject:\s*(.+)$/m);
-                if (simpleSubjectMatch) {
-                  subject = simpleSubjectMatch[1].trim();
-                }
-              }
-            }
-          }
-          
-          return {
-            id: patch.id,
-            subject: subject || 'Untitled',
-            content: patch.content,
-            status: patch.status || 'open',
-            author: patch.pubkey,
-            created_at: patch.created_at,
-            kind: patch.kind || KIND.PATCH,
-            description: description?.trim(),
-            tags: patch.tags || []
-          };
-        });
-      }
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to load state.patches';
-      console.error('Error state.loading.main state.patches:', err);
-    } finally {
-      state.loading.patches = false;
-    }
+    await loadPatchesService(state, { loadPatches });
   }
 
   async function loadPatchHighlights(patchId: string, patchAuthor: string) {
