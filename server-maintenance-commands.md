@@ -123,7 +123,9 @@ ps aux | grep -i plesk | grep -i defunct
 - Handle signals correctly
 - Prevent zombie processes
 
-## Immediate Server Fix
+## ⚠️ URGENT: Restart Service IMMEDIATELY ⚠️
+
+**Zombie count is increasing rapidly (3300 → 5940). Restart NOW to stop the bleeding.**
 
 **Option 1: Restart the GitRepublic service (RECOMMENDED)**
 ```bash
@@ -131,12 +133,25 @@ ps aux | grep -i plesk | grep -i defunct
 docker ps | grep gitrepublic
 # or
 systemctl list-units | grep -i gitrepublic
+# or find the process
+ps aux | grep "node build" | grep -v grep
 
-# Restart it (this will clean up zombies temporarily)
+# RESTART IT NOW (this will clean up zombies temporarily)
 docker restart <container-id>
 # or
 systemctl restart <service-name>
+# or if running directly
+kill -TERM <pid>  # Let systemd/docker restart it
 ```
+
+**After restart, monitor zombie count:**
+```bash
+watch -n 2 'ps aux | awk '\''$8 ~ /^Z/ { count++ } END { print "Zombies:", count+0 }'\'''
+```
+
+**If zombies continue to increase after restart:**
+- The code fix needs to be deployed
+- Check if there are other services spawning git processes
 
 **Option 2: Kill and let it restart (if managed by systemd/docker)**
 ```bash

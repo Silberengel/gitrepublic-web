@@ -10,6 +10,12 @@
   import TabsMenu from '$lib/components/TabsMenu.svelte';
   import NostrLinkRenderer from '$lib/components/NostrLinkRenderer.svelte';
   import TagsTab from './components/TagsTab.svelte';
+  import FilesTab from './components/FilesTab.svelte';
+  import HistoryTab from './components/HistoryTab.svelte';
+  import IssuesTab from './components/IssuesTab.svelte';
+  import PRsTab from './components/PRsTab.svelte';
+  import PatchesTab from './components/PatchesTab.svelte';
+  import DocsTab from './components/DocsTab.svelte';
   import { downloadRepository as downloadRepoUtil } from './utils/download.js';
   import { buildApiHeaders } from './utils/api-client.js';
   import '$lib/styles/repo.css';
@@ -5844,182 +5850,95 @@
       </div>
     {:else}
     <div class="repo-layout">
-      <!-- File Tree Sidebar -->
+      <!-- Files Tab -->
       {#if activeTab === 'files' && canViewRepo}
-      <aside class="file-tree" class:hide-on-mobile={!showFileListOnMobile && activeTab === 'files'}>
-        <div class="file-tree-header">
-          <TabsMenu 
-            activeTab={activeTab} 
-            {tabs} 
-            onTabChange={(tab) => activeTab = tab as typeof activeTab}
-          />
-          <h2>Files {#if isRepoCloned === false && canUseApiFallback}<span class="read-only-badge">Read-Only</span>{/if}</h2>
-          <button 
-            onclick={toggleWordWrap} 
-            class="word-wrap-button"
-            title={wordWrap ? 'Disable word wrap' : 'Enable word wrap'}
-            aria-label={wordWrap ? 'Disable word wrap' : 'Enable word wrap'}
-          >
-            {wordWrap ? 'Wrap' : 'No Wrap'}
-          </button>
-          <div class="file-tree-actions">
-            {#if pathStack.length > 0 || currentPath}
-              <button onclick={handleBack} class="back-button">← Back</button>
-            {/if}
-            {#if userPubkey && isMaintainer}
-              <button 
-                onclick={() => {
-                  if (!userPubkey || !isMaintainer || needsClone) return;
-                  showCreateFileDialog = true;
-                }} 
-                class="create-file-button"
-                disabled={needsClone}
-                title={needsClone ? cloneTooltip : 'Create a new file'}
-              >
-                <img src="/icons/plus.svg" alt="New File" class="icon" />
-              </button>
-            {/if}
-            <button 
-              onclick={() => showFileListOnMobile = !showFileListOnMobile} 
-              class="mobile-toggle-button"
-              title="Show file viewer"
-            >
-              <img src="/icons/arrow-right.svg" alt="Show file viewer" class="icon-inline" />
-            </button>
-          </div>
-        </div>
-        {#if loading && !currentFile}
-          <div class="loading">Loading files...</div>
-        {:else}
-          <ul class="file-list">
-            {#each files as file}
-              <li class="file-item" class:directory={file.type === 'directory'} class:selected={currentFile === file.path}>
-                <button onclick={() => handleFileClick(file)} class="file-button">
-                  {#if file.type === 'directory'}
-                    <img src="/icons/folder.svg" alt="Directory" class="icon-inline folder-icon" />
-                  {:else}
-                    <img src="/icons/file-text.svg" alt="File" class="icon-inline file-icon" />
-                  {/if}
-                  {file.name}
-                  {#if file.size !== undefined}
-                    <span class="file-size">({(file.size / 1024).toFixed(1)} KB)</span>
-                  {/if}
-                </button>
-                {#if userPubkey && isMaintainer && file.type === 'file'}
-                  <button 
-                    onclick={() => {
-                      if (needsClone) return;
-                      deleteFile(file.path);
-                    }} 
-                    class="delete-file-button" 
-                    disabled={needsClone}
-                    title={needsClone ? cloneTooltip : 'Delete file'}
-                  >
-                    <img src="/icons/x.svg" alt="Delete" class="icon-small" />
-                  </button>
-                {/if}
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </aside>
+        <FilesTab
+          {files}
+          {currentPath}
+          {currentFile}
+          {fileContent}
+          {fileLanguage}
+          {editedContent}
+          {hasChanges}
+          loading={loading && !currentFile}
+          error={error}
+          {pathStack}
+          onFileClick={handleFileClick}
+          onDirectoryClick={(path) => {
+            currentPath = path;
+            loadFiles(path);
+          }}
+          onNavigateBack={handleBack}
+          onContentChange={(content) => {
+            editedContent = content;
+            hasChanges = content !== fileContent;
+          }}
+          {isMaintainer}
+          readmeContent={readmeContent || null}
+          readmePath={readmePath || null}
+          {readmeHtml}
+          {showFilePreview}
+          {fileHtml}
+          {highlightedFileContent}
+          {isImageFile}
+          {imageUrl}
+          {wordWrap}
+          {supportsPreview}
+          onSave={() => {
+            if (!userPubkey || !isMaintainer || needsClone) return;
+            showCommitDialog = true;
+          }}
+          onTogglePreview={() => {
+            showFilePreview = !showFilePreview;
+            if (!showFilePreview && fileContent && currentFile) {
+              const ext = currentFile.split('.').pop() || '';
+              applySyntaxHighlighting(fileContent, ext).catch(err => console.error('Error applying syntax highlighting:', err));
+            }
+          }}
+          onCopyFileContent={copyFileContent}
+          onDownloadFile={downloadFile}
+          {copyingFile}
+          {saving}
+          {needsClone}
+          {cloneTooltip}
+          {branches}
+          {currentBranch}
+          {defaultBranch}
+          onBranchChange={(branch) => {
+            currentBranch = branch;
+            handleBranchChangeDirect(branch);
+          }}
+          {userPubkey}
+        />
       {/if}
 
-      <!-- Commit History View -->
+      <!-- History Tab -->
       {#if activeTab === 'history' && canViewRepo}
-      <aside class="history-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'history'}>
-        <div class="history-header">
-          <TabsMenu 
-            activeTab={activeTab} 
-            {tabs} 
-            onTabChange={(tab) => activeTab = tab as typeof activeTab}
-          />
-          <h2>Commits {#if isRepoCloned === false && canUseApiFallback}<span class="read-only-badge">Read-Only</span>{/if}</h2>
-          <button 
-            onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-            class="mobile-toggle-button"
-            title="Show content"
-          >
-            <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
-          </button>
-        </div>
-        {#if loadingCommits}
-          <div class="loading">Loading commits...</div>
-        {:else if commits.length > 0}
-          <ul class="commit-list">
-            {#each commits as commit}
-              {@const commitHash = commit.hash || (commit as any).sha || ''}
-              {@const verification = commit.verification}
-              {@const isVerifying = verifyingCommits.has(commitHash)}
-              {#if commitHash}
-                <li class="commit-item" class:selected={selectedCommit === commitHash}>
-                  <button onclick={() => viewDiff(commitHash)} class="commit-button">
-                    <div class="commit-header-row">
-                      <div class="commit-hash">{commitHash.slice(0, 7)}</div>
-                      {#if verification?.hasSignature}
-                        {#if verification.valid}
-                          <div class="commit-verification-group">
-                            <span 
-                              class="commit-verified-badge" 
-                              role="button"
-                              tabindex="0"
-                              title="Verified by {verification.npub || verification.pubkey?.slice(0, 16) || 'Nostr'}"
-                              onmouseenter={(e) => {
-                                if (verification) {
-                                  const tooltip = document.createElement('div');
-                                  tooltip.className = 'commit-verification-tooltip';
-                                  tooltip.innerHTML = `
-                                    <div><strong>Verified by:</strong> ${verification.npub || verification.pubkey || 'Unknown'}</div>
-                                    ${verification.authorName ? `<div><strong>Author:</strong> ${verification.authorName}${verification.authorEmail ? ` &lt;${verification.authorEmail}&gt;` : ''}</div>` : ''}
-                                    ${verification.timestamp ? `<div><strong>Signed:</strong> ${new Date(verification.timestamp * 1000).toLocaleString()}</div>` : ''}
-                                    ${verification.eventId ? `<div><strong>Event ID:</strong> ${verification.eventId.slice(0, 16)}...</div>` : ''}
-                                  `;
-                                  document.body.appendChild(tooltip);
-                                  const rect = (e.target as HTMLElement).getBoundingClientRect();
-                                  tooltip.style.left = `${rect.right + 10}px`;
-                                  tooltip.style.top = `${rect.top}px`;
-                                  const removeTooltip = () => {
-                                    tooltip.remove();
-                                    (e.target as HTMLElement).removeEventListener('mouseleave', removeTooltip);
-                                  };
-                                  (e.target as HTMLElement).addEventListener('mouseleave', removeTooltip);
-                                }
-                              }}
-                            >
-                              ✓ Verified
-                            </span>
-                            {#if verification.pubkey}
-                              <UserBadge pubkey={verification.pubkey} />
-                            {:else if verification.npub}
-                              <UserBadge pubkey={verification.npub} />
-                            {/if}
-                          </div>
-                        {:else}
-                          <span 
-                            class="commit-verification-badge invalid" 
-                            title="Verification failed: {verification.error || 'Unknown error'}"
-                          >
-                            ✗ Invalid
-                          </span>
-                        {/if}
-                      {:else if isVerifying}
-                        <span class="commit-verification-badge verifying" title="Verifying signature...">
-                          ⏳ Verifying...
-                        </span>
-                      {/if}
-                    </div>
-                    <div class="commit-message">{commit.message || 'No message'}</div>
-                    <div class="commit-meta">
-                      <span>{commit.author || 'Unknown'}</span>
-                      <span>{commit.date ? new Date(commit.date).toLocaleString() : 'Unknown date'}</span>
-                    </div>
-                  </button>
-                </li>
-              {/if}
-            {/each}
-          </ul>
-        {/if}
-      </aside>
+        <HistoryTab
+          {commits}
+          {selectedCommit}
+          loading={loadingCommits}
+          {error}
+          onSelect={(hash) => {
+            selectedCommit = hash;
+            viewDiff(hash);
+          }}
+          onVerify={async (hash) => {
+            verifyingCommits.add(hash);
+            try {
+              // Trigger verification logic - find the commit and verify
+              const commit = commits.find(c => (c.hash || (c as any).sha) === hash);
+              if (commit) {
+                await verifyCommit(hash);
+              }
+            } finally {
+              verifyingCommits.delete(hash);
+            }
+          }}
+          {verifyingCommits}
+          {showDiff}
+          {diffData}
+        />
       {/if}
 
       <!-- Tags View -->
@@ -6073,166 +5992,137 @@
       </aside>
       {/if}
 
-      <!-- Issues View -->
+      <!-- Issues Tab -->
       {#if activeTab === 'issues'}
-      <aside class="issues-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'issues'}>
-        <div class="issues-header">
-          <TabsMenu 
-            activeTab={activeTab} 
-            {tabs} 
-            onTabChange={(tab) => activeTab = tab as typeof activeTab}
-          />
-          <h2>Issues</h2>
-          {#if userPubkey}
-            <button onclick={() => {
-              if (!userPubkey) return;
-              showCreateIssueDialog = true;
-            }} class="create-issue-button" title="Create a new issue">
-              <img src="/icons/plus.svg" alt="New Issue" class="icon" />
-            </button>
-          {/if}
-          <button 
-            onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-            class="mobile-toggle-button"
-            title="Show content"
-          >
-            <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
-          </button>
-        </div>
-        {#if loadingIssues}
-          <div class="loading">Loading issues...</div>
-        {:else if issues.length > 0}
-          <ul class="issue-list">
-            {#each issues as issue}
-              <li class="issue-item" class:selected={selectedIssue === issue.id}>
-                <button 
-                  onclick={() => {
-                    selectedIssue = issue.id;
-                    loadIssueReplies(issue.id);
-                  }}
-                  class="issue-item-button"
-                >
-                  <div class="issue-header">
-                    <span class="issue-status" class:open={issue.status === 'open'} class:closed={issue.status === 'closed'} class:resolved={issue.status === 'resolved'}>
-                      {issue.status}
-                    </span>
-                  </div>
-                  <div class="issue-subject">{issue.subject}</div>
-                </button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </aside>
+        <IssuesTab
+          {issues}
+          {selectedIssue}
+          loading={loadingIssues}
+          {error}
+          onSelect={(id) => {
+            selectedIssue = id;
+            loadIssueReplies(id);
+          }}
+          onStatusUpdate={async (id, status) => {
+            // Find issue and update status
+            const issue = issues.find(i => i.id === id);
+            if (issue) {
+              await updateIssueStatus(id, issue.author, status as 'open' | 'closed' | 'resolved' | 'draft');
+              await loadIssues();
+            }
+          }}
+          {issueReplies}
+          loadingReplies={loadingIssueReplies}
+        />
       {/if}
 
-      <!-- Pull Requests View -->
+      <!-- Pull Requests Tab -->
       {#if activeTab === 'prs'}
-      <aside class="prs-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'prs'}>
-        <div class="prs-header">
-          <TabsMenu 
-            activeTab={activeTab} 
-            {tabs} 
-            onTabChange={(tab) => activeTab = tab as typeof activeTab}
-          />
-          <h2>Pull Requests</h2>
-          {#if userPubkey}
-            <button onclick={() => {
-              if (!userPubkey) return;
-              showCreatePRDialog = true;
-            }} class="create-pr-button" title="Create a new pull request">
-              <img src="/icons/plus.svg" alt="New PR" class="icon" />
-            </button>
-          {/if}
-          <button 
-            onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-            class="mobile-toggle-button"
-            title="Show content"
-          >
-            <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
-          </button>
-        </div>
-        {#if loadingPRs}
-          <div class="loading">Loading pull requests...</div>
-        {:else if prs.length > 0}
-          <ul class="pr-list">
-            {#each prs as pr}
-              <li class="pr-item">
-                <div class="pr-header">
-                  <span class="pr-status" class:open={pr.status === 'open'} class:closed={pr.status === 'closed'} class:merged={pr.status === 'merged'}>
-                    {pr.status}
-                  </span>
-                  <span class="pr-subject">{pr.subject}</span>
-                </div>
-                <div class="pr-meta">
-                  <span>#{pr.id.slice(0, 7)}</span>
-                  {#if pr.commitId}
-                    <span class="pr-commit">Commit: {pr.commitId.slice(0, 7)}</span>
-                  {/if}
-                  <span>{new Date(pr.created_at * 1000).toLocaleDateString()}</span>
-                  <EventCopyButton eventId={pr.id} kind={pr.kind} pubkey={pr.author} />
-                </div>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </aside>
+        <PRsTab
+          {prs}
+          selectedPR={selectedPR || null}
+          loading={loadingPRs}
+          {error}
+          onSelect={(id) => {
+            selectedPR = id;
+          }}
+          onStatusUpdate={async (id, status) => {
+            // Find PR and update status - similar to updateIssueStatus
+            const pr = prs.find(p => p.id === id);
+            if (pr && userPubkeyHex) {
+              // Check if user is maintainer or PR author
+              const isAuthor = userPubkeyHex === pr.author;
+              if (!isMaintainer && !isAuthor) {
+                alert('Only repository maintainers or PR authors can update PR status');
+                return;
+              }
+              
+              try {
+                const response = await fetch(`/api/repos/${npub}/${repo}/prs`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    prId: id,
+                    prAuthor: pr.author,
+                    status
+                  })
+                });
+                
+                if (!response.ok) {
+                  const data = await response.json();
+                  throw new Error(data.error || 'Failed to update PR status');
+                }
+                
+                await loadPRs();
+              } catch (err) {
+                error = err instanceof Error ? err.message : 'Failed to update PR status';
+                console.error('Error updating PR status:', err);
+              }
+            }
+          }}
+        />
       {/if}
 
-      <!-- Patches View -->
+      <!-- Patches Tab -->
       {#if activeTab === 'patches'}
-      <aside class="patches-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'patches'}>
-        <div class="patches-header">
-          <TabsMenu 
-            activeTab={activeTab} 
-            {tabs} 
-            onTabChange={(tab) => activeTab = tab as typeof activeTab}
-          />
-          <h2>Patches</h2>
-          {#if userPubkey}
-            <button 
-              onclick={() => showCreatePatchDialog = true}
-              class="create-patch-button"
-              title="Create a new patch"
-            >
-              <img src="/icons/plus.svg" alt="New Patch" class="icon" />
-            </button>
-          {/if}
-          <button 
-            onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-            class="mobile-toggle-button"
-            title="Show content"
-          >
-            <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
-          </button>
-        </div>
-        {#if loadingPatches}
-          <div class="loading">Loading patches...</div>
-        {:else if patches.length > 0}
-          <ul class="patch-list">
-            {#each patches as patch}
-              <li class="patch-item" class:selected={selectedPatch === patch.id}>
-                <button 
-                  onclick={() => selectedPatch = patch.id}
-                  class="patch-item-button"
-                >
-                  <div class="patch-header">
-                    <span class="patch-status" class:open={patch.status === 'open'} class:closed={patch.status === 'closed'} class:applied={patch.status === 'applied'} class:draft={patch.status === 'draft'}>
-                      {patch.status}
-                    </span>
-                    <span class="patch-subject">{patch.subject}</span>
-                  </div>
-                  <div class="patch-meta">
-                    <span>#{patch.id.slice(0, 7)}</span>
-                    <span>{new Date(patch.created_at * 1000).toLocaleDateString()}</span>
-                    <EventCopyButton eventId={patch.id} kind={patch.kind} pubkey={patch.author} />
-                  </div>
-                </button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </aside>
+        <PatchesTab
+          {patches}
+          {selectedPatch}
+          loading={loadingPatches}
+          {error}
+          onSelect={(id) => {
+            selectedPatch = id;
+          }}
+          onApply={async (id) => {
+            applying[id] = true;
+            try {
+              const patch = patches.find(p => p.id === id);
+              if (!patch) {
+                throw new Error('Patch not found');
+              }
+              
+              if (!userPubkey || !isMaintainer || needsClone) {
+                alert('Only maintainers can apply patches');
+                return;
+              }
+              
+              if (!confirm('Apply this patch to the repository? This will create a commit with the patch changes.')) {
+                return;
+              }
+              
+              const authorEmail = await fetchUserEmail();
+              const authorName = await fetchUserName();
+              
+              const response = await fetch(`/api/repos/${npub}/${repo}/patches/${id}/apply`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  ...buildApiHeaders()
+                },
+                body: JSON.stringify({
+                  commitMessage: `Apply patch ${id.slice(0, 8)}: ${patch.subject}`,
+                  authorName,
+                  authorEmail,
+                  branch: currentBranch || defaultBranch || 'main'
+                })
+              });
+              
+              if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.message || 'Failed to apply patch');
+              }
+              
+              await loadPatches();
+              alert('Patch applied successfully!');
+            } catch (err) {
+              error = err instanceof Error ? err.message : 'Failed to apply patch';
+              console.error('Error applying patch:', err);
+            } finally {
+              applying[id] = false;
+            }
+          }}
+          {applying}
+        />
       {/if}
 
       <!-- Discussions View -->
@@ -6298,271 +6188,19 @@
       </aside>
       {/if}
 
-      <!-- Docs View -->
+      <!-- Docs Tab -->
       {#if activeTab === 'docs'}
-      <aside class="docs-sidebar" class:hide-on-mobile={!showLeftPanelOnMobile && activeTab === 'docs'}>
-        <div class="docs-header">
-          <TabsMenu 
-            activeTab={activeTab} 
-            {tabs} 
-            onTabChange={(tab) => activeTab = tab as typeof activeTab}
-          />
-          <h2>Docs</h2>
-          <button 
-            onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-            class="mobile-toggle-button"
-            title="Show content"
-          >
-            <img src="/icons/arrow-right.svg" alt="Show content" class="icon-inline" />
-          </button>
-        </div>
-      </aside>
+        <DocsTab
+          {npub}
+          {repo}
+          currentBranch={currentBranch || null}
+          relays={[...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS]}
+        />
       {/if}
 
-      <!-- Editor Area / Diff View / README -->
-      <div class="editor-area" class:hide-on-mobile={(showFileListOnMobile && activeTab === 'files') || (showLeftPanelOnMobile && activeTab !== 'files')}>
-        {#if activeTab === 'files' && readmeContent && !currentFile}
-          <div class="readme-section">
-            <div class="readme-header">
-              <h3>README</h3>
-              <div class="readme-actions">
-                {#if readmePath && supportsPreview((readmePath.split('.').pop() || '').toLowerCase())}
-                  <button 
-                    onclick={() => {
-                      showFilePreview = !showFilePreview;
-                    }}
-                    class="preview-toggle-button"
-                    title={showFilePreview ? 'Show raw' : 'Show preview'}
-                  >
-                    {showFilePreview ? 'Raw' : 'Preview'}
-                  </button>
-                {/if}
-                <a href={`/api/repos/${npub}/${repo}/raw?path=${readmePath}`} target="_blank" class="raw-link">View Raw</a>
-                <button 
-                  type="button"
-                  class="download-link"
-                  onclick={async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    e.stopImmediatePropagation();
-                          await downloadRepository();
-                  }}
-                >Download ZIP</button>
-                <button 
-                  onclick={() => showFileListOnMobile = !showFileListOnMobile} 
-                  class="mobile-toggle-button"
-                  title="Show file list"
-                >
-                  <img src="/icons/arrow-right.svg" alt="Show file list" class="icon-inline mobile-toggle-left" />
-                </button>
-              </div>
-            </div>
-            {#if loadingReadme}
-              <div class="loading">Loading README...</div>
-            {:else if showFilePreview && readmeHtml && readmeHtml.trim()}
-              <div class="readme-content markdown">
-                {@html readmeHtml}
-              </div>
-            {:else if readmeContent}
-              <div class="readme-content">
-                <pre><code class="hljs language-text">{readmeContent}</code></pre>
-              </div>
-            {/if}
-          </div>
-        {/if}
+      <!-- Files tab content is now handled by FilesTab component -->
 
-        {#if activeTab === 'files' && currentFile}
-          <div class="editor-header">
-            <span class="file-path">{currentFile}</span>
-            <div class="editor-actions">
-              {#if branches.length > 0 && isMaintainer}
-                <select 
-                  bind:value={currentBranch} 
-                  class="branch-selector" 
-                  disabled={saving || needsClone} 
-                  title="Select branch"
-                  onchange={() => {
-                    // Use the existing handleBranchChange function
-                    handleBranchChangeDirect(currentBranch || '');
-                  }}
-                >
-                  {#each branches as branch}
-                    {@const branchName = typeof branch === 'string' ? branch : branch.name}
-                    <option value={branchName}>{branchName}{#if branchName === defaultBranch} (default){/if}</option>
-                  {/each}
-                </select>
-              {:else if currentBranch && isMaintainer}
-                <span class="branch-display" title="Current branch">{currentBranch}</span>
-              {/if}
-              {#if hasChanges}
-                <span class="unsaved-indicator">● Unsaved changes</span>
-              {/if}
-              {#if currentFile && supportsPreview((currentFile.split('.').pop() || '').toLowerCase()) && !isMaintainer}
-                <button 
-                  onclick={() => {
-                    showFilePreview = !showFilePreview;
-                    if (!showFilePreview && fileContent && currentFile) {
-                      // When switching to raw, apply syntax highlighting
-                      const ext = currentFile.split('.').pop() || '';
-                      applySyntaxHighlighting(fileContent, ext).catch(err => console.error('Error applying syntax highlighting:', err));
-                    }
-                  }}
-                  class="preview-toggle-button"
-                  title={showFilePreview ? 'Show raw' : 'Show preview'}
-                >
-                  {showFilePreview ? 'Raw' : 'Preview'}
-                </button>
-              {/if}
-              {#if currentFile && fileContent}
-                <button 
-                  onclick={(e) => copyFileContent(e)}
-                  disabled={copyingFile}
-                  class="file-action-button"
-                  title="Copy raw content to clipboard"
-                >
-                  <img src="/icons/copy.svg" alt="Copy" class="icon-inline" />
-                </button>
-                <button 
-                  onclick={downloadFile}
-                  class="file-action-button"
-                  title="Download file"
-                >
-                  <img src="/icons/download.svg" alt="Download" class="icon-inline" />
-                </button>
-              {/if}
-              {#if isMaintainer}
-                <button 
-                  onclick={() => {
-                    if (!userPubkey || !isMaintainer || needsClone) return;
-                    showCommitDialog = true;
-                  }} 
-                  disabled={!hasChanges || saving || needsClone} 
-                  class="save-button"
-                  title={needsClone ? cloneTooltip : (hasChanges ? 'Save changes' : 'No changes to save')}
-                >
-                  {saving ? 'Saving...' : 'Save'}
-                </button>
-              {:else if userPubkey}
-                <span class="non-maintainer-notice">Only maintainers can edit files. Submit a PR instead.</span>
-              {/if}
-              <button 
-                onclick={() => showFileListOnMobile = !showFileListOnMobile} 
-                class="mobile-toggle-button"
-                title="Show file list"
-              >
-                <img src="/icons/arrow-right.svg" alt="Show file list" class="icon-inline mobile-toggle-left" />
-              </button>
-            </div>
-          </div>
-          
-          {#if loading}
-            <div class="loading">Loading file...</div>
-          {:else}
-            <div class="editor-container">
-              {#if isMaintainer}
-                <CodeEditor 
-                  content={editedContent} 
-                  language={fileLanguage}
-                  onChange={handleContentChange}
-                  readOnly={needsClone || (isRepoCloned === false && canUseApiFallback)}
-                />
-              {:else}
-                <div class="read-only-editor" class:word-wrap={wordWrap}>
-                  {#if isImageFile && imageUrl}
-                    <!-- Image file: display as image -->
-                    <div class="file-preview image-preview">
-                      <img src={imageUrl} alt={currentFile?.split('/').pop() || 'Image'} class="file-image" />
-                    </div>
-                  {:else if currentFile && showFilePreview && fileHtml && supportsPreview((currentFile.split('.').pop() || '').toLowerCase())}
-                    <!-- Preview mode: show rendered HTML -->
-                    <div class="file-preview markdown">
-                      {@html fileHtml}
-                    </div>
-                  {:else if highlightedFileContent}
-                    <!-- Raw mode: show syntax highlighted code -->
-                    {@html highlightedFileContent}
-                  {:else}
-                    <!-- Fallback: plain text -->
-                    <pre><code class="hljs">{fileContent}</code></pre>
-                  {/if}
-                </div>
-              {/if}
-            </div>
-          {/if}
-        {:else if activeTab === 'files'}
-          <div class="content-header-mobile">
-            <button 
-              onclick={() => showFileListOnMobile = !showFileListOnMobile} 
-              class="mobile-toggle-button"
-              title="Show file list"
-            >
-              <img src="/icons/arrow-right.svg" alt="Show file list" class="icon-inline mobile-toggle-left" />
-            </button>
-          </div>
-          <div class="empty-state">
-            <p>Select a file from the sidebar to view and edit it</p>
-          </div>
-        {/if}
-
-        {#if activeTab === 'history'}
-          <div class="commits-content" class:hide-on-mobile={showLeftPanelOnMobile && activeTab === 'history'}>
-            <div class="content-header-mobile">
-              <button 
-                onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-                class="mobile-toggle-button"
-                title="Show list"
-              >
-                <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
-              </button>
-            </div>
-            {#if selectedCommit}
-              {@const commit = commits.find(c => (c.hash || (c as any).sha) === selectedCommit)}
-              {#if commit}
-                <div class="commit-detail">
-                  <div class="commit-detail-header">
-                    <h3>{commit.message || 'No message'}</h3>
-                    <button onclick={() => { showDiff = false; selectedCommit = null; }} class="close-button">×</button>
-                  </div>
-                  <div class="commit-meta-detail">
-                    <span>#{selectedCommit.slice(0, 7)}</span>
-                    <span>{commit.author || 'Unknown'}</span>
-                    <span>{commit.date ? new Date(commit.date).toLocaleString() : 'Unknown date'}</span>
-                  </div>
-                  {#if loadingCommits}
-                    <div class="loading">Loading diff...</div>
-                  {:else if showDiff && diffData.length > 0}
-                    <div class="diff-view">
-                      {#each diffData as diff}
-                        <div class="diff-file">
-                          <div class="diff-file-header">
-                            <span class="diff-file-name">{diff.file}</span>
-                            <span class="diff-stats">
-                              <span class="additions">+{diff.additions}</span>
-                              <span class="deletions">-{diff.deletions}</span>
-                            </span>
-                          </div>
-                          <pre class="diff-content"><code>{diff.diff}</code></pre>
-                        </div>
-                      {/each}
-                    </div>
-                  {:else if showDiff}
-                    <div class="empty-state">
-                      <p>No diff data available</p>
-                    </div>
-                  {:else}
-                    <div class="empty-state">
-                      <p>Loading diff...</p>
-                    </div>
-                  {/if}
-                </div>
-              {/if}
-            {:else}
-              <div class="empty-state">
-                <p>Select a commit from the sidebar to view details</p>
-              </div>
-            {/if}
-          </div>
-        {/if}
+        <!-- History tab content is now handled by HistoryTab component -->
 
         <!-- Tags content is now handled by TagsTab component -->
 
@@ -6628,268 +6266,11 @@
           </div>
         {/if}
 
-        {#if activeTab === 'issues'}
-          <div class="issues-content" class:hide-on-mobile={showLeftPanelOnMobile && activeTab === 'issues'}>
-            <div class="content-header-mobile">
-              <button 
-                onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-                class="mobile-toggle-button"
-                title="Show list"
-              >
-                <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
-              </button>
-            </div>
-            {#if loadingIssues}
-              <div class="empty-state">
-                <p>Loading issues...</p>
-              </div>
-            {:else if error}
-              <div class="empty-state error-state">
-                <p>Error loading issues: {error}</p>
-                <button onclick={loadIssues} class="retry-button">Retry</button>
-              </div>
-            {:else if issues.length === 0}
-              <div class="empty-state">
-                <p>No issues found. Create one to get started!</p>
-              </div>
-            {:else if selectedIssue}
-              {@const issue = issues.find(i => i.id === selectedIssue)}
-              {#if issue}
-                <div class="issue-detail">
-                  <div class="issue-detail-header">
-                    <h3>{issue.subject}</h3>
-                    {#if userPubkeyHex && (isMaintainer || userPubkeyHex === repoOwnerPubkeyDerived || userPubkeyHex === issue.author)}
-                      <select
-                        value={issue.status}
-                        onchange={(e) => {
-                          const target = e.target as HTMLSelectElement;
-                          if (target) updateIssueStatus(issue.id, issue.author, target.value as 'open' | 'closed' | 'resolved' | 'draft');
-                        }}
-                        disabled={updatingIssueStatus[issue.id]}
-                        class="status-dropdown"
-                        class:open={issue.status === 'open'}
-                        class:closed={issue.status === 'closed'}
-                        class:resolved={issue.status === 'resolved'}
-                        class:draft={issue.status === 'draft'}
-                      >
-                        <option value="open">Open</option>
-                        <option value="resolved">Resolved</option>
-                        <option value="closed">Closed</option>
-                        <option value="draft">Draft</option>
-                      </select>
-                    {:else}
-                      <span class="issue-status" class:open={issue.status === 'open'} class:closed={issue.status === 'closed'} class:resolved={issue.status === 'resolved'}>
-                        {issue.status}
-                      </span>
-                    {/if}
-                  </div>
-                  <div class="issue-meta-detail">
-                    <span>#{issue.id.slice(0, 7)}</span>
-                    <span>Created {new Date(issue.created_at * 1000).toLocaleString()}</span>
-                    <EventCopyButton eventId={issue.id} kind={issue.kind} pubkey={issue.author} />
-                  </div>
-                  <div class="issue-body">
-                    {@html issue.content.replace(/\n/g, '<br>')}
-                  </div>
-                  
-                  
-                  <div class="issue-replies">
-                    <h4>Replies ({issueReplies.length})</h4>
-                    {#if loadingIssueReplies}
-                      <div class="loading">Loading replies...</div>
-                    {:else if issueReplies.length === 0}
-                      <div class="empty-state">
-                        <p>No replies yet.</p>
-                      </div>
-                    {:else}
-                      {#each issueReplies as reply}
-                        <div class="issue-reply">
-                          <div class="reply-header">
-                            <UserBadge pubkey={reply.author} />
-                            <span class="reply-date">{new Date(reply.created_at * 1000).toLocaleString()}</span>
-                            <EventCopyButton eventId={reply.id} kind={KIND.COMMENT} pubkey={reply.author} />
-                          </div>
-                          <div class="reply-body">
-                            {@html reply.content.replace(/\n/g, '<br>')}
-                          </div>
-                        </div>
-                      {/each}
-                    {/if}
-                  </div>
-                </div>
-              {/if}
-            {:else}
-              <div class="empty-state">
-                <p>Select an issue to view details</p>
-              </div>
-            {/if}
-          </div>
-        {/if}
+        <!-- Issues tab content is now handled by IssuesTab component -->
 
-        {#if activeTab === 'prs'}
-          <div class="prs-content" class:hide-on-mobile={showLeftPanelOnMobile && activeTab === 'prs'}>
-            <div class="content-header-mobile">
-              <button 
-                onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-                class="mobile-toggle-button"
-                title="Show list"
-              >
-                <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
-              </button>
-            </div>
-            {#if prs.length === 0}
-              <div class="empty-state">
-                <p>No pull requests found. Create one to get started!</p>
-              </div>
-            {:else if selectedPR}
-              {#each prs.filter(p => p.id === selectedPR) as pr}
-                {@const decoded = nip19.decode(npub)}
-                {#if decoded.type === 'npub'}
-                  {@const repoOwnerPubkey = decoded.data as string}
-                  <PRDetail
-                    {pr}
-                    {npub}
-                    {repo}
-                    {repoOwnerPubkey}
-                    isMaintainer={isMaintainer}
-                    userPubkeyHex={userPubkeyHex ?? undefined}
-                    onStatusUpdate={loadPRs}
-                  />
-                  <button onclick={() => selectedPR = null} class="back-btn">← Back to PR List</button>
-                {/if}
-              {/each}
-            {:else}
-              {#each prs as pr}
-                <div 
-                  class="pr-detail" 
-                  role="button"
-                  tabindex="0"
-                  onclick={() => selectedPR = pr.id}
-                  onkeydown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      selectedPR = pr.id;
-                    }
-                  }}
-                  style="cursor: pointer;">
-                  <h3>{pr.subject}</h3>
-                  <div class="pr-meta-detail">
-                    <span class="pr-status" class:open={pr.status === 'open'} class:closed={pr.status === 'closed'} class:merged={pr.status === 'merged'}>
-                      {pr.status}
-                    </span>
-                    {#if pr.commitId}
-                      <span>Commit: {pr.commitId.slice(0, 7)}</span>
-                    {/if}
-                    <span>Created {new Date(pr.created_at * 1000).toLocaleString()}</span>
-                  </div>
-                  <div class="pr-body">
-                    {@html pr.content.replace(/\n/g, '<br>')}
-                  </div>
-                </div>
-              {/each}
-            {/if}
-          </div>
-        {/if}
+        <!-- PRs tab content is now handled by PRsTab component -->
 
-        {#if activeTab === 'patches'}
-          <div class="patches-content" class:hide-on-mobile={showLeftPanelOnMobile && activeTab === 'patches'}>
-            <div class="content-header-mobile">
-              <button 
-                onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-                class="mobile-toggle-button"
-                title="Show list"
-              >
-                <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
-              </button>
-            </div>
-            {#if patches.length === 0}
-              <div class="empty-state">
-                <p>No patches found. Create one to get started!</p>
-              </div>
-            {:else if selectedPatch}
-              {#each patches.filter(p => p.id === selectedPatch) as patch}
-                <div class="patch-detail">
-                  <div class="patch-detail-header">
-                    <h3>{patch.subject}</h3>
-                    {#if userPubkey && (isMaintainer || userPubkeyHex === repoOwnerPubkeyDerived || userPubkeyHex === patch.author)}
-                      <select
-                        value={patch.status}
-                        onchange={(e) => {
-                          const target = e.target as HTMLSelectElement;
-                          if (target) updatePatchStatus(patch.id, patch.author, target.value);
-                        }}
-                        disabled={updatingPatchStatus[patch.id]}
-                        class="status-dropdown"
-                        class:open={patch.status === 'open'}
-                        class:closed={patch.status === 'closed'}
-                        class:applied={patch.status === 'applied'}
-                        class:draft={patch.status === 'draft'}
-                      >
-                        <option value="open">Open</option>
-                        <option value="applied">Applied</option>
-                        <option value="closed">Closed</option>
-                        <option value="draft">Draft</option>
-                      </select>
-                    {:else}
-                      <span class="patch-status" class:open={patch.status === 'open'} class:closed={patch.status === 'closed'} class:applied={patch.status === 'applied'} class:draft={patch.status === 'draft'}>
-                        {patch.status}
-                      </span>
-                    {/if}
-                  </div>
-                  <div class="patch-meta-detail">
-                    <span>#{patch.id.slice(0, 7)}</span>
-                    <span>Created {new Date(patch.created_at * 1000).toLocaleString()}</span>
-                    <EventCopyButton eventId={patch.id} kind={patch.kind} pubkey={patch.author} />
-                    {#if (isMaintainer || userPubkeyHex === repoOwnerPubkeyDerived) && isRepoCloned}
-                      <button 
-                        onclick={async () => {
-                          if (!confirm('Apply this patch to the repository? This will create a commit with the patch changes.')) return;
-                          try {
-                            const response = await fetch(`/api/repos/${npub}/${repo}/patches/${patch.id}/apply`, {
-                              method: 'POST',
-                              headers: {
-                                'Content-Type': 'application/json',
-                                ...buildApiHeaders()
-                              },
-                              body: JSON.stringify({
-                                branch: currentBranch || 'main',
-                                commitMessage: `Apply patch ${patch.id.slice(0, 8)}: ${patch.subject}`
-                              })
-                            });
-                            if (response.ok) {
-                              const data = await response.json();
-                              alert(`Patch applied successfully! Commit: ${data.commitHash.slice(0, 7)}`);
-                              // Reload files to show changes
-                              if (activeTab === 'files') {
-                                loadFiles(currentPath);
-                              }
-                            } else {
-                              const errorData = await response.json();
-                              alert(`Failed to apply patch: ${errorData.message || 'Unknown error'}`);
-                            }
-                          } catch (err) {
-                            alert(`Failed to apply patch: ${err instanceof Error ? err.message : 'Unknown error'}`);
-                          }
-                        }}
-                        class="apply-patch-button"
-                        title="Apply this patch to the repository"
-                      >
-                        Apply Patch
-                      </button>
-                    {/if}
-                  </div>
-                  {#if patch.description && patch.description !== patch.subject}
-                    <div class="patch-description">{patch.description}</div>
-                  {/if}
-                  <div class="patch-body">
-                    <div class="patch-content-wrapper">
-                      <CodeEditor
-                        bind:this={patchEditor}
-                        content={patch.content}
-                        language="text"
-                        readOnly={true}
-                        onSelection={handlePatchCodeSelection}
-                      />
+        <!-- Patches tab content is now handled by PatchesTab component -->
                     </div>
                   </div>
                   
@@ -7236,34 +6617,7 @@
           </div>
         {/if}
 
-        {#if activeTab === 'docs'}
-          <div class="docs-content" class:hide-on-mobile={showLeftPanelOnMobile && activeTab === 'docs'}>
-            <div class="content-header-mobile">
-              <button 
-                onclick={() => showLeftPanelOnMobile = !showLeftPanelOnMobile} 
-                class="mobile-toggle-button"
-                title="Show list"
-              >
-                <img src="/icons/arrow-right.svg" alt="Show list" class="icon-inline mobile-toggle-left" />
-              </button>
-            </div>
-            {#if loadingDocs}
-              <div class="loading">Loading documentation...</div>
-            {:else if documentationHtml}
-              <div class="documentation-body">
-                {@html documentationHtml}
-              </div>
-            {:else if documentationContent === null}
-              <div class="empty-state">
-                <p>No documentation found for this repository.</p>
-              </div>
-            {:else}
-              <div class="empty-state">
-                <p>Documentation content is empty.</p>
-              </div>
-            {/if}
-          </div>
-        {/if}
+        <!-- Docs tab content is now handled by DocsTab component -->
       </div>
     </div>
     {/if}
