@@ -382,7 +382,7 @@ export const POST: RequestHandler = createRepoPostHandler(
     }
     // If repo has no branches, sourceBranch will be undefined/null, which createBranch will handle correctly
     
-    await fileManager.createBranch(context.npub, context.repo, branchName, sourceBranch, announcement);
+    await fileManager.createBranch(context.npub, context.repo, branchName, sourceBranch);
     return json({ success: true, message: 'Branch created successfully' });
   },
   { operation: 'createBranch', requireRepoExists: false } // Allow creating branches in empty repos

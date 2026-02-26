@@ -5,21 +5,33 @@
   
   import StatusTabLayout from './StatusTabLayout.svelte';
   
-  export let patches: Array<{
-    id: string;
-    subject: string;
-    content: string;
-    status: string;
-    author: string;
-    created_at: number;
-    [key: string]: any;
-  }> = [];
-  export let selectedPatch: string | null = null;
-  export let loading: boolean = false;
-  export let error: string | null = null;
-  export let onSelect: (id: string) => void = () => {};
-  export let onApply: (id: string) => void = () => {};
-  export let applying: Record<string, boolean> = {};
+  interface Props {
+    patches: Array<{
+      id: string;
+      subject: string;
+      content: string;
+      status: string;
+      author: string;
+      created_at: number;
+      [key: string]: any;
+    }>;
+    selectedPatch?: string | null;
+    loading?: boolean;
+    error?: string | null;
+    onSelect?: (id: string) => void;
+    onApply?: (id: string) => void;
+    applying?: Record<string, boolean>;
+  }
+  
+  let {
+    patches = [],
+    selectedPatch = null,
+    loading = false,
+    error = null,
+    onSelect = () => {},
+    onApply = () => {},
+    applying = {}
+  }: Props = $props();
   
   const items = $derived(patches.map(patch => ({
     id: patch.id,

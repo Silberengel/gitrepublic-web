@@ -34,7 +34,7 @@ export async function getBranches(options: BranchListOptions): Promise<string[]>
   }
 
   // Check cache first (cache for 2 minutes)
-  const cacheKey = RepoCache.branchListKey(npub, repoName);
+  const cacheKey = RepoCache.branchesKey(npub, repoName);
   const cached = repoCache.get<string[]>(cacheKey);
   if (cached !== null) {
     logger.debug({ npub, repoName, cachedCount: cached.length }, 'Returning cached branch list');

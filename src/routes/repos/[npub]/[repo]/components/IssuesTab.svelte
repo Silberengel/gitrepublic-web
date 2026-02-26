@@ -5,23 +5,36 @@
   
   import StatusTabLayout from './StatusTabLayout.svelte';
   
-  export let issues: Array<{
-    id: string;
-    subject: string;
-    content: string;
-    status: string;
-    author: string;
-    created_at: number;
-    kind: number;
-    tags?: string[][];
-  }> = [];
-  export let selectedIssue: string | null = null;
-  export let loading: boolean = false;
-  export let error: string | null = null;
-  export let onSelect: (id: string) => void = () => {};
-  export let onStatusUpdate: (id: string, status: string) => void = () => {};
-  export let issueReplies: Array<any> = [];
-  export let loadingReplies: boolean = false;
+  interface Props {
+    issues: Array<{
+      id: string;
+      subject: string;
+      content: string;
+      status: string;
+      author: string;
+      created_at: number;
+      kind: number;
+      tags?: string[][];
+    }>;
+    selectedIssue?: string | null;
+    loading?: boolean;
+    error?: string | null;
+    onSelect?: (id: string) => void;
+    onStatusUpdate?: (id: string, status: string) => void;
+    issueReplies?: Array<any>;
+    loadingReplies?: boolean;
+  }
+  
+  let {
+    issues = [],
+    selectedIssue = null,
+    loading = false,
+    error = null,
+    onSelect = () => {},
+    onStatusUpdate = () => {},
+    issueReplies = [],
+    loadingReplies = false
+  }: Props = $props();
   
   const items = $derived(issues.map(issue => ({
     id: issue.id,

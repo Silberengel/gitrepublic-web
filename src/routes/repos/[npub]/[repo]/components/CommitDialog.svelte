@@ -1,10 +1,21 @@
 <script lang="ts">
-  export let show: boolean = false;
-  export let commitMessage: string = '';
-  export let saving: boolean = false;
-  export let onCommit: () => void = () => {};
-  export let onCancel: () => void = () => {};
-  export let onMessageChange: (message: string) => void = () => {};
+  interface Props {
+    show?: boolean;
+    commitMessage?: string;
+    saving?: boolean;
+    onCommit?: () => void;
+    onCancel?: () => void;
+    onMessageChange?: (message: string) => void;
+  }
+  
+  let {
+    show = false,
+    commitMessage = '',
+    saving = false,
+    onCommit = () => {},
+    onCancel = () => {},
+    onMessageChange = () => {}
+  }: Props = $props();
 </script>
 
 {#if show}

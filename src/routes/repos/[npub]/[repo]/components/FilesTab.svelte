@@ -8,44 +8,87 @@
   import FileBrowser from './FileBrowser.svelte';
   import CodeEditor from '$lib/components/CodeEditor.svelte';
   
-  export let files: Array<{ name: string; path: string; type: 'file' | 'directory'; size?: number }> = [];
-  export let currentPath: string = '';
-  export let currentFile: string | null = null;
-  export let fileContent: string = '';
-  export let fileLanguage: 'markdown' | 'asciidoc' | 'text' = 'text';
-  export let editedContent: string = '';
-  export let hasChanges: boolean = false;
-  export let loading: boolean = false;
-  export let error: string | null = null;
-  export let pathStack: string[] = [];
-  export let onFileClick: (file: { name: string; path: string; type: 'file' | 'directory' }) => void = () => {};
-  export let onDirectoryClick: (path: string) => void = () => {};
-  export let onNavigateBack: () => void = () => {};
-  export let onContentChange: (content: string) => void = () => {};
-  export let isMaintainer: boolean = false;
-  export let readmeContent: string | null = null;
-  export let readmePath: string | null = null;
-  export let readmeHtml: string | null = null;
-  export let showFilePreview: boolean = false;
-  export let fileHtml: string | null = null;
-  export let highlightedFileContent: string | null = null;
-  export let isImageFile: boolean = false;
-  export let imageUrl: string | null = null;
-  export let wordWrap: boolean = false;
-  export let supportsPreview: (ext: string) => boolean = () => false;
-  export let onSave: () => void = () => {};
-  export let onTogglePreview: () => void = () => {};
-  export let onCopyFileContent: (e: Event) => void = () => {};
-  export let onDownloadFile: () => void = () => {};
-  export let copyingFile: boolean = false;
-  export let saving: boolean = false;
-  export let needsClone: boolean = false;
-  export let cloneTooltip: string = '';
-  export let branches: Array<string | { name: string }> = [];
-  export let currentBranch: string | null = null;
-  export let defaultBranch: string | null = null;
-  export let onBranchChange: (branch: string) => void = () => {};
-  export let userPubkey: string | null = null;
+  interface Props {
+    files?: Array<{ name: string; path: string; type: 'file' | 'directory'; size?: number }>;
+    currentPath?: string;
+    currentFile?: string | null;
+    fileContent?: string;
+    fileLanguage?: 'markdown' | 'asciidoc' | 'text';
+    editedContent?: string;
+    hasChanges?: boolean;
+    loading?: boolean;
+    error?: string | null;
+    pathStack?: string[];
+    onFileClick?: (file: { name: string; path: string; type: 'file' | 'directory' }) => void;
+    onDirectoryClick?: (path: string) => void;
+    onNavigateBack?: () => void;
+    onContentChange?: (content: string) => void;
+    isMaintainer?: boolean;
+    readmeContent?: string | null;
+    readmePath?: string | null;
+    readmeHtml?: string | null;
+    showFilePreview?: boolean;
+    fileHtml?: string | null;
+    highlightedFileContent?: string | null;
+    isImageFile?: boolean;
+    imageUrl?: string | null;
+    wordWrap?: boolean;
+    supportsPreview?: (ext: string) => boolean;
+    onSave?: () => void;
+    onTogglePreview?: () => void;
+    onCopyFileContent?: (e: Event) => void;
+    onDownloadFile?: () => void;
+    copyingFile?: boolean;
+    saving?: boolean;
+    needsClone?: boolean;
+    cloneTooltip?: string;
+    branches?: Array<string | { name: string }>;
+    currentBranch?: string | null;
+    defaultBranch?: string | null;
+    onBranchChange?: (branch: string) => void;
+    userPubkey?: string | null;
+  }
+  
+  let {
+    files = [],
+    currentPath = '',
+    currentFile = null,
+    fileContent = '',
+    fileLanguage = 'text',
+    editedContent = '',
+    hasChanges = false,
+    loading = false,
+    error = null,
+    pathStack = [],
+    onFileClick = () => {},
+    onDirectoryClick = () => {},
+    onNavigateBack = () => {},
+    onContentChange = () => {},
+    isMaintainer = false,
+    readmeContent = null,
+    readmePath = null,
+    readmeHtml = null,
+    showFilePreview = false,
+    fileHtml = null,
+    highlightedFileContent = null,
+    isImageFile = false,
+    imageUrl = null,
+    wordWrap = false,
+    supportsPreview = () => false,
+    onSave = () => {},
+    onTogglePreview = () => {},
+    onCopyFileContent = () => {},
+    onDownloadFile = () => {},
+    copyingFile = false,
+    saving = false,
+    needsClone = false,
+    cloneTooltip = '',
+    branches = [],
+    currentBranch = null,
+    defaultBranch = null,
+    onBranchChange = () => {},
+    userPubkey = null
+  }: Props = $props();
 </script>
 
 <TabLayout {loading} {error}>

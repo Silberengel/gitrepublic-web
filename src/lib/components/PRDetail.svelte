@@ -9,6 +9,10 @@
   import { getPublicKeyWithNIP07 } from '../services/nostr/nip07-signer.js';
   import { KIND } from '../types/nostr.js';
   import { nip19 } from 'nostr-tools';
+  import CommentRenderer from './CommentRenderer.svelte';
+  import type { Comment } from './CommentRenderer.svelte';
+  import { loadNostrLinks } from '../utils/nostr-links.js';
+  import type { NostrEvent } from '../types/nostr.js';
 
   interface Props {
     pr: {
@@ -87,6 +91,10 @@
 
   const highlightsService = new HighlightsService(DEFAULT_NOSTR_RELAYS);
   const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+  
+  // Event caches for Nostr links
+  let nostrLinkEvents = $state<Map<string, NostrEvent>>(new Map());
+  let nostrLinkProfiles = $state<Map<string, string>>(new Map());
 
   onMount(async () => {
     await checkAuth();
@@ -115,12 +123,38 @@
         const data = await response.json();
         highlights = data.highlights || [];
         comments = data.comments || [];
+        
+        // Load Nostr links from all comment content
+        for (const comment of comments) {
+          await loadNostrLinks(comment.content, nostrClient, nostrLinkEvents, nostrLinkProfiles);
+        }
+        for (const highlight of highlights) {
+          if (highlight.comment) {
+            await loadNostrLinks(highlight.comment, nostrClient, nostrLinkEvents, nostrLinkProfiles);
+          }
+          if (highlight.comments) {
+            for (const comment of highlight.comments) {
+              await loadNostrLinks(comment.content, nostrClient, nostrLinkEvents, nostrLinkProfiles);
+            }
+          }
+        }
       }
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load highlights';
     } finally {
       loading = false;
     }
+  }
+  
+  function convertToCommentFormat(comment: typeof comments[0]): Comment {
+    return {
+      id: comment.id,
+      content: comment.content,
+      author: comment.pubkey,
+      createdAt: comment.created_at,
+      kind: KIND.COMMENT,
+      pubkey: comment.pubkey
+    };
   }
 
   async function loadPRDiff() {
@@ -469,16 +503,13 @@
       {:else}
         <!-- Top-level comments on PR -->
         {#each comments as comment}
-          <div class="comment-item">
-            <div class="comment-header">
-              <span class="comment-author">{formatPubkey(comment.pubkey)}</span>
-              <span class="comment-date">{new Date(comment.created_at * 1000).toLocaleString()}</span>
-            </div>
-            <div class="comment-content">{comment.content}</div>
-            {#if userPubkey}
-              <button onclick={() => startComment(comment.id)} class="reply-btn">Reply</button>
-            {/if}
-          </div>
+          <CommentRenderer
+            comment={convertToCommentFormat(comment)}
+            eventCache={nostrLinkEvents}
+            profileCache={nostrLinkProfiles}
+            userPubkey={userPubkey}
+            onReply={userPubkey ? (id) => startComment(id) : undefined}
+          />
         {/each}
 
         <!-- Highlights with comments - filter to only show highlights for this PR -->
@@ -518,16 +549,14 @@
             {#if highlight.comments && highlight.comments.length > 0}
               <div class="highlight-comments">
                 {#each highlight.comments as comment}
-                  <div class="comment-item nested">
-                    <div class="comment-header">
-                      <span class="comment-author">{formatPubkey(comment.pubkey)}</span>
-                      <span class="comment-date">{new Date(comment.created_at * 1000).toLocaleString()}</span>
-                    </div>
-                    <div class="comment-content">{comment.content}</div>
-                    {#if userPubkey}
-                      <button onclick={() => startComment(comment.id)} class="reply-btn">Reply</button>
-                    {/if}
-                  </div>
+                  <CommentRenderer
+                    comment={convertToCommentFormat(comment)}
+                    eventCache={nostrLinkEvents}
+                    profileCache={nostrLinkProfiles}
+                    userPubkey={userPubkey}
+                    onReply={userPubkey ? (id) => startComment(id) : undefined}
+                    nested={true}
+                  />
                 {/each}
               </div>
             {/if}

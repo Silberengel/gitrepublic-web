@@ -10,10 +10,19 @@
   import { KIND } from '$lib/types/nostr.js';
   import logger from '$lib/services/logger.js';
   
-  export let content: string = '';
-  export let contentType: 'markdown' | 'asciidoc' | 'text' | '30040' = 'text';
-  export let indexEvent: NostrEvent | null = null;
-  export let relays: string[] = [];
+  interface Props {
+    content?: string;
+    contentType?: 'markdown' | 'asciidoc' | 'text' | '30040';
+    indexEvent?: NostrEvent | null;
+    relays?: string[];
+  }
+  
+  let {
+    content = '',
+    contentType = 'text',
+    indexEvent = null,
+    relays = []
+  }: Props = $props();
   
   let renderedContent = $state('');
   let loading = $state(false);

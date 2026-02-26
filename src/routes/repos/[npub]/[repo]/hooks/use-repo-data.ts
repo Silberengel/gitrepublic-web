@@ -28,11 +28,15 @@ export function useRepoData(
   if (typeof window === 'undefined' || !state.isMounted) return;
   
   try {
-    const data = $page.data as RepoPageData;
-    if (data && state.isMounted) {
-      setPageData(data || {});
-      logger.debug({ hasAnnouncement: !!data.announcement }, 'Page data loaded');
-    }
+    page.subscribe(p => {
+      if (p && state.isMounted) {
+        const data = p.data as RepoPageData;
+        if (data) {
+          setPageData(data || {});
+          logger.debug({ hasAnnouncement: !!data.announcement }, 'Page data loaded');
+        }
+      }
+    });
   } catch (err) {
     if (state.isMounted) {
       logger.warn({ error: err }, 'Failed to update pageData');
@@ -51,15 +55,19 @@ export function useRepoParams(
   if (typeof window === 'undefined' || !state.isMounted) return;
   
   try {
-    const params = $page.params as { npub?: string; repo?: string };
-    if (params && state.isMounted) {
-      if (params.npub && params.npub !== state.userPubkey) {
-        setNpub(params.npub);
+    page.subscribe(p => {
+      if (p && state.isMounted) {
+        const params = p.params as { npub?: string; repo?: string };
+        if (params) {
+          if (params.npub && params.npub !== state.userPubkey) {
+            setNpub(params.npub);
+          }
+          if (params.repo) {
+            setRepo(params.repo);
+          }
+        }
       }
-      if (params.repo) {
-        setRepo(params.repo);
-      }
-    }
+    });
   } catch {
     // If $page.params fails, try to parse from URL path
     if (!state.isMounted) return;

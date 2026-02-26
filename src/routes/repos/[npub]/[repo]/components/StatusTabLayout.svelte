@@ -6,20 +6,31 @@
   
   import TabLayout from './TabLayout.svelte';
   
-  export let items: Array<{
-    id: string;
-    title: string;
-    status: string;
-    [key: string]: any;
-  }> = [];
-  export let selectedId: string | null = null;
-  export let loading: boolean = false;
-  export let error: string | null = null;
-  export let onSelect: (id: string) => void = () => {};
-  export let statusGroups: Array<{ label: string; value: string }> = [
-    { label: 'Open', value: 'open' },
-    { label: 'Closed', value: 'closed' }
-  ];
+  interface Props {
+    items?: Array<{
+      id: string;
+      title: string;
+      status: string;
+      [key: string]: any;
+    }>;
+    selectedId?: string | null;
+    loading?: boolean;
+    error?: string | null;
+    onSelect?: (id: string) => void;
+    statusGroups?: Array<{ label: string; value: string }>;
+  }
+  
+  let {
+    items = [],
+    selectedId = null,
+    loading = false,
+    error = null,
+    onSelect = () => {},
+    statusGroups = [
+      { label: 'Open', value: 'open' },
+      { label: 'Closed', value: 'closed' }
+    ]
+  }: Props = $props();
   
   let selectedItem = $derived(items.find(item => item.id === selectedId) || null);
   

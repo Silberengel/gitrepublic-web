@@ -4,10 +4,19 @@
    * Provides left-pane/right-panel structure for all tabs
    */
   
-  export let leftPane: any = null;
-  export let rightPanel: any = null;
-  export let loading: boolean = false;
-  export let error: string | null = null;
+  interface Props {
+    leftPane?: any;
+    rightPanel?: any;
+    loading?: boolean;
+    error?: string | null;
+  }
+  
+  let {
+    leftPane = null,
+    rightPanel = null,
+    loading = false,
+    error = null
+  }: Props = $props();
 </script>
 
 <div class="tab-layout">

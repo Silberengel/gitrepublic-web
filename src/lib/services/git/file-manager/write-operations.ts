@@ -270,7 +270,8 @@ export async function deleteFile(options: Omit<WriteFileOptions, 'content'>): Pr
       throw new Error('Path validation failed: resolved path outside work directory');
     }
     
-    const { accessSync, constants, unlink } = await import('fs');
+    const { accessSync, constants } = await import('fs');
+    const { unlink } = await import('fs/promises');
     try {
       accessSync(fullFilePath, constants.F_OK);
       await unlink(fullFilePath);

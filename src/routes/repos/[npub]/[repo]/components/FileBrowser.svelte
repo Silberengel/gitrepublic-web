@@ -1,13 +1,25 @@
 <script lang="ts">
   import type { FileEntry } from '$lib/services/git/file-manager.js';
   
-  export let files: FileEntry[] = [];
-  export let currentPath: string = '';
-  export let loading: boolean = false;
-  export let onFileClick: (file: FileEntry) => void = () => {};
-  export let onDirectoryClick: (path: string) => void = () => {};
-  export let onNavigateBack: () => void = () => {};
-  export let pathStack: string[] = [];
+  interface Props {
+    files?: FileEntry[];
+    currentPath?: string;
+    loading?: boolean;
+    onFileClick?: (file: FileEntry) => void;
+    onDirectoryClick?: (path: string) => void;
+    onNavigateBack?: () => void;
+    pathStack?: string[];
+  }
+  
+  let {
+    files = [],
+    currentPath = '',
+    loading = false,
+    onFileClick = () => {},
+    onDirectoryClick = () => {},
+    onNavigateBack = () => {},
+    pathStack = []
+  }: Props = $props();
 </script>
 
 <div class="file-browser">

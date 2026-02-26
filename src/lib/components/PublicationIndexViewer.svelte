@@ -10,10 +10,6 @@
   import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
   import logger from '$lib/services/logger.js';
   
-  export let indexEvent: NostrEvent | null = null;
-  export let relays: string[] = DEFAULT_NOSTR_RELAYS;
-  export let onItemClick: ((item: PublicationItem) => void) | null = null;
-  
   interface PublicationItem {
     id: string;
     title: string;
@@ -22,6 +18,18 @@
     tags?: string[][];
     [key: string]: any;
   }
+  
+  interface Props {
+    indexEvent?: NostrEvent | null;
+    relays?: string[];
+    onItemClick?: ((item: PublicationItem) => void) | null;
+  }
+  
+  let {
+    indexEvent = null,
+    relays = DEFAULT_NOSTR_RELAYS,
+    onItemClick = null
+  }: Props = $props();
   
   let items = $state<PublicationItem[]>([]);
   let loading = $state(false);

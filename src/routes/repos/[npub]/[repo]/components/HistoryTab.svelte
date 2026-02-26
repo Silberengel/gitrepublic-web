@@ -5,22 +5,36 @@
   
   import TabLayout from './TabLayout.svelte';
   
-  export let commits: Array<{
-    hash: string;
-    message: string;
-    author: string;
-    date: string;
-    files: string[];
-    verification?: any;
-  }> = [];
-  export let selectedCommit: string | null = null;
-  export let loading: boolean = false;
-  export let error: string | null = null;
-  export let onSelect: (hash: string) => void = () => {};
-  export let onVerify: (hash: string) => void = () => {};
-  export let verifyingCommits: Set<string> = new Set();
-  export let showDiff: boolean = false;
-  export let diffData: Array<{ file: string; additions: number; deletions: number; diff: string }> = [];
+  interface Props {
+    commits?: Array<{
+      hash: string;
+      message: string;
+      author: string;
+      date: string;
+      files: string[];
+      verification?: any;
+    }>;
+    selectedCommit?: string | null;
+    loading?: boolean;
+    error?: string | null;
+    onSelect?: (hash: string) => void;
+    onVerify?: (hash: string) => void;
+    verifyingCommits?: Set<string>;
+    showDiff?: boolean;
+    diffData?: Array<{ file: string; additions: number; deletions: number; diff: string }>;
+  }
+  
+  let {
+    commits = [],
+    selectedCommit = null,
+    loading = false,
+    error = null,
+    onSelect = () => {},
+    onVerify = () => {},
+    verifyingCommits = new Set(),
+    showDiff = false,
+    diffData = []
+  }: Props = $props();
 </script>
 
 <TabLayout {loading} {error}>

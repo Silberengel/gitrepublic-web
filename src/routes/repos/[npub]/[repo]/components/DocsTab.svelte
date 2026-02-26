@@ -12,10 +12,19 @@
   import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
   import logger from '$lib/services/logger.js';
   
-  export let npub: string = '';
-  export let repo: string = '';
-  export let currentBranch: string | null = null;
-  export let relays: string[] = DEFAULT_NOSTR_RELAYS;
+  interface Props {
+    npub?: string;
+    repo?: string;
+    currentBranch?: string | null;
+    relays?: string[];
+  }
+  
+  let {
+    npub = '',
+    repo = '',
+    currentBranch = null,
+    relays = DEFAULT_NOSTR_RELAYS
+  }: Props = $props();
   
   let documentationContent = $state<string | null>(null);
   let documentationKind = $state<'markdown' | 'asciidoc' | 'text' | '30040' | null>(null);

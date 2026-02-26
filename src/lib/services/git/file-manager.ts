@@ -5,19 +5,19 @@
 
 import { join, resolve } from 'path';
 import simpleGit, { type SimpleGit } from 'simple-git';
-import { RepoManager } from '../repo-manager.js';
-import logger from '../../logger.js';
-import { sanitizeError, isValidBranchName } from '../../../utils/security.js';
-import { repoCache, RepoCache } from '../repo-cache.js';
+import { RepoManager } from './repo-manager.js';
+import logger from '$lib/services/logger.js';
+import { sanitizeError, isValidBranchName } from '$lib/utils/security.js';
+import { repoCache, RepoCache } from './repo-cache.js';
 
 // Import modular operations
-import { getOrCreateWorktree, removeWorktree } from './worktree-manager.js';
-import { validateFilePath, validateRepoName, validateNpub } from './path-validator.js';
-import { listFiles, getFileContent } from './file-operations.js';
-import { getBranches, validateBranchName } from './branch-operations.js';
-import { writeFile, deleteFile } from './write-operations.js';
-import { getCommitHistory, getDiff } from './commit-operations.js';
-import { createTag, getTags } from './tag-operations.js';
+import { getOrCreateWorktree, removeWorktree } from './file-manager/worktree-manager.js';
+import { validateFilePath, validateRepoName, validateNpub } from './file-manager/path-validator.js';
+import { listFiles, getFileContent } from './file-manager/file-operations.js';
+import { getBranches, validateBranchName } from './file-manager/branch-operations.js';
+import { writeFile, deleteFile } from './file-manager/write-operations.js';
+import { getCommitHistory, getDiff } from './file-manager/commit-operations.js';
+import { createTag, getTags } from './file-manager/tag-operations.js';
 
 // Types are defined below
 
@@ -336,7 +336,7 @@ export class FileManager {
       npub,
       repoName,
       repoPath,
-      getDefaultBranch: (npub, repoName) => this.getDefaultBranch(npub, repoName)
+      getDefaultBranch: (npub: string, repoName: string) => this.getDefaultBranch(npub, repoName)
     });
   }
 
@@ -503,11 +503,11 @@ export class FileManager {
 
   private async isRepoPrivate(npub: string, repoName: string): Promise<boolean> {
     try {
-      const { requireNpubHex } = await import('../../../utils/npub-utils.js');
+      const { requireNpubHex } = await import('$lib/utils/npub-utils.js');
       const repoOwnerPubkey = requireNpubHex(npub);
-      const { NostrClient } = await import('../../nostr/nostr-client.js');
-      const { DEFAULT_NOSTR_RELAYS } = await import('../../../config.js');
-      const { KIND } = await import('../../../types/nostr.js');
+      const { NostrClient } = await import('$lib/services/nostr/nostr-client.js');
+      const { DEFAULT_NOSTR_RELAYS } = await import('$lib/config.js');
+      const { KIND } = await import('$lib/types/nostr.js');
       
       const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
       const events = await nostrClient.fetchEvents([
@@ -521,7 +521,7 @@ export class FileManager {
       
       if (events.length === 0) return false;
       
-      const { isPrivateRepo: checkIsPrivateRepo } = await import('../../../utils/repo-privacy.js');
+      const { isPrivateRepo: checkIsPrivateRepo } = await import('$lib/utils/repo-privacy.js');
       return checkIsPrivateRepo(events[0]);
     } catch (err) {
       logger.debug({ error: err, npub, repoName }, 'Failed to check repo privacy, defaulting to public');
@@ -569,7 +569,7 @@ export class FileManager {
       
       if (!announcementEvent) return null;
       
-      const { validateAnnouncementEvent } = await import('../../nostr/repo-verification.js');
+      const { validateAnnouncementEvent } = await import('$lib/services/nostr/repo-verification.js');
       const validation = validateAnnouncementEvent(announcementEvent, repoName);
       
       if (!validation.valid) {
