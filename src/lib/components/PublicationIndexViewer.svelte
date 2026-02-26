@@ -196,6 +196,12 @@
         <div 
           class="item"
           onclick={() => onItemClick?.(item)}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onItemClick?.(item);
+            }
+          }}
           role="button"
           tabindex="0"
         >

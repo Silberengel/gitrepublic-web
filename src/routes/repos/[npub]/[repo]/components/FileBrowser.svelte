@@ -38,7 +38,15 @@
       {#each files as file}
         <div 
           class="file-item {file.type}"
+          role="button"
+          tabindex="0"
           onclick={() => file.type === 'directory' ? onDirectoryClick(file.path) : onFileClick(file)}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              file.type === 'directory' ? onDirectoryClick(file.path) : onFileClick(file);
+            }
+          }}
         >
           <span class="icon">
             {#if file.type === 'directory'}

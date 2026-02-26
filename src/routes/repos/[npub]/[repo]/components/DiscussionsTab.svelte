@@ -3,7 +3,17 @@
   import TabLayout from './TabLayout.svelte';
   import DiscussionRenderer, { type Discussion } from '$lib/components/DiscussionRenderer.svelte';
   import CommentRenderer from '$lib/components/CommentRenderer.svelte';
-  import type { Comment } from '$lib/components/CommentRenderer.svelte';
+  
+  // Define Comment type locally to match CommentRenderer's export
+  type Comment = {
+    id: string;
+    content: string;
+    author: string;
+    createdAt: number;
+    kind: number;
+    pubkey: string;
+    replies?: Comment[];
+  };
   import EventCopyButton from '$lib/components/EventCopyButton.svelte';
   import { DiscussionsService } from '$lib/services/nostr/discussions-service.js';
   import { NostrClient } from '$lib/services/nostr/nostr-client.js';
@@ -59,10 +69,10 @@
     
     try {
       const userRelays = userPubkey ? await getUserRelays(userPubkey, nostrClient) : null;
+      const allDefaultRelays = [...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS];
       const combinedRelays = combineRelays(
-        DEFAULT_NOSTR_RELAYS,
-        DEFAULT_NOSTR_SEARCH_RELAYS,
-        userRelays?.outbox || []
+        userRelays?.outbox || [],
+        allDefaultRelays
       );
       
       const { nip19 } = await import('nostr-tools');
@@ -89,8 +99,8 @@
         content: entry.content,
         author: entry.author,
         createdAt: entry.createdAt,
-        kind: entry.kind,
-        pubkey: entry.pubkey,
+        kind: entry.kind ?? KIND.THREAD,
+        pubkey: entry.pubkey ?? '',
         comments: entry.comments
       }));
       
@@ -207,10 +217,10 @@
       const signedEvent = await signEventWithNIP07(threadEventTemplate);
       
       const userRelays = await getUserRelays(userPubkeyHex, nostrClient);
+      const allDefaultRelays = [...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS];
       const combinedRelays = combineRelays(
-        DEFAULT_NOSTR_RELAYS,
-        DEFAULT_NOSTR_SEARCH_RELAYS,
-        userRelays?.outbox || []
+        userRelays?.outbox || [],
+        allDefaultRelays
       );
       
       const publishClient = new NostrClient(combinedRelays);
@@ -258,10 +268,10 @@
       const signedEvent = await signEventWithNIP07(commentEventTemplate);
       
       const userRelays = await getUserRelays(userPubkeyHex, nostrClient);
+      const allDefaultRelays = [...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS];
       const combinedRelays = combineRelays(
-        DEFAULT_NOSTR_RELAYS,
-        DEFAULT_NOSTR_SEARCH_RELAYS,
-        userRelays?.outbox || []
+        userRelays?.outbox || [],
+        allDefaultRelays
       );
       
       const publishClient = new NostrClient(combinedRelays);
@@ -405,8 +415,10 @@
   >
     <div 
       class="modal" 
-      role="document"
+      role="dialog"
       onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+      tabindex="-1"
     >
       <h3>Create Discussion Thread</h3>
       <label>
@@ -444,8 +456,10 @@
   >
     <div 
       class="modal" 
-      role="document"
+      role="dialog"
       onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+      tabindex="-1"
     >
       <h3>{replyingToComment ? 'Reply to Comment' : 'Reply to Thread'}</h3>
       <label>

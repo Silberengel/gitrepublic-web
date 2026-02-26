@@ -43,6 +43,39 @@
   const selectedId = $derived(selectedPatch);
 </script>
 
+{#snippet itemRenderer({ item })}
+  <div class="patch-item-content">
+    <div class="patch-subject">{item.subject}</div>
+    <div class="patch-meta">
+      <span class="patch-id">#{item.id.slice(0, 7)}</span>
+      <span class="patch-date">{new Date(item.created_at * 1000).toLocaleDateString()}</span>
+    </div>
+  </div>
+{/snippet}
+
+{#snippet detailRenderer({ item })}
+  <div class="patch-detail">
+    <div class="patch-detail-header">
+      <h2>{item.subject}</h2>
+      <div class="patch-actions">
+        {#if item.status === 'open'}
+          <button 
+            onclick={() => onApply(item.id)}
+            disabled={applying[item.id]}
+            class="apply-button"
+          >
+            {applying[item.id] ? 'Applying...' : 'Apply Patch'}
+          </button>
+        {/if}
+      </div>
+    </div>
+    
+    <div class="patch-content">
+      <pre><code>{item.content}</code></pre>
+    </div>
+  </div>
+{/snippet}
+
 <StatusTabLayout
   {items}
   {selectedId}
@@ -54,40 +87,9 @@
     { label: 'Applied', value: 'applied' },
     { label: 'Rejected', value: 'rejected' }
   ]}
->
-  {#snippet itemRenderer({ item })}
-    <div class="patch-item-content">
-      <div class="patch-subject">{item.subject}</div>
-      <div class="patch-meta">
-        <span class="patch-id">#{item.id.slice(0, 7)}</span>
-        <span class="patch-date">{new Date(item.created_at * 1000).toLocaleDateString()}</span>
-      </div>
-    </div>
-  {/snippet}
-  
-  {#snippet detailRenderer({ item })}
-    <div class="patch-detail">
-      <div class="patch-detail-header">
-        <h2>{item.subject}</h2>
-        <div class="patch-actions">
-          {#if item.status === 'open'}
-            <button 
-              onclick={() => onApply(item.id)}
-              disabled={applying[item.id]}
-              class="apply-button"
-            >
-              {applying[item.id] ? 'Applying...' : 'Apply Patch'}
-            </button>
-          {/if}
-        </div>
-      </div>
-      
-      <div class="patch-content">
-        <pre><code>{item.content}</code></pre>
-      </div>
-    </div>
-  {/snippet}
-</StatusTabLayout>
+  {itemRenderer}
+  {detailRenderer}
+/>
 
 <style>
   .patch-item-content {

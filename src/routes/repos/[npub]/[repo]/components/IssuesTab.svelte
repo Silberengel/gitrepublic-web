@@ -46,29 +46,17 @@
   const selectedId = $derived(selectedIssue);
 </script>
 
-<StatusTabLayout
-  {items}
-  {selectedId}
-  {loading}
-  {error}
-  {onSelect}
-  statusGroups={[
-    { label: 'Open', value: 'open' },
-    { label: 'Closed', value: 'closed' },
-    { label: 'Resolved', value: 'resolved' }
-  ]}
->
-  {#snippet itemRenderer({ item })}
-    <div class="issue-item-content">
-      <div class="issue-subject">{item.subject}</div>
-      <div class="issue-meta">
-        <span class="issue-id">#{item.id.slice(0, 7)}</span>
-        <span class="issue-date">{new Date(item.created_at * 1000).toLocaleDateString()}</span>
-      </div>
+{#snippet itemRenderer({ item })}
+  <div class="issue-item-content">
+    <div class="issue-subject">{item.subject}</div>
+    <div class="issue-meta">
+      <span class="issue-id">#{item.id.slice(0, 7)}</span>
+      <span class="issue-date">{new Date(item.created_at * 1000).toLocaleDateString()}</span>
     </div>
-  {/snippet}
-  
-  {#snippet detailRenderer({ item })}
+  </div>
+{/snippet}
+
+{#snippet detailRenderer({ item })}
     <div class="issue-detail">
       <div class="issue-detail-header">
         <h2>{item.subject}</h2>
@@ -103,8 +91,22 @@
         </div>
       {/if}
     </div>
-  {/snippet}
-</StatusTabLayout>
+{/snippet}
+
+<StatusTabLayout
+  {items}
+  {selectedId}
+  {loading}
+  {error}
+  {onSelect}
+  statusGroups={[
+    { label: 'Open', value: 'open' },
+    { label: 'Closed', value: 'closed' },
+    { label: 'Resolved', value: 'resolved' }
+  ]}
+  {itemRenderer}
+  {detailRenderer}
+/>
 
 <style>
   .issue-item-content {

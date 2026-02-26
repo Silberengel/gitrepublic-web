@@ -18,6 +18,8 @@
     error?: string | null;
     onSelect?: (id: string) => void;
     statusGroups?: Array<{ label: string; value: string }>;
+    itemRenderer?: import('svelte').Snippet<[{ item: { id: string; title: string; status: string; [key: string]: any } }]>;
+    detailRenderer?: import('svelte').Snippet<[{ item: { id: string; title: string; status: string; [key: string]: any } }]>;
   }
   
   let {
@@ -29,7 +31,9 @@
     statusGroups = [
       { label: 'Open', value: 'open' },
       { label: 'Closed', value: 'closed' }
-    ]
+    ],
+    itemRenderer,
+    detailRenderer
   }: Props = $props();
   
   let selectedItem = $derived(items.find(item => item.id === selectedId) || null);
@@ -65,12 +69,22 @@
               {#each grouped[value] as item}
                 <div 
                   class="item {selectedId === item.id ? 'selected' : ''}"
+                  role="button"
+                  tabindex="0"
                   onclick={() => onSelect(item.id)}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onSelect(item.id);
+                    }
+                  }}
                 >
-                  <slot name="itemRenderer" {item}>
+                  {#if itemRenderer}
+                    {@render itemRenderer({ item })}
+                  {:else}
                     <div class="item-title">{item.title}</div>
                     <div class="item-meta">#{item.id.slice(0, 7)}</div>
-                  </slot>
+                  {/if}
                 </div>
               {/each}
             </div>
@@ -82,12 +96,14 @@
   
   {#snippet rightPanel()}
     {#if selectedItem}
-      <slot name="detailRenderer" item={selectedItem}>
+      {#if detailRenderer}
+        {@render detailRenderer({ item: selectedItem })}
+      {:else}
         <div class="detail-view">
           <h2>{selectedItem.title}</h2>
           <pre>{JSON.stringify(selectedItem, null, 2)}</pre>
         </div>
-      </slot>
+      {/if}
     {/if}
   {/snippet}
 </TabLayout>

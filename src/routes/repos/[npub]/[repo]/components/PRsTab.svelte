@@ -42,6 +42,47 @@
   const selectedId = $derived(selectedPR);
 </script>
 
+{#snippet itemRenderer({ item })}
+  <div class="pr-item-content">
+    <div class="pr-subject">{item.subject}</div>
+    <div class="pr-meta">
+      <span class="pr-id">#{item.id.slice(0, 7)}</span>
+      {#if item.commitId}
+        <span class="pr-commit">Commit: {item.commitId.slice(0, 7)}</span>
+      {/if}
+      <span class="pr-date">{new Date(item.created_at * 1000).toLocaleDateString()}</span>
+    </div>
+  </div>
+{/snippet}
+
+{#snippet detailRenderer({ item })}
+  <div class="pr-detail">
+    <div class="pr-detail-header">
+      <h2>{item.subject}</h2>
+      <div class="pr-actions">
+        <select 
+          value={item.status}
+          onchange={(e) => onStatusUpdate(item.id, (e.target as HTMLSelectElement).value)}
+        >
+          <option value="open">Open</option>
+          <option value="closed">Closed</option>
+          <option value="merged">Merged</option>
+        </select>
+      </div>
+    </div>
+    
+    <div class="pr-content">
+      {@html item.content || 'No content'}
+    </div>
+    
+    {#if item.commitId}
+      <div class="pr-commit-info">
+        <strong>Commit:</strong> {item.commitId}
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
 <StatusTabLayout
   {items}
   {selectedId}
@@ -53,48 +94,9 @@
     { label: 'Closed', value: 'closed' },
     { label: 'Merged', value: 'merged' }
   ]}
->
-  {#snippet itemRenderer({ item })}
-    <div class="pr-item-content">
-      <div class="pr-subject">{item.subject}</div>
-      <div class="pr-meta">
-        <span class="pr-id">#{item.id.slice(0, 7)}</span>
-        {#if item.commitId}
-          <span class="pr-commit">Commit: {item.commitId.slice(0, 7)}</span>
-        {/if}
-        <span class="pr-date">{new Date(item.created_at * 1000).toLocaleDateString()}</span>
-      </div>
-    </div>
-  {/snippet}
-  
-  {#snippet detailRenderer({ item })}
-    <div class="pr-detail">
-      <div class="pr-detail-header">
-        <h2>{item.subject}</h2>
-        <div class="pr-actions">
-          <select 
-            value={item.status}
-            onchange={(e) => onStatusUpdate(item.id, (e.target as HTMLSelectElement).value)}
-          >
-            <option value="open">Open</option>
-            <option value="closed">Closed</option>
-            <option value="merged">Merged</option>
-          </select>
-        </div>
-      </div>
-      
-      <div class="pr-content">
-        {@html item.content || 'No content'}
-      </div>
-      
-      {#if item.commitId}
-        <div class="pr-commit-info">
-          <strong>Commit:</strong> {item.commitId}
-        </div>
-      {/if}
-    </div>
-  {/snippet}
-</StatusTabLayout>
+  {itemRenderer}
+  {detailRenderer}
+/>
 
 <style>
   .pr-item-content {
