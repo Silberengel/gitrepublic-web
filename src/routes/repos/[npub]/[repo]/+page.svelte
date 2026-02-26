@@ -86,6 +86,19 @@
     createBranch as createBranchService,
     deleteBranch as deleteBranchService
   } from './services/branch-operations.js';
+  import {
+    loadTags as loadTagsService,
+    createTag as createTagService
+  } from './services/tag-operations.js';
+  import {
+    loadReleases as loadReleasesService,
+    createRelease as createReleaseService
+  } from './services/release-operations.js';
+  import {
+    loadCommitHistory as loadCommitHistoryService,
+    verifyCommit as verifyCommitService,
+    viewDiff as viewDiffService
+  } from './services/commit-operations.js';
 
   // Consolidated state - all state variables in one object
   let state = $state(createRepoState());
@@ -3103,259 +3116,35 @@
   }
 
   async function loadCommitHistory() {
-    state.loading.commits = true;
-    state.error = null;
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/commits?branch=${state.git.currentBranch}&limit=50`, {
-        headers: buildApiHeaders()
-      });
-      if (response.ok) {
-        const data = await response.json();
-        // Normalize commits: API-based commits use 'sha', local commits use 'hash'
-        state.git.commits = data.map((commit: any) => ({
-          hash: commit.hash || commit.sha || '',
-          message: commit.message || 'No message',
-          author: commit.author || 'Unknown',
-          date: commit.date || new Date().toISOString(),
-          files: commit.files || []
-        })).filter((commit: any) => commit.hash); // Filter out commits without hash
-        
-        // Verify state.git.commits in background (only for cloned repos)
-        if (state.clone.isCloned === true) {
-          state.git.commits.forEach(commit => {
-            verifyCommit(commit.hash).catch(err => {
-              console.warn(`Failed to verify commit ${commit.hash}:`, err);
-            });
-          });
-        }
-      }
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to load commit history';
-    } finally {
-      state.loading.commits = false;
-    }
+    await loadCommitHistoryService(state, { verifyCommit });
   }
 
   async function verifyCommit(commitHash: string) {
-    if (state.git.verifyingCommits.has(commitHash)) return; // Already verifying
-    if (!state.clone.isCloned) return; // Can't verify without local repo
-    
-    state.git.verifyingCommits.add(commitHash);
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/commits/${commitHash}/verify`, {
-        headers: buildApiHeaders()
-      });
-      if (response.ok) {
-        const verification = await response.json();
-        // Only update verification if there's actually a signature
-        // If hasSignature is false or undefined, don't set verification at all
-        if (verification.hasSignature !== false) {
-          const commitIndex = state.git.commits.findIndex(c => c.hash === commitHash);
-          if (commitIndex >= 0) {
-            state.git.commits[commitIndex].verification = verification;
-          }
-        }
-      }
-    } catch (err) {
-      console.warn(`Failed to verify commit ${commitHash}:`, err);
-    } finally {
-      state.git.verifyingCommits.delete(commitHash);
-    }
+    await verifyCommitService(commitHash, state);
   }
 
   async function viewDiff(commitHash: string) {
-    // Set selected commit immediately so it shows in the right panel
-    state.git.selectedCommit = commitHash;
-    state.git.showDiff = false; // Start with false, will be set to true when diff loads
-    state.loading.commits = true;
-    state.error = null;
-    try {
-      // Normalize commit hash (handle both 'hash' and 'sha' properties)
-      const getCommitHash = (c: any) => c.hash || c.sha || '';
-      const commitIndex = state.git.commits.findIndex(c => getCommitHash(c) === commitHash);
-      const parentHash = commitIndex >= 0
-        ? (state.git.commits[commitIndex + 1] ? getCommitHash(state.git.commits[commitIndex + 1]) : `${commitHash}^`)
-        : `${commitHash}^`;
-      
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/diff?from=${parentHash}&to=${commitHash}`, {
-        headers: buildApiHeaders()
-      });
-      if (response.ok) {
-        state.git.diffData = await response.json();
-        state.git.showDiff = true;
-      } else {
-        // Handle 404 or other errors
-        const errorText = await response.text().catch(() => response.statusText);
-        if (response.status === 404) {
-          // Check if this is an API fallback commit (repo not cloned or empty)
-          if (state.clone.isCloned === false || (state.clone.isCloned === true && state.clone.apiFallbackAvailable)) {
-            state.error = 'Diffs are not available for commits viewed via API fallback. Please clone the repository to view diffs.';
-          } else {
-            state.error = `Commit not found: ${errorText || 'The commit may not exist in the repository'}`;
-          }
-        } else {
-          state.error = `Failed to load diff: ${errorText || response.statusText}`;
-        }
-      }
-    } catch (err) {
-      // Handle network errors
-      if (err instanceof TypeError && err.message.includes('NetworkError')) {
-        state.error = 'Network error: Unable to fetch diff. Please check your connection and try again.';
-      } else {
-        state.error = err instanceof Error ? err.message : 'Failed to load diff';
-      }
-    } finally {
-      state.loading.commits = false;
-    }
+    await viewDiffService(commitHash, state);
   }
 
   async function loadTags() {
-    if (state.repoNotFound) return;
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/tags`, {
-        headers: buildApiHeaders()
-      });
-      if (response.ok) {
-        state.git.tags = await response.json();
-        // Auto-select first tag if none selected
-        if (state.git.tags.length > 0 && !state.git.selectedTag) {
-          state.git.selectedTag = state.git.tags[0].name;
-        }
-      }
-    } catch (err) {
-      console.error('Failed to load tags:', err);
-    }
+    await loadTagsService(state, { loadTags });
   }
 
   async function createTag() {
-    if (!state.forms.tag.name.trim()) {
-      alert('Please enter a tag name');
-      return;
-    }
-
-    if (!state.user.pubkey) {
-      alert('Please connect your NIP-07 extension');
-      return;
-    }
-
-    state.saving = true;
-    state.error = null;
-
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/tags`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...buildApiHeaders()
-        },
-        body: JSON.stringify({
-          tagName: state.forms.tag.name,
-          ref: state.forms.tag.ref,
-          message: state.forms.tag.message || undefined,
-          userPubkey: state.user.pubkey
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to create tag');
-      }
-
-      state.openDialog = null;
-      state.forms.tag.name = '';
-      state.forms.tag.message = '';
-      await loadTags();
-      alert('Tag created successfully!');
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to create tag';
-    } finally {
-      state.saving = false;
-    }
+    await createTagService(state, { loadTags });
   }
 
   async function loadReleases() {
-    if (state.repoNotFound) return;
-    state.loading.releases = true;
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/releases`, {
-        headers: buildApiHeaders()
-      });
-      if (response.ok) {
-        const data = await response.json();
-        state.releases = data.map((release: any) => ({
-          id: release.id,
-          tagName: release.tags.find((t: string[]) => t[0] === 'tag')?.[1] || '',
-          tagHash: release.tags.find((t: string[]) => t[0] === 'r' && t[2] === 'tag')?.[1],
-          releaseNotes: release.content || '',
-          isDraft: release.tags.some((t: string[]) => t[0] === 'draft' && t[1] === 'true'),
-          isPrerelease: release.tags.some((t: string[]) => t[0] === 'prerelease' && t[1] === 'true'),
-          created_at: release.created_at,
-          pubkey: release.pubkey
-        }));
-      }
-    } catch (err) {
-      console.error('Failed to load state.releases:', err);
-    } finally {
-      state.loading.releases = false;
-    }
+    await loadReleasesService(state, { loadReleases });
   }
 
   async function createRelease() {
-    if (!state.forms.release.tagName.trim() || !state.forms.release.tagHash.trim()) {
-      alert('Please enter a tag name and tag hash');
-      return;
-    }
-
-    if (!state.user.pubkey) {
-      alert('Please connect your NIP-07 extension');
-      return;
-    }
-
-    if (!state.maintainers.isMaintainer && state.user.pubkeyHex !== repoOwnerPubkeyDerived) {
-      alert('Only repository owners and maintainers can create state.releases');
-      return;
-    }
-
-    state.creating.release = true;
-    state.error = null;
-
-    try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/releases`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...buildApiHeaders()
-        },
-        body: JSON.stringify({
-          tagName: state.forms.release.tagName,
-          tagHash: state.forms.release.tagHash,
-          releaseNotes: state.forms.release.notes,
-          isDraft: state.forms.release.isDraft,
-          isPrerelease: state.forms.release.isPrerelease
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to create release');
-      }
-
-      state.openDialog = null;
-      state.forms.release.tagName = '';
-      state.forms.release.tagHash = '';
-      state.forms.release.notes = '';
-      state.forms.release.isDraft = false;
-      state.forms.release.isPrerelease = false;
-      await loadReleases();
-      // Reload state.git.tags to show release indicator
-      await loadTags();
-      alert('Release created successfully!');
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : 'Failed to create release';
-      alert(state.error);
-    } finally {
-      state.creating.release = false;
-    }
+    await createReleaseService(state, repoOwnerPubkeyDerived, {
+      loadReleases
+    });
+    // Reload tags to show release indicator
+    await loadTags();
   }
 
   async function performCodeSearch() {
