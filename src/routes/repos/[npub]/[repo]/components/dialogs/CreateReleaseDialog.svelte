@@ -14,6 +14,10 @@
 
 <Modal {open} title="Create New Release" ariaLabel="Create new release" {onClose}>
   <label>
+    Title:
+    <input type="text" bind:value={state.forms.release.title} placeholder="Release title (e.g., Version 1.0.0)" />
+  </label>
+  <label>
     Tag Name:
     <input type="text" bind:value={state.forms.release.tagName} placeholder="v1.0.0" />
   </label>
@@ -22,16 +26,27 @@
     <input type="text" bind:value={state.forms.release.tagHash} placeholder="abc1234..." />
   </label>
   <label>
+    Download URL (optional):
+    <input type="url" bind:value={state.forms.release.downloadUrl} placeholder="/api/repos/.../download?ref=..." />
+    <small class="field-hint">Pre-filled with the ZIP download URL for this tag. You can change it if needed.</small>
+  </label>
+  <label>
     Release Notes:
     <textarea bind:value={state.forms.release.notes} rows="10" placeholder="Release notes in markdown..."></textarea>
   </label>
-  <label>
+  <label class="checkbox-label">
     <input type="checkbox" bind:checked={state.forms.release.isDraft} />
-    Draft Release
+    <div class="checkbox-content">
+      <span class="checkbox-title">Draft Release</span>
+      <span class="checkbox-explanation">Published but marked as draft. Viewers can filter it out, but it's still visible on Nostr relays.</span>
+    </div>
   </label>
-  <label>
+  <label class="checkbox-label">
     <input type="checkbox" bind:checked={state.forms.release.isPrerelease} />
-    Pre-release
+    <div class="checkbox-content">
+      <span class="checkbox-title">Pre-release</span>
+      <span class="checkbox-explanation">Marks this as a pre-release (alpha, beta, or release candidate), not the final stable version.</span>
+    </div>
   </label>
   <div class="modal-actions">
     <button onclick={onClose} class="cancel-button">Cancel</button>
@@ -63,6 +78,43 @@
   label input[type="checkbox"] {
     width: auto;
     margin-right: 0.5rem;
+  }
+
+  .checkbox-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .checkbox-label input[type="checkbox"] {
+    margin-top: 0.25rem;
+    flex-shrink: 0;
+  }
+
+  .checkbox-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1;
+  }
+
+  .checkbox-title {
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .checkbox-explanation {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+
+  .field-hint {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    font-style: italic;
   }
 
   .modal-actions {

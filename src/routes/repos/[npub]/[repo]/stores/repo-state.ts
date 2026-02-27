@@ -95,9 +95,11 @@ export interface PatchFormData {
 }
 
 export interface ReleaseFormData {
+  title: string;
   tagName: string;
   tagHash: string;
   notes: string;
+  downloadUrl: string;
   isDraft: boolean;
   isPrerelease: boolean;
 }
@@ -550,7 +552,7 @@ export function createRepoState(): RepoState {
       issue: { subject: '', content: '', labels: [''] },
       pr: { subject: '', content: '', commitId: '', branchName: '', labels: [''] },
       patch: { content: '', subject: '' },
-      release: { tagName: '', tagHash: '', notes: '', isDraft: false, isPrerelease: false },
+      release: { title: '', tagName: '', tagHash: '', notes: '', downloadUrl: '', isDraft: false, isPrerelease: false },
       discussion: { threadTitle: '', threadContent: '', replyContent: '' },
       patchHighlight: { text: '', startLine: 0, endLine: 0, startPos: 0, endPos: 0, comment: '' },
       patchComment: { content: '', replyingTo: null },

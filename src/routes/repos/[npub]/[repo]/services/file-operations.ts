@@ -75,7 +75,7 @@ export async function saveFile(
     await apiPost(`/api/repos/${state.npub}/${state.repo}/file`, {
       path: state.files.currentFile,
       content: state.files.editedContent,
-      message: state.forms.commit.message.trim(),
+      commitMessage: state.forms.commit.message.trim(),
       authorName: authorName,
       authorEmail: authorEmail,
       branch: state.git.currentBranch,
@@ -153,7 +153,7 @@ export async function createFile(
     await apiPost(`/api/repos/${state.npub}/${state.repo}/file`, {
       path: filePath,
       content: state.forms.file.content,
-      message: commitMsg,
+      commitMessage: commitMsg,
       authorName: authorName,
       authorEmail: authorEmail,
       branch: state.git.currentBranch,
@@ -167,8 +167,9 @@ export async function createFile(
     state.forms.file.content = '';
     state.openDialog = null;
     
-    // Reload file list
-    await callbacks.loadFiles(state.files.currentPath);
+    // Reload file list - use currentPath or empty string for root
+    const pathToReload = state.files.currentPath || '';
+    await callbacks.loadFiles(pathToReload);
     
     alert('File created successfully!');
   } catch (err) {
@@ -233,7 +234,7 @@ export async function deleteFile(
     
     await apiPost(`/api/repos/${state.npub}/${state.repo}/file`, {
       path: filePath,
-      message: commitMsg,
+      commitMessage: commitMsg,
       authorName: authorName,
       authorEmail: authorEmail,
       branch: state.git.currentBranch,
@@ -247,8 +248,9 @@ export async function deleteFile(
       state.files.currentFile = null;
     }
     
-    // Reload file list
-    await callbacks.loadFiles(state.files.currentPath);
+    // Reload file list - use currentPath or empty string for root
+    const pathToReload = state.files.currentPath || '';
+    await callbacks.loadFiles(pathToReload);
     
     alert('File deleted successfully!');
   } catch (err) {

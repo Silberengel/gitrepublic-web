@@ -203,11 +203,13 @@
   } from './services/file-operations.js';
 
   // Consolidated state - all state variables in one object
+  // @ts-expect-error - $state rune type inference issue with circular reference
   let state = $state(createRepoState());
   
   // Local variables for component-specific state
   let announcementEventId = { value: null as string | null };
   let applying: Record<string, boolean> = {};
+  let docsReloadTrigger = $state(0);
   
   // Extract fields from announcement for convenience
   const repoAnnouncement = $derived(state.pageData.announcement);
@@ -655,6 +657,9 @@
 
       // Reload documentation
       await loadDocumentation();
+      
+      // Trigger DocsTab reload
+      docsReloadTrigger++;
 
       alert('Documentation event created and published successfully!');
     } catch (err) {
@@ -916,10 +921,11 @@
     // Decode npub to get repo owner pubkey for bookmark address
     try {
       if (state.npub && state.npub.trim()) {
-        const decoded = nip19.decode(state.npub);
-        if (decoded.type === 'npub') {
-          state.metadata.ownerPubkey = decoded.data as string;
-          state.metadata.address = `${KIND.REPO_ANNOUNCEMENT}:${state.metadata.ownerPubkey}:${state.repo}`;
+        const decoded = nip19.decode(state.npub) as { type: 'npub' | 'note' | 'nevent' | 'naddr' | 'nprofile'; data: string | unknown };
+        // Type guard for npub - decoded.data is string for npub type
+        if (decoded.type === 'npub' && typeof decoded.data === 'string') {
+          state.metadata.ownerPubkey = decoded.data;
+          state.metadata.address = `${KIND.REPO_ANNOUNCEMENT}:${decoded.data}:${state.repo}`;
         }
       }
     } catch (err) {
@@ -987,7 +993,7 @@
         error: status.error || null,
         message: status.message || null,
         cloneCount: status.cloneVerifications?.length || 0,
-        verifiedClones: status.cloneVerifications?.filter(cv => cv.verified).length || 0
+        verifiedClones: status.cloneVerifications?.filter((cv: { verified: boolean }) => cv.verified).length || 0
       });
     }
     
@@ -1254,7 +1260,7 @@
               </button>
             {/if}
             {#each (state.clone.showAllUrls ? repoCloneUrls : repoCloneUrls.slice(0, 3)) as cloneUrl}
-            {@const cloneVerification = state.verification.status?.cloneVerifications?.find(cv => {
+            {@const cloneVerification = state.verification.status?.cloneVerifications?.find((cv: { url: string }) => {
               const normalizeUrl = (url: string) => url.replace(/\/$/, '').toLowerCase().replace(/^https?:\/\//, '');
               const normalizedCv = normalizeUrl(cv.url);
               const normalizedClone = normalizeUrl(cloneUrl);
@@ -1522,7 +1528,7 @@
             state.git.verifyingCommits.add(hash);
             try {
               // Trigger verification logic - find the commit and verify
-              const commit = state.git.commits.find(c => (c.hash || (c as any).sha) === hash);
+              const commit = state.git.commits.find((c: { hash?: string; sha?: string }) => (c.hash || c.sha) === hash);
               if (commit) {
                 await verifyCommit(hash);
               }
@@ -1584,6 +1590,13 @@
         onCreateRelease={(tagName, tagHash) => {
           state.forms.release.tagName = tagName;
           state.forms.release.tagHash = tagHash;
+          // Pre-fill download URL with full URL
+          if (typeof window !== 'undefined') {
+            const origin = window.location.origin;
+            state.forms.release.downloadUrl = `${origin}/api/repos/${state.npub}/${state.repo}/download?ref=${encodeURIComponent(tagName)}&format=zip`;
+          } else {
+            state.forms.release.downloadUrl = `/api/repos/${state.npub}/${state.repo}/download?ref=${encodeURIComponent(tagName)}&format=zip`;
+          }
           state.openDialog = 'createRelease';
         }}
         onLoadTags={loadTags}
@@ -1633,7 +1646,7 @@
           }}
           onStatusUpdate={async (id, status) => {
             // Find issue and update status
-            const issue = state.issues.find(i => i.id === id);
+            const issue = state.issues.find((i: { id: string }) => i.id === id);
             if (issue) {
               await updateIssueStatus(id, issue.author, status as 'open' | 'closed' | 'resolved' | 'draft');
               await loadIssues();
@@ -1671,7 +1684,7 @@
           }}
           onStatusUpdate={async (id, status) => {
             // Find PR and update status - similar to updateIssueStatus
-            const pr = state.prs.find(p => p.id === id);
+            const pr = state.prs.find((p: { id: string }) => p.id === id);
             if (pr && state.user.pubkeyHex) {
               // Check if user is maintainer or PR author
               const isAuthor = state.user.pubkeyHex === pr.author;
@@ -1732,7 +1745,7 @@
             state.selected.patch = id;
           }}
           onStatusUpdate={async (id, status) => {
-            const patch = state.patches.find(p => p.id === id);
+            const patch = state.patches.find((p: { id: string }) => p.id === id);
             if (patch) {
               await updatePatchStatus(id, patch.author, status);
             }
@@ -1740,7 +1753,7 @@
           onApply={async (id) => {
             applying[id] = true;
             try {
-              const patch = state.patches.find(p => p.id === id);
+              const patch = state.patches.find((p: { id: string }) => p.id === id);
               if (!patch) {
                 throw new Error('Patch not found');
               }
@@ -1865,6 +1878,7 @@
             goto(url.pathname + url.search, { replaceState: true, noScroll: true });
           }}
           isMaintainer={state.maintainers.isMaintainer}
+          reloadTrigger={docsReloadTrigger}
           onCreateDocumentation={() => {
             if (!state.user.pubkey || !state.maintainers.isMaintainer) return;
             state.openDialog = 'createDocumentation';

@@ -26,9 +26,11 @@ export async function loadReleases(
     );
     state.releases = data.map((release: any) => ({
       id: release.id,
+      title: release.tags.find((t: string[]) => t[0] === 'title')?.[1],
       tagName: release.tags.find((t: string[]) => t[0] === 'tag')?.[1] || '',
       tagHash: release.tags.find((t: string[]) => t[0] === 'r' && t[2] === 'tag')?.[1],
       releaseNotes: release.content || '',
+      downloadUrl: release.tags.find((t: string[]) => t[0] === 'r' && t[2] === 'download')?.[1],
       isDraft: release.tags.some((t: string[]) => t[0] === 'draft' && t[1] === 'true'),
       isPrerelease: release.tags.some((t: string[]) => t[0] === 'prerelease' && t[1] === 'true'),
       created_at: release.created_at,
@@ -64,22 +66,26 @@ export async function createRelease(
     return;
   }
 
-  state.creating.release = true;
+    state.creating.release = true;
   state.error = null;
 
   try {
     await apiPost(`/api/repos/${state.npub}/${state.repo}/releases`, {
+      title: state.forms.release.title,
       tagName: state.forms.release.tagName,
       tagHash: state.forms.release.tagHash,
       releaseNotes: state.forms.release.notes,
+      downloadUrl: state.forms.release.downloadUrl,
       isDraft: state.forms.release.isDraft,
       isPrerelease: state.forms.release.isPrerelease
     });
 
     state.openDialog = null;
+    state.forms.release.title = '';
     state.forms.release.tagName = '';
     state.forms.release.tagHash = '';
     state.forms.release.notes = '';
+    state.forms.release.downloadUrl = '';
     state.forms.release.isDraft = false;
     state.forms.release.isPrerelease = false;
     await callbacks.loadReleases();

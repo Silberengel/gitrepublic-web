@@ -24,7 +24,7 @@ export const GET: RequestHandler = createRepoGetHandler(
 export const POST: RequestHandler = withRepoValidation(
   async ({ repoContext, requestContext, event }) => {
     const body = await event.request.json();
-    const { tagName, tagHash, releaseNotes, isDraft, isPrerelease } = body;
+    const { title, tagName, tagHash, releaseNotes, downloadUrl, isDraft, isPrerelease } = body;
 
     if (!tagName || !tagHash) {
       throw handleValidationError('Missing required fields: tagName, tagHash', { operation: 'createRelease', npub: repoContext.npub, repo: repoContext.repo });
@@ -42,9 +42,11 @@ export const POST: RequestHandler = withRepoValidation(
     const release = await releasesService.createRelease(
       repoContext.repoOwnerPubkey,
       repoContext.repo,
+      title || '',
       tagName,
       tagHash,
       releaseNotes || '',
+      downloadUrl || '',
       isDraft || false,
       isPrerelease || false
     );

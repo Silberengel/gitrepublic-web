@@ -89,12 +89,17 @@
   let error = $state<string | null>(null);
   
   $effect(() => {
-    if (contentType === '30040' && indexEvent) {
+    // Explicitly track both content and contentType
+    const currentContent = content;
+    const currentContentType = contentType;
+    
+    if (currentContentType === '30040' && indexEvent) {
       // Publication index - handled by PublicationIndexViewer
       return;
     }
     
-    if (content) {
+    if (currentContent) {
+      // Re-render when content or contentType changes
       doRenderContent();
     }
   });
@@ -104,7 +109,7 @@
     error = null;
     
     try {
-      logger.operation('Rendering content', { contentType, length: content.length });
+      logger.operation('Rendering content', { contentType, length: content.length, preview: content.substring(0, 100) });
       
       // Use the shared content renderer utility
       // contentType '30040' is handled separately by PublicationIndexViewer
@@ -114,16 +119,18 @@
       } else {
         renderedContent = await renderContent(content, contentType as 'markdown' | 'asciidoc' | 'text');
         
+        logger.debug({ contentType, renderedLength: renderedContent.length, preview: renderedContent.substring(0, 200) }, 'Content rendered');
+        
         // Rewrite image paths to use API endpoint
         if (npub && repo && filePath) {
           renderedContent = rewriteImagePaths(renderedContent, filePath, npub, repo, currentBranch);
         }
       }
       
-      logger.operation('Content rendered', { contentType });
+      logger.operation('Content rendered', { contentType, renderedLength: renderedContent.length });
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to render content';
-      logger.error({ error: err, contentType }, 'Error rendering content');
+      logger.error({ error: err, contentType, contentPreview: content.substring(0, 100) }, 'Error rendering content');
     } finally {
       loading = false;
     }

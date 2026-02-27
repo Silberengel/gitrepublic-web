@@ -6,11 +6,13 @@
   
   import TabLayout from './TabLayout.svelte';
   import DocsViewer from './DocsViewer.svelte';
+  import EventCopyButton from '$lib/components/EventCopyButton.svelte';
   import type { NostrEvent } from '$lib/types/nostr.js';
   import { KIND } from '$lib/types/nostr.js';
   import { NostrClient } from '$lib/services/nostr/nostr-client.js';
   import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
   import logger from '$lib/services/logger.js';
+  import { extractAsciiDocTitle } from '../utils/content-renderer.js';
   
   interface Props {
     npub?: string;
@@ -22,6 +24,7 @@
     onTabChange?: (tab: string) => void;
     isMaintainer?: boolean;
     onCreateDocumentation?: () => void;
+    reloadTrigger?: number; // Changes when documentation is created to trigger reload
   }
   
   let {
@@ -33,11 +36,13 @@
     tabs = [],
     onTabChange = () => {},
     isMaintainer = false,
-    onCreateDocumentation = () => {}
+    onCreateDocumentation = () => {},
+    reloadTrigger = 0
   }: Props = $props();
   
   let documentationContent = $state<string | null>(null);
   let documentationKind = $state<'markdown' | 'asciidoc' | 'text' | '30040' | null>(null);
+  let documentationTitle = $state<string | null>(null);
   let indexEvent = $state<NostrEvent | null>(null);
   let loading = $state(false);
   let loadingDocs = $state(false);
@@ -45,9 +50,17 @@
   let docFiles: Array<{ name: string; path: string }> = $state([]);
   let selectedDoc: string | null = $state(null);
   let hasReadme = $state(false);
+  let nostrDocs: Array<{ id: string; title: string; kind: number; event: NostrEvent }> = $state([]);
   
   $effect(() => {
     if (npub && repo && currentBranch) {
+      loadDocumentation();
+    }
+  });
+
+  // Reload when reloadTrigger changes (e.g., after creating documentation)
+  $effect(() => {
+    if (reloadTrigger > 0 && npub && repo && currentBranch) {
       loadDocumentation();
     }
   });
@@ -58,6 +71,7 @@
     error = null;
     documentationContent = null;
     documentationKind = null;
+    documentationTitle = null; // Clear any previous title
     indexEvent = null;
     hasReadme = false;
     
@@ -106,6 +120,9 @@
         }
       }
       
+      // Load Nostr documentation events (kind 30818, 30041, 30817, 30023)
+      await loadNostrDocumentation();
+      
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to load documentation';
       logger.error({ error: err, npub, repo }, 'Error loading documentation');
@@ -120,6 +137,10 @@
   
   async function loadDocFile(path: string) {
     try {
+      // Clear any Nostr doc state when loading a file
+      documentationTitle = null;
+      indexEvent = null;
+      
       const response = await fetch(`/api/repos/${npub}/${repo}/raw?path=${encodeURIComponent(path)}&ref=${currentBranch || 'HEAD'}`);
       if (response.ok) {
         const content = await response.text();
@@ -131,6 +152,11 @@
           documentationKind = 'markdown';
         } else if (ext === 'adoc' || ext === 'asciidoc') {
           documentationKind = 'asciidoc';
+          // Extract title for AsciiDoc files too
+          const extractedTitle = extractAsciiDocTitle(content);
+          if (extractedTitle) {
+            documentationTitle = extractedTitle;
+          }
         } else {
           documentationKind = 'text';
         }
@@ -166,6 +192,71 @@
     } catch (err) {
       logger.debug({ error: err }, 'No kind 30040 index found or error checking');
     }
+  }
+
+  async function loadNostrDocumentation() {
+    try {
+      const { requireNpubHex } = await import('$lib/utils/npub-utils.js');
+      const repoOwnerPubkey = requireNpubHex(npub);
+      const repoAddress = `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkey}:${repo}`;
+      
+      const client = new NostrClient(relays);
+      // Load documentation events: 30818 (Repository State), 30041 (Publication), 30817 (Repository Announcement), 30023 (Article)
+      const events = await client.fetchEvents([
+        {
+          kinds: [30818, 30041, 30817, 30023],
+          authors: [repoOwnerPubkey],
+          '#a': [repoAddress],
+          limit: 100
+        }
+      ]);
+      
+      nostrDocs = events.map(event => {
+        const titleTag = event.tags.find(t => t[0] === 'title');
+        const title = titleTag?.[1] || `Documentation (kind ${event.kind})`;
+        return {
+          id: event.id,
+          title,
+          kind: event.kind,
+          event
+        };
+      });
+      
+      logger.debug({ count: nostrDocs.length }, 'Loaded Nostr documentation events');
+    } catch (err) {
+      logger.debug({ error: err }, 'Error loading Nostr documentation events');
+    }
+  }
+
+  function loadNostrDoc(doc: { id: string; title: string; kind: number; event: NostrEvent }) {
+    // Clear previous content first to ensure re-render
+    documentationContent = null;
+    documentationKind = null;
+    documentationTitle = null;
+    
+    // Set new content and type
+    documentationContent = doc.event.content;
+    // Determine content type based on kind
+    if (doc.kind === 30041 || doc.kind === 30818) {
+      documentationKind = 'asciidoc';
+      // Extract document title from AsciiDoc
+      const extractedTitle = extractAsciiDocTitle(doc.event.content);
+      documentationTitle = extractedTitle || doc.title;
+    } else {
+      documentationKind = 'markdown';
+      documentationTitle = doc.title;
+    }
+    selectedDoc = `nostr:${doc.id}`;
+    indexEvent = null; // Clear index event if viewing a doc
+    
+    logger.debug({ 
+      docId: doc.id, 
+      kind: doc.kind, 
+      contentType: documentationKind, 
+      title: documentationTitle,
+      contentLength: doc.event.content.length,
+      contentPreview: doc.event.content.substring(0, 50)
+    }, 'Loading Nostr documentation');
   }
   
   function handleItemClick(item: any) {
@@ -210,12 +301,11 @@
               <button 
                 class="doc-item {selectedDoc === 'README.md' ? 'selected' : ''}"
                 onclick={() => {
-                  // Reload README if needed
-                  if (!documentationContent) {
-                    loadDocumentation();
-                  } else {
-                    selectedDoc = 'README.md';
-                  }
+                  // Always reload README to ensure we have the right content
+                  // Clear any Nostr doc state first
+                  documentationTitle = null;
+                  indexEvent = null;
+                  loadDocumentation();
                 }}
               >
                 README.md
@@ -234,7 +324,25 @@
               </li>
             {/each}
           {/if}
-          {#if !hasReadme && docFiles.length === 0}
+          {#if nostrDocs.length > 0}
+            {#each nostrDocs as doc}
+              <li class="nostr-doc-item">
+                <button 
+                  class="doc-item {selectedDoc === `nostr:${doc.id}` ? 'selected' : ''}"
+                  onclick={() => loadNostrDoc(doc)}
+                  title="Kind {doc.kind}"
+                >
+                  {doc.title}
+                </button>
+                <EventCopyButton 
+                  eventId={doc.id} 
+                  kind={doc.kind} 
+                  pubkey={doc.event.pubkey} 
+                />
+              </li>
+            {/each}
+          {/if}
+          {#if !hasReadme && docFiles.length === 0 && nostrDocs.length === 0}
             <div class="empty-sidebar">
               <p>No documentation files found</p>
             </div>
@@ -257,14 +365,21 @@
         onItemClick={handleItemClick}
       />
     {:else if documentationContent}
-      <DocsViewer
-        content={documentationContent}
-        contentType={documentationKind || 'text'}
-        npub={npub}
-        repo={repo}
-        currentBranch={currentBranch || 'HEAD'}
-        filePath={selectedDoc || 'README.md'}
-      />
+      <div class="docs-panel">
+        {#if documentationTitle}
+          <div class="docs-panel-header">
+            <h2 class="docs-panel-title">{documentationTitle}</h2>
+          </div>
+        {/if}
+        <DocsViewer
+          content={documentationContent}
+          contentType={documentationKind || 'text'}
+          npub={npub}
+          repo={repo}
+          currentBranch={currentBranch || 'HEAD'}
+          filePath={selectedDoc || 'README.md'}
+        />
+      </div>
     {:else}
       <div class="empty-docs">
         <p>No documentation found</p>
@@ -334,6 +449,18 @@
     flex: 1;
     overflow-y: auto;
   }
+
+  .nostr-doc-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .nostr-doc-item .doc-item {
+    flex: 1;
+    margin-bottom: 0;
+  }
   
   .doc-item {
     width: 100%;
@@ -393,5 +520,27 @@
     color: var(--error-color, #c62828);
     border-radius: 4px;
     margin: 1rem;
+  }
+
+  .docs-panel {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+  }
+
+  .docs-panel-header {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 1rem;
+    flex-shrink: 0;
+  }
+
+  .docs-panel-title {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--text-primary);
   }
 </style>

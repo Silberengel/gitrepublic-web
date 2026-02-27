@@ -10,9 +10,11 @@ import { signEventWithNIP07 } from './nip07-signer.js';
 
 export interface Release extends NostrEvent {
   kind: typeof KIND.RELEASE;
+  title?: string;
   tagName: string;
   tagHash?: string;
   releaseNotes?: string;
+  downloadUrl?: string;
   isDraft?: boolean;
   isPrerelease?: boolean;
 }
@@ -49,16 +51,20 @@ export class ReleasesService {
 
     // Parse release information from tags
     return releases.map(release => {
+      const title = release.tags.find(t => t[0] === 'title')?.[1];
       const tagName = release.tags.find(t => t[0] === 'tag')?.[1] || '';
       const tagHash = release.tags.find(t => t[0] === 'r' && t[2] === 'tag')?.[1];
+      const downloadUrl = release.tags.find(t => t[0] === 'r' && t[2] === 'download')?.[1];
       const isDraft = release.tags.some(t => t[0] === 'draft' && t[1] === 'true');
       const isPrerelease = release.tags.some(t => t[0] === 'prerelease' && t[1] === 'true');
 
       return {
         ...release,
+        title,
         tagName,
         tagHash,
         releaseNotes: release.content,
+        downloadUrl,
         isDraft,
         isPrerelease
       };
@@ -79,9 +85,11 @@ export class ReleasesService {
   async createRelease(
     repoOwnerPubkey: string,
     repoId: string,
+    title: string,
     tagName: string,
     tagHash: string,
     releaseNotes: string,
+    downloadUrl: string,
     isDraft: boolean = false,
     isPrerelease: boolean = false
   ): Promise<Release> {
@@ -93,6 +101,14 @@ export class ReleasesService {
       ['tag', tagName],
       ['r', tagHash, '', 'tag'] // Reference to the git tag commit
     ];
+
+    if (title) {
+      tags.push(['title', title]);
+    }
+
+    if (downloadUrl) {
+      tags.push(['r', downloadUrl, '', 'download']); // Download URL with marker
+    }
 
     if (isDraft) {
       tags.push(['draft', 'true']);
@@ -120,6 +136,7 @@ export class ReleasesService {
       tagName,
       tagHash,
       releaseNotes,
+      downloadUrl,
       isDraft,
       isPrerelease
     };

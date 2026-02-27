@@ -10,9 +10,11 @@
     tags: Array<{ name: string; hash: string; message?: string; date?: number }>;
     releases: Array<{
       id: string;
+      title?: string;
       tagName: string;
       tagHash?: string;
       releaseNotes?: string;
+      downloadUrl?: string;
       isDraft?: boolean;
       isPrerelease?: boolean;
       created_at: number;
