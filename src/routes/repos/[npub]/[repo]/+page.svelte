@@ -1510,6 +1510,16 @@
             state.openDialog = 'createFile';
           }}
           onApplySyntaxHighlighting={applySyntaxHighlighting}
+          onRenderPreview={async (content: string, ext: string) => {
+            return new Promise<string>((resolve) => {
+              const branch = state.git.currentBranch || state.git.defaultBranch || null;
+              renderFileAsHtmlUtil(content, ext, state.files.currentFile, (html: string) => {
+                resolve(html);
+              }, state.npub, state.repo, branch);
+            });
+          }}
+          npub={state.npub}
+          repo={state.repo}
         />
       {/if}
 

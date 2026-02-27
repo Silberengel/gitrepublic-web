@@ -20,39 +20,43 @@
   }
 
   let {
-    content = $bindable(''),
-    language = $bindable('text'),
+    content = $bindable(),
+    language = $bindable(),
     onChange = () => {},
     onSelection = () => {},
     readOnly = false,
     highlights = [],
-    scrollToLine = $bindable(null)
+    scrollToLine = $bindable()
   }: Props = $props();
+
+  // Set default values for bindable props
+  if (content === undefined) content = '';
+  if (language === undefined) language = 'text';
+  if (scrollToLine === undefined) scrollToLine = null;
 
   let editorView: EditorView | null = null;
   let editorElement: HTMLDivElement;
   let languageCompartment = new Compartment();
+  let editableCompartment = new Compartment();
   
-  // Create a highlight decoration (marker style)
+  // Highlight decoration for persistent markers
   const highlightMark = Decoration.mark({
     class: 'cm-highlight-marker',
     attributes: { 'data-highlight': 'true' }
   });
   
-  // Effect to set highlight decorations (DecorationSet)
-  const setHighlightEffect = StateEffect.define<typeof Decoration.none>();
+  // State effect for updating highlights
+  const setHighlightEffect = StateEffect.define<ReturnType<typeof Decoration.set>>();
   
-  // State field to track highlighted ranges
-  const highlightField = StateField.define({
+  // State field to manage highlight decorations
+  const highlightField = StateField.define<ReturnType<typeof Decoration.set>>({
     create() {
       return Decoration.none;
     },
     update(decorations, tr) {
       decorations = decorations.map(tr.changes);
-      // Apply highlight effects
       for (const effect of tr.effects) {
         if (effect.is(setHighlightEffect)) {
-          // Replace all decorations with the new set
           decorations = effect.value;
         }
       }
@@ -61,25 +65,60 @@
     provide: f => EditorView.decorations.from(f)
   });
 
+  // Exported function to scroll to and highlight a range of lines
+  export function scrollToLines(startLine: number, endLine: number): void {
+    if (!editorView) return;
+    
+    try {
+      const doc = editorView.state.doc;
+      const start = Math.max(1, Math.min(startLine, doc.lines));
+      const end = Math.max(1, Math.min(endLine, doc.lines));
+      
+      const startLineObj = doc.line(start);
+      const endLineObj = doc.line(end);
+      
+      const from = startLineObj.from;
+      const to = endLineObj.to;
+      
+      // Create highlight decoration
+      const decorationRange = highlightMark.range(from, to);
+      const decorationSet = Decoration.set([decorationRange]);
+      
+      // Apply highlight
+      editorView.dispatch({
+        effects: setHighlightEffect.of(decorationSet)
+      });
+      
+      // Scroll to the lines
+      editorView.dispatch({
+        effects: EditorView.scrollIntoView(from, { y: 'center' })
+      });
+    } catch (err) {
+      console.error('Error scrolling to lines:', err);
+    }
+  }
+
   function getLanguageExtension(): Extension[] {
     switch (language) {
       case 'markdown':
+        // markdown() already includes syntax highlighting - don't add defaultHighlightStyle
         return [markdown()];
       case 'asciidoc':
+        // StreamLanguage includes its own highlighting - don't use defaultHighlightStyle with it
         return [StreamLanguage.define(asciidoc)];
       default:
+        // Plain text - no syntax highlighting needed
         return [];
     }
   }
 
   function createExtensions(): Extension[] {
-    const extensions: Extension[] = [
+    return [
       history(),
       closeBrackets(),
       autocompletion(),
       highlightSelectionMatches(),
       highlightField,
-      // Enable line wrapping to prevent horizontal overflow
       EditorView.lineWrapping,
       keymap.of([
         ...closeBracketsKeymap,
@@ -87,17 +126,15 @@
         ...searchKeymap,
         ...historyKeymap,
         ...completionKeymap
-      ] as any),
-      // Add language extensions in a compartment for dynamic updates
+      ]),
       languageCompartment.of(getLanguageExtension()),
-      // Add update listener
+      editableCompartment.of(EditorView.editable.of(!readOnly)),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
           const newContent = update.state.doc.toString();
           onChange(newContent);
         }
         
-        // Handle text selection (allow in read-only mode for highlighting)
         if (update.selectionSet) {
           const selection = update.state.selection.main;
           if (!selection.empty) {
@@ -114,12 +151,8 @@
             );
           }
         }
-      }),
-      // Add editable state
-      EditorView.editable.of(!readOnly)
+      })
     ];
-    
-    return extensions;
   }
 
   onMount(() => {
@@ -144,7 +177,10 @@
 
   // Update content when prop changes externally
   $effect(() => {
-    if (editorView && content !== editorView.state.doc.toString()) {
+    if (!editorView) return;
+    
+    const currentContent = editorView.state.doc.toString();
+    if (content !== currentContent) {
       editorView.dispatch({
         changes: {
           from: 0,
@@ -157,73 +193,51 @@
 
   // Update language when prop changes
   $effect(() => {
-    if (editorView) {
-      // Update language extension using compartment
-      editorView.dispatch({
-        effects: languageCompartment.reconfigure(getLanguageExtension())
-      });
-    }
-  });
-
-  // Scroll to and highlight specific lines
-  $effect(() => {
-    if (editorView && scrollToLine !== null && scrollToLine > 0) {
-      try {
-        const doc = editorView.state.doc;
-        const line = doc.line(Math.min(scrollToLine, doc.lines));
-        const lineStart = line.from;
-        const lineEnd = line.to;
-        
-        // Scroll to the line
-        editorView.dispatch({
-          selection: { anchor: lineStart, head: lineEnd },
-          effects: EditorView.scrollIntoView(lineStart, { y: 'center' })
-        });
-        
-        // Clear scrollToLine after scrolling
-        setTimeout(() => {
-          scrollToLine = null;
-        }, 100);
-      } catch (err) {
-        console.error('Error scrolling to line:', err);
-      }
-    }
-  });
-
-  // Function to scroll to and highlight a range of lines with a persistent marker
-  export function scrollToLines(startLine: number, endLine: number) {
     if (!editorView) return;
+    
+    editorView.dispatch({
+      effects: languageCompartment.reconfigure(getLanguageExtension())
+    });
+  });
+
+  // Update editable state when readOnly prop changes
+  $effect(() => {
+    if (!editorView) return;
+    
+    editorView.dispatch({
+      effects: editableCompartment.reconfigure(EditorView.editable.of(!readOnly))
+    });
+  });
+
+  // Scroll to specific line when scrollToLine changes
+  $effect(() => {
+    if (!editorView || scrollToLine === null || scrollToLine === undefined || scrollToLine <= 0) return;
     
     try {
       const doc = editorView.state.doc;
-      const start = Math.min(startLine, doc.lines);
-      const end = Math.min(endLine, doc.lines);
+      const lineNum = Math.min(scrollToLine, doc.lines);
+      const line = doc.line(lineNum);
+      const lineStart = line.from;
+      const lineEnd = line.to;
       
-      const startLineObj = doc.line(start);
-      const endLineObj = doc.line(end);
-      
-      const from = startLineObj.from;
-      const to = endLineObj.to;
-      
-      // Create a highlight decoration for the range
-      const decorationRange = highlightMark.range(from, to);
-      
-      // Create a DecorationSet with the highlight
-      const decorationSet = Decoration.set([decorationRange]);
-      
-      // Update the highlight field with the new decoration using StateEffect
+      // Scroll to the line
       editorView.dispatch({
-        effects: setHighlightEffect.of(decorationSet)
+        selection: { anchor: lineStart, head: lineEnd },
+        effects: EditorView.scrollIntoView(lineStart, { y: 'center' })
       });
       
-      // Scroll to the lines
-      editorView.dispatch({
-        effects: EditorView.scrollIntoView(from, { y: 'center' })
-      });
+      // Clear scrollToLine after scrolling
+      const timeoutId = setTimeout(() => {
+        scrollToLine = null;
+      }, 100);
+      
+      return () => {
+        clearTimeout(timeoutId);
+      };
     } catch (err) {
-      console.error('Error scrolling to lines:', err);
+      console.error('Error scrolling to line:', err);
     }
-  }
+  });
 </script>
 
 <div bind:this={editorElement} class="code-editor"></div>

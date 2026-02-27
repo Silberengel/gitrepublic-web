@@ -6,6 +6,7 @@
   
   import TabLayout from './TabLayout.svelte';
   import FileBrowser from './FileBrowser.svelte';
+  // @ts-ignore - Svelte 5 component with named export
   import CodeEditor from '$lib/components/CodeEditor.svelte';
   import NostrHtmlRenderer from '$lib/components/NostrHtmlRenderer.svelte';
   
@@ -50,6 +51,9 @@
     onTabChange?: (tab: string) => void;
     onCreateFile?: () => void;
     onApplySyntaxHighlighting?: (content: string, ext: string) => Promise<void>;
+    onRenderPreview?: (content: string, ext: string) => Promise<string>;
+    npub?: string;
+    repo?: string;
   }
   
   let {
@@ -92,19 +96,59 @@
     tabs = [],
     onTabChange = () => {},
     onCreateFile = () => {},
-    onApplySyntaxHighlighting = async () => {}
+    onApplySyntaxHighlighting = async () => {},
+    onRenderPreview = async () => '',
+    npub = '',
+    repo = ''
   }: Props = $props();
 
-  // Apply syntax highlighting when fileContent changes and we're showing raw content
-  // This ensures highlighting is ALWAYS applied for raw files, regardless of maintainer status
+  // Live preview HTML generated from editedContent
+  let livePreviewHtml = $state<string | null>(null);
+  let generatingPreview = $state(false);
+
+  // Initialize editedContent when file changes
   $effect(() => {
-    // Only apply highlighting when:
+    if (currentFile && fileContent !== undefined) {
+      editedContent = fileContent;
+      livePreviewHtml = null; // Reset live preview when file changes
+    }
+  });
+
+  // Generate live preview from editedContent when in preview mode
+  $effect(() => {
+    if (showFilePreview && currentFile && editedContent && supportsPreview((currentFile.split('.').pop() || '').toLowerCase())) {
+      const ext = currentFile.split('.').pop() || '';
+      generatingPreview = true;
+      
+      // Debounce preview generation to avoid too many updates
+      const timeoutId = setTimeout(async () => {
+        try {
+          const html = await onRenderPreview(editedContent, ext);
+          livePreviewHtml = html;
+        } catch (err) {
+          console.error('Error generating live preview:', err);
+          livePreviewHtml = null;
+        } finally {
+          generatingPreview = false;
+        }
+      }, 300); // 300ms debounce
+      
+      return () => clearTimeout(timeoutId);
+    } else {
+      livePreviewHtml = null;
+    }
+  });
+
+  // Apply syntax highlighting when fileContent changes
+  // This ensures highlighting is ALWAYS applied for all files, regardless of maintainer status or preview mode
+  $effect(() => {
+    // Apply highlighting when:
     // 1. We have file content
     // 2. We have a current file
-    // 3. We're NOT in preview mode (showing raw)
-    // 4. It's NOT an image
-    // 5. Content is not empty
-    if (fileContent && currentFile && !showFilePreview && !isImageFile && fileContent.trim().length > 0) {
+    // 3. It's NOT an image
+    // 4. Content is not empty
+    // Note: We apply highlighting regardless of preview mode so it's ready when user switches to raw view
+    if (fileContent && currentFile && !isImageFile && fileContent.trim().length > 0) {
       const ext = currentFile.split('.').pop() || '';
       // Always apply highlighting if we don't have highlighted content or it's empty or doesn't contain hljs
       const needsHighlighting = !highlightedFileContent || 
@@ -232,18 +276,27 @@
         {:else}
           <div class="editor-container">
             {#if isMaintainer}
-              {#if currentFile && showFilePreview && fileHtml && supportsPreview((currentFile.split('.').pop() || '').toLowerCase())}
+              {#if currentFile && showFilePreview && supportsPreview((currentFile.split('.').pop() || '').toLowerCase())}
                 <div class="read-only-editor" class:word-wrap={wordWrap}>
-                  <div class="file-preview markdown">
-                    <NostrHtmlRenderer html={fileHtml} />
-                  </div>
+                  {#if generatingPreview}
+                    <div class="loading-preview">Updating preview...</div>
+                  {:else if livePreviewHtml}
+                    <div class="file-preview markdown">
+                      <NostrHtmlRenderer html={livePreviewHtml} />
+                    </div>
+                  {:else if fileHtml}
+                    <div class="file-preview markdown">
+                      <NostrHtmlRenderer html={fileHtml} />
+                    </div>
+                  {/if}
                 </div>
-              {:else}
+              {:else if fileContent && !isImageFile}
+                <!-- Always use CodeEditor for maintainers (editable by default) -->
                 <CodeEditor
                   content={editedContent || fileContent}
                   language={fileLanguage}
                   readOnly={needsClone}
-                  onChange={(value) => {
+                  onChange={(value: string) => {
                     editedContent = value;
                     hasChanges = value !== fileContent;
                     onContentChange(value);
@@ -256,10 +309,16 @@
                   <div class="file-preview image-preview">
                     <img src={imageUrl} alt={currentFile?.split('/').pop() || 'Image'} class="file-image" />
                   </div>
-                {:else if currentFile && showFilePreview && fileHtml && supportsPreview((currentFile.split('.').pop() || '').toLowerCase())}
-                  <div class="file-preview markdown">
-                    <NostrHtmlRenderer html={fileHtml} />
-                  </div>
+                {:else if currentFile && showFilePreview && supportsPreview((currentFile.split('.').pop() || '').toLowerCase())}
+                  {#if livePreviewHtml}
+                    <div class="file-preview markdown">
+                      <NostrHtmlRenderer html={livePreviewHtml} />
+                    </div>
+                  {:else if fileHtml}
+                    <div class="file-preview markdown">
+                      <NostrHtmlRenderer html={fileHtml} />
+                    </div>
+                  {/if}
                 {:else if fileContent}
                   <div class="raw-content">
                     {#if highlightedFileContent && highlightedFileContent.trim() !== ''}
@@ -497,6 +556,13 @@
     word-wrap: break-word !important;
     overflow-wrap: break-word !important;
     white-space: pre-wrap !important;
+  }
+
+  .loading-preview {
+    padding: 1rem;
+    text-align: center;
+    color: var(--text-secondary, #666);
+    font-style: italic;
   }
   
   .file-editor .editor-actions {

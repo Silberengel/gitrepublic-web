@@ -46,6 +46,7 @@ export function getHighlightLanguage(ext: string): string {
     'sass': 'sass',
     'less': 'less',
     'json': 'json',
+    'jsonl': 'json',
     'yaml': 'yaml',
     'yml': 'yaml',
     'toml': 'toml',
@@ -318,11 +319,14 @@ export async function applySyntaxHighlighting(
     // Apply highlighting
     let highlighted: string;
     if (lang === 'plaintext') {
-      highlighted = `<pre><code class="hljs">${hljs.highlight(content, { language: 'plaintext' }).value}</code></pre>`;
+      highlighted = `<pre><code class="hljs language-plaintext">${hljs.highlight(content, { language: 'plaintext' }).value}</code></pre>`;
     } else if (hljs.getLanguage(lang)) {
       highlighted = `<pre><code class="hljs language-${lang}">${hljs.highlight(content, { language: lang }).value}</code></pre>`;
     } else {
-      highlighted = `<pre><code class="hljs">${hljs.highlightAuto(content).value}</code></pre>`;
+      // Use highlightAuto but still add a language class for styling
+      const autoResult = hljs.highlightAuto(content);
+      const detectedLang = autoResult.language || 'plaintext';
+      highlighted = `<pre><code class="hljs language-${detectedLang}">${autoResult.value}</code></pre>`;
     }
     console.log('[applySyntaxHighlighting] Highlighting complete, setting content:', { highlightedLength: highlighted.length });
     setHighlightedContent(highlighted);
