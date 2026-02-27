@@ -388,6 +388,33 @@ export class FileManager {
         // For empty repos, we need to create an empty commit first, then create the branch
         // This is the only way git will recognize the branch
         try {
+          // Fetch user profile to get author name and email
+          let authorName = 'GitRepublic User';
+          let authorEmail = 'gitrepublic@gitrepublic.web';
+          try {
+            const { requireNpubHex } = await import('$lib/utils/npub-utils.js');
+            const { fetchUserProfile, extractProfileData, getUserName, getUserEmail } = await import('$lib/utils/user-profile.js');
+            const { DEFAULT_NOSTR_RELAYS } = await import('$lib/config.js');
+            const userPubkeyHex = requireNpubHex(npub);
+            const profileEvent = await fetchUserProfile(userPubkeyHex, DEFAULT_NOSTR_RELAYS);
+            const profile = extractProfileData(profileEvent);
+            authorName = getUserName(profile, userPubkeyHex, npub);
+            authorEmail = getUserEmail(profile, userPubkeyHex, npub);
+            logger.info({ npub, repoName, authorName, authorEmail }, '[FileManager.createBranch] Fetched user profile for author identity');
+          } catch (profileError) {
+            logger.warn({ npub, repoName, error: profileError }, '[FileManager.createBranch] Failed to fetch user profile, using defaults');
+          }
+          
+          // Set git config for user.name and user.email in this repository
+          // This is required for commit-tree to work without errors
+          try {
+            await git.addConfig('user.name', authorName, false, 'local');
+            await git.addConfig('user.email', authorEmail, false, 'local');
+            logger.info({ npub, repoName, authorName, authorEmail }, '[FileManager.createBranch] Set git config for user.name and user.email');
+          } catch (configError) {
+            logger.warn({ npub, repoName, error: configError }, '[FileManager.createBranch] Failed to set git config, will use --author flag');
+          }
+          
           logger.info({ npub, repoName, branchName, repoPath }, '[FileManager.createBranch] Step 1: Creating empty tree for initial commit');
           // Create empty tree object - empty tree hash is always the same: 4b825dc642cb6eb9a060e54bf8d69288fbee4904
           // We'll use mktree to create it if needed
@@ -417,8 +444,10 @@ export class FileManager {
           logger.info({ npub, repoName, branchName, emptyTreeHash }, '[FileManager.createBranch] Step 1 complete: empty tree ready');
           
           logger.info({ npub, repoName, branchName }, '[FileManager.createBranch] Step 2: Creating empty commit');
-          // Create an empty commit pointing to the empty tree
-          const commitHash = await git.raw(['commit-tree', '-m', `Initial commit on ${branchName}`, emptyTreeHash]);
+          // Create an empty commit pointing to the empty tree with author information
+          // Use --author flag to specify author identity (required when git config is not set)
+          const authorString = `${authorName} <${authorEmail}>`;
+          const commitHash = await git.raw(['commit-tree', '-m', `Initial commit on ${branchName}`, '--author', authorString, emptyTreeHash]);
           const commit = commitHash.trim();
           logger.info({ npub, repoName, branchName, commit }, '[FileManager.createBranch] Step 2 complete: empty commit created');
           
