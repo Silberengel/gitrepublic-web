@@ -38,6 +38,7 @@ export type DialogType =
   | 'createPR' 
   | 'createPatch' 
   | 'createThread' 
+  | 'createDocumentation'
   | 'reply' 
   | 'commit' 
   | 'verification' 
@@ -119,6 +120,13 @@ export interface PatchHighlightFormData {
 export interface PatchCommentFormData {
   content: string;
   replyingTo: string | null;
+}
+
+export interface DocumentationFormData {
+  kind: number; // 30818, 30041, 30817, or 30023
+  title: string;
+  identifier: string;
+  content: string;
 }
 
 // Status update tracking
@@ -220,6 +228,7 @@ export interface RepoState {
     discussion: DiscussionFormData;
     patchHighlight: PatchHighlightFormData;
     patchComment: PatchCommentFormData;
+    documentation: DocumentationFormData;
     commit: {
       message: string;
     };
@@ -545,6 +554,7 @@ export function createRepoState(): RepoState {
       discussion: { threadTitle: '', threadContent: '', replyContent: '' },
       patchHighlight: { text: '', startLine: 0, endLine: 0, startPos: 0, endPos: 0, comment: '' },
       patchComment: { content: '', replyingTo: null },
+      documentation: { kind: 30818, title: '', identifier: '', content: '' },
       commit: { message: '' }
     },
     issues: [],

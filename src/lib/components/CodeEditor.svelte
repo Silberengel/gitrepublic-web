@@ -79,6 +79,8 @@
       autocompletion(),
       highlightSelectionMatches(),
       highlightField,
+      // Enable line wrapping to prevent horizontal overflow
+      EditorView.lineWrapping,
       keymap.of([
         ...closeBracketsKeymap,
         ...defaultKeymap,
@@ -230,20 +232,79 @@
   .code-editor {
     height: 100%;
     width: 100%;
-    overflow: auto;
+    max-width: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    min-width: 0;
+    box-sizing: border-box;
   }
 
   :global(.code-editor .cm-editor) {
     height: 100%;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow: hidden;
   }
 
   :global(.code-editor .cm-scroller) {
-    overflow: auto;
+    overflow-x: hidden !important;
+    overflow-y: auto;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  :global(.code-editor .cm-content) {
+    max-width: 100% !important;
+    min-width: 0;
+    box-sizing: border-box;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    overflow-x: hidden !important;
+    width: 100%;
+  }
+
+  :global(.code-editor .cm-line) {
+    max-width: 100% !important;
+    min-width: 0;
+    box-sizing: border-box;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    overflow-x: hidden !important;
+  }
+
+  :global(.code-editor .cm-line > *) {
+    max-width: 100% !important;
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
   }
 
   :global(.code-editor .cm-highlight-marker) {
     background-color: rgba(255, 255, 0, 0.4);
     padding: 2px 0;
     border-radius: 2px;
+  }
+
+  /* Prevent any CodeMirror element from causing horizontal overflow */
+  :global(.code-editor .cm-gutters),
+  :global(.code-editor .cm-gutter),
+  :global(.code-editor .cm-panels),
+  :global(.code-editor .cm-panel),
+  :global(.code-editor .cm-focused) {
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden !important;
+  }
+
+  /* Ensure all text content in CodeMirror wraps */
+  :global(.code-editor .cm-content),
+  :global(.code-editor .cm-line),
+  :global(.code-editor .cm-lineContent) {
+    overflow-x: hidden !important;
+    word-break: break-word;
+    overflow-wrap: break-word;
   }
 </style>

@@ -28,6 +28,7 @@
   import CreatePatchDialog from './components/dialogs/CreatePatchDialog.svelte';
   import PatchHighlightDialog from './components/dialogs/PatchHighlightDialog.svelte';
   import PatchCommentDialog from './components/dialogs/PatchCommentDialog.svelte';
+  import CreateDocumentationDialog from './components/dialogs/CreateDocumentationDialog.svelte';
   import CommitDialog from './components/dialogs/CommitDialog.svelte';
   import VerificationDialog from './components/dialogs/VerificationDialog.svelte';
   import CloneUrlVerificationDialog from './components/dialogs/CloneUrlVerificationDialog.svelte';
@@ -600,6 +601,68 @@
   async function createFile() {
     const callbacks = createFileCallbacks(state, getUserEmail, getUserName, loadFiles, loadFile, renderFileAsHtml, applySyntaxHighlighting);
     await createFileService(state, callbacks);
+  }
+  async function createDocumentation() {
+    if (!state.user.pubkey || !repoOwnerPubkeyDerived) {
+      alert('Please log in to create documentation');
+      return;
+    }
+
+    try {
+      state.saving = true;
+      const { signEventWithNIP07 } = await import('$lib/services/nostr/nip07-signer.js');
+      const { NostrClient } = await import('$lib/services/nostr/nostr-client.js');
+      const { KIND } = await import('$lib/types/nostr.js');
+      const { getUserRelays } = await import('$lib/services/nostr/user-relays.js');
+      const { DEFAULT_NOSTR_RELAYS, combineRelays } = await import('$lib/config.js');
+
+      const selectedKind = state.forms.documentation.kind;
+      
+      // Build tags based on kind
+      const tags: string[][] = [
+        ['d', state.forms.documentation.identifier],
+        ['title', state.forms.documentation.title]
+      ];
+
+      // For repository-related kinds, add the repository address
+      if (selectedKind === 30818 || selectedKind === 30817) {
+        const repoAddress = `${KIND.REPO_ANNOUNCEMENT}:${repoOwnerPubkeyDerived}:${state.repo}`;
+        tags.push(['a', repoAddress]);
+      }
+
+      const event = await signEventWithNIP07({
+        kind: selectedKind,
+        content: state.forms.documentation.content,
+        tags,
+        created_at: Math.floor(Date.now() / 1000),
+        pubkey: ''
+      });
+
+      // Get user's relays and combine with default relays
+      const { outbox } = await getUserRelays(state.user.pubkey, nostrClient);
+      const relaysToPublish = combineRelays([...DEFAULT_NOSTR_RELAYS, ...outbox]);
+
+      // Publish the event
+      const client = new NostrClient(relaysToPublish);
+      await client.publishEvent(event, relaysToPublish);
+
+      // Clear form and close dialog
+      state.forms.documentation.kind = 30818;
+      state.forms.documentation.title = '';
+      state.forms.documentation.identifier = '';
+      state.forms.documentation.content = '';
+      state.openDialog = null;
+
+      // Reload documentation
+      await loadDocumentation();
+
+      alert('Documentation event created and published successfully!');
+    } catch (err) {
+      console.error('Failed to create documentation:', err);
+      alert(`Failed to create documentation: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      state.saving = false;
+    }
   }
   async function deleteFile(filePath: string) {
     const callbacks = createFileCallbacks(state, getUserEmail, getUserName, loadFiles, loadFile, renderFileAsHtml, applySyntaxHighlighting);
@@ -1400,9 +1463,13 @@
           }}
           onTogglePreview={() => {
             state.preview.file.showPreview = !state.preview.file.showPreview;
+            // When switching to raw mode, ensure syntax highlighting is applied
             if (!state.preview.file.showPreview && state.files.content && state.files.currentFile) {
               const ext = state.files.currentFile.split('.').pop() || '';
-              applySyntaxHighlighting(state.files.content, ext).catch(err => console.error('Error applying syntax highlighting:', err));
+              // Only apply if we don't already have highlighted content
+              if (!state.preview.file.highlightedContent || state.preview.file.highlightedContent.trim() === '') {
+                applySyntaxHighlighting(state.files.content, ext).catch(err => console.error('Error applying syntax highlighting:', err));
+              }
             }
           }}
           onCopyFileContent={copyFileContent}
@@ -1432,6 +1499,11 @@
             }
             goto(url.pathname + url.search, { replaceState: true, noScroll: true });
           }}
+          onCreateFile={() => {
+            if (!state.user.pubkey || !state.maintainers.isMaintainer || needsClone) return;
+            state.openDialog = 'createFile';
+          }}
+          onApplySyntaxHighlighting={applySyntaxHighlighting}
         />
       {/if}
 
@@ -1792,6 +1864,11 @@
             }
             goto(url.pathname + url.search, { replaceState: true, noScroll: true });
           }}
+          isMaintainer={state.maintainers.isMaintainer}
+          onCreateDocumentation={() => {
+            if (!state.user.pubkey || !state.maintainers.isMaintainer) return;
+            state.openDialog = 'createDocumentation';
+          }}
         />
       {/if}
 
@@ -1987,6 +2064,13 @@
     open={state.openDialog === 'cloneUrlVerification'}
     {state}
     onVerify={verifyCloneUrl}
+    onClose={() => state.openDialog = null}
+  />
+
+  <CreateDocumentationDialog
+    open={state.openDialog === 'createDocumentation' && !!state.user.pubkey && state.maintainers.isMaintainer}
+    {state}
+    onCreate={createDocumentation}
     onClose={() => state.openDialog = null}
   />
 </div>

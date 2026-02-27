@@ -20,6 +20,11 @@ export async function loadCommitHistory(
   state.loading.commits = true;
   state.error = null;
   try {
+    // Use currentBranch, fallback to defaultBranch, then 'master'
+    const branch = state.git.currentBranch || state.git.defaultBranch || 'master';
+    const url = `/api/repos/${state.npub}/${state.repo}/commits?branch=${encodeURIComponent(branch)}&limit=50`;
+    console.log('[loadCommitHistory] Fetching commits:', { url, branch, currentBranch: state.git.currentBranch, defaultBranch: state.git.defaultBranch });
+    
     const data = await apiRequest<Array<{
       hash?: string;
       sha?: string;
@@ -27,7 +32,9 @@ export async function loadCommitHistory(
       author?: string;
       date?: string;
       files?: string[];
-    }>>(`/api/repos/${state.npub}/${state.repo}/commits?branch=${state.git.currentBranch}&limit=50`);
+    }>>(url);
+    
+    console.log('[loadCommitHistory] Received data:', { commitCount: data?.length || 0, data });
     
     // Normalize commits: API-based commits use 'sha', local commits use 'hash'
     state.git.commits = data.map((commit: any) => ({
@@ -38,6 +45,8 @@ export async function loadCommitHistory(
       files: commit.files || []
     })).filter((commit: any) => commit.hash); // Filter out commits without hash
     
+    console.log('[loadCommitHistory] Normalized commits:', { count: state.git.commits.length });
+    
     // Verify commits in background (only for cloned repos)
     if (state.clone.isCloned === true) {
       state.git.commits.forEach(commit => {
@@ -47,6 +56,7 @@ export async function loadCommitHistory(
       });
     }
   } catch (err) {
+    console.error('[loadCommitHistory] Error loading commits:', err);
     state.error = err instanceof Error ? err.message : 'Failed to load commit history';
   } finally {
     state.loading.commits = false;

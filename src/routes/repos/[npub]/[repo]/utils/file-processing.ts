@@ -264,9 +264,11 @@ export async function applySyntaxHighlighting(
   setHighlightedContent: (html: string) => void
 ): Promise<void> {
   try {
+    console.log('[applySyntaxHighlighting] Starting:', { ext, contentLength: content.length });
     const hljsModule = await import('highlight.js');
     const hljs = hljsModule.default || hljsModule;
     const lang = getHighlightLanguage(ext);
+    console.log('[applySyntaxHighlighting] Language detected:', lang);
     
     // Register Markdown language if needed
     if (lang === 'markdown' && !hljs.getLanguage('markdown')) {
@@ -314,15 +316,18 @@ export async function applySyntaxHighlighting(
     }
     
     // Apply highlighting
+    let highlighted: string;
     if (lang === 'plaintext') {
-      setHighlightedContent(`<pre><code class="hljs">${hljs.highlight(content, { language: 'plaintext' }).value}</code></pre>`);
+      highlighted = `<pre><code class="hljs">${hljs.highlight(content, { language: 'plaintext' }).value}</code></pre>`;
     } else if (hljs.getLanguage(lang)) {
-      setHighlightedContent(`<pre><code class="hljs language-${lang}">${hljs.highlight(content, { language: lang }).value}</code></pre>`);
+      highlighted = `<pre><code class="hljs language-${lang}">${hljs.highlight(content, { language: lang }).value}</code></pre>`;
     } else {
-      setHighlightedContent(`<pre><code class="hljs">${hljs.highlightAuto(content).value}</code></pre>`);
+      highlighted = `<pre><code class="hljs">${hljs.highlightAuto(content).value}</code></pre>`;
     }
+    console.log('[applySyntaxHighlighting] Highlighting complete, setting content:', { highlightedLength: highlighted.length });
+    setHighlightedContent(highlighted);
   } catch (err) {
-    console.error('Error applying syntax highlighting:', err);
+    console.error('[applySyntaxHighlighting] Error applying syntax highlighting:', err);
     setHighlightedContent(`<pre><code class="hljs">${escapeHtml(content)}</code></pre>`);
   }
 }

@@ -48,6 +48,8 @@
     activeTab?: string;
     tabs?: Array<{ id: string; label: string; icon?: string }>;
     onTabChange?: (tab: string) => void;
+    onCreateFile?: () => void;
+    onApplySyntaxHighlighting?: (content: string, ext: string) => Promise<void>;
   }
   
   let {
@@ -88,8 +90,40 @@
     userPubkey = null,
     activeTab = '',
     tabs = [],
-    onTabChange = () => {}
+    onTabChange = () => {},
+    onCreateFile = () => {},
+    onApplySyntaxHighlighting = async () => {}
   }: Props = $props();
+
+  // Apply syntax highlighting when fileContent changes and we're showing raw content
+  // This ensures highlighting is ALWAYS applied for raw files, regardless of maintainer status
+  $effect(() => {
+    // Only apply highlighting when:
+    // 1. We have file content
+    // 2. We have a current file
+    // 3. We're NOT in preview mode (showing raw)
+    // 4. It's NOT an image
+    // 5. Content is not empty
+    if (fileContent && currentFile && !showFilePreview && !isImageFile && fileContent.trim().length > 0) {
+      const ext = currentFile.split('.').pop() || '';
+      // Always apply highlighting if we don't have highlighted content or it's empty or doesn't contain hljs
+      const needsHighlighting = !highlightedFileContent || 
+                                highlightedFileContent.trim() === '' || 
+                                !highlightedFileContent.includes('hljs');
+      
+      if (needsHighlighting) {
+        // Use a small delay to avoid race conditions with file loading
+        const timeoutId = setTimeout(() => {
+          console.log('[FilesTab] Applying syntax highlighting:', { ext, contentLength: fileContent.length, currentFile });
+          onApplySyntaxHighlighting(fileContent, ext).catch(err => {
+            console.error('[FilesTab] Error applying syntax highlighting:', err);
+          });
+        }, 50);
+        
+        return () => clearTimeout(timeoutId);
+      }
+    }
+  });
 </script>
 
 <TabLayout 
@@ -101,6 +135,19 @@
   title={currentFile ? `File: ${currentFile.split('/').pop()}` : 'Files'}
 >
   {#snippet leftPane()}
+    {#if isMaintainer && onCreateFile}
+      <div class="create-file-header">
+        <button 
+          onclick={onCreateFile}
+          class="create-file-button"
+          title="Create New File"
+          disabled={needsClone}
+        >
+          <img src="/icons/plus.svg" alt="New" class="icon" />
+          <span>New File</span>
+        </button>
+      </div>
+    {/if}
     <FileBrowser
       {files}
       {currentPath}
@@ -139,7 +186,7 @@
             {#if hasChanges}
               <span class="unsaved-indicator">● Unsaved changes</span>
             {/if}
-            {#if currentFile && supportsPreview((currentFile.split('.').pop() || '').toLowerCase()) && !isMaintainer}
+            {#if currentFile && supportsPreview((currentFile.split('.').pop() || '').toLowerCase())}
               <button 
                 onclick={onTogglePreview}
                 class="preview-toggle-button"
@@ -185,16 +232,24 @@
         {:else}
           <div class="editor-container">
             {#if isMaintainer}
-              <CodeEditor
-                content={editedContent || fileContent}
-                language={fileLanguage}
-                readOnly={needsClone}
-                onChange={(value) => {
-                  editedContent = value;
-                  hasChanges = value !== fileContent;
-                  onContentChange(value);
-                }}
-              />
+              {#if currentFile && showFilePreview && fileHtml && supportsPreview((currentFile.split('.').pop() || '').toLowerCase())}
+                <div class="read-only-editor" class:word-wrap={wordWrap}>
+                  <div class="file-preview markdown">
+                    <NostrHtmlRenderer html={fileHtml} />
+                  </div>
+                </div>
+              {:else}
+                <CodeEditor
+                  content={editedContent || fileContent}
+                  language={fileLanguage}
+                  readOnly={needsClone}
+                  onChange={(value) => {
+                    editedContent = value;
+                    hasChanges = value !== fileContent;
+                    onContentChange(value);
+                  }}
+                />
+              {/if}
             {:else}
               <div class="read-only-editor" class:word-wrap={wordWrap}>
                 {#if isImageFile && imageUrl}
@@ -205,13 +260,13 @@
                   <div class="file-preview markdown">
                     <NostrHtmlRenderer html={fileHtml} />
                   </div>
-                {:else if highlightedFileContent}
+                {:else if fileContent}
                   <div class="raw-content">
-                    {@html highlightedFileContent}
-                  </div>
-                {:else}
-                  <div class="raw-content">
-                    <pre><code class="hljs">{fileContent}</code></pre>
+                    {#if highlightedFileContent && highlightedFileContent.trim() !== ''}
+                      {@html highlightedFileContent}
+                    {:else}
+                      <pre><code class="hljs language-plaintext">{fileContent}</code></pre>
+                    {/if}
                   </div>
                 {/if}
               </div>
@@ -244,6 +299,10 @@
     flex-direction: column;
     min-height: 0;
     overflow: hidden;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
   }
   
   .file-editor .editor-header {
@@ -296,11 +355,13 @@
   .raw-content {
     width: 100%;
     max-width: 100%;
-    overflow-x: auto;
+    overflow-x: hidden;
     overflow-y: auto;
     box-sizing: border-box;
     contain: layout;
     min-width: 0;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
   }
   
   .raw-content pre {
@@ -308,8 +369,10 @@
     padding: 1rem;
     background: var(--bg-secondary);
     border-radius: 4px;
-    overflow-x: auto;
+    overflow-x: hidden;
+    overflow-y: visible;
     word-wrap: break-word;
+    overflow-wrap: break-word;
     white-space: pre-wrap;
     max-width: 100%;
     box-sizing: border-box;
@@ -319,23 +382,26 @@
   
   .raw-content code {
     display: block;
-    overflow-x: auto;
+    overflow-x: hidden;
+    overflow-y: visible;
     max-width: 100%;
     box-sizing: border-box;
     width: 100%;
     min-width: 0;
     word-break: break-word;
     overflow-wrap: break-word;
+    white-space: pre-wrap;
   }
   
   .raw-content :global(code.hljs) {
-    overflow-x: auto;
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
     display: block;
     max-width: 100% !important;
     min-width: 0;
-    word-break: break-word;
-    overflow-wrap: break-word;
-    white-space: pre-wrap;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: pre-wrap !important;
     box-sizing: border-box;
   }
   
@@ -357,6 +423,7 @@
     white-space: pre-wrap !important;
     display: inline;
     box-sizing: border-box;
+    overflow-x: hidden !important;
   }
   
   .raw-content :global(pre code.hljs) {
@@ -374,6 +441,20 @@
     width: 100%;
     max-width: 100%;
     min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .editor-container :global(.code-editor) {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .editor-container :global(.code-editor),
+  .editor-container :global(.code-editor *) {
+    max-width: 100% !important;
+    box-sizing: border-box;
   }
   
   .read-only-editor {
@@ -400,12 +481,22 @@
   .read-only-editor > .raw-content > pre {
     max-width: 100%;
     min-width: 0;
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: pre-wrap !important;
   }
   
   .read-only-editor > .raw-content > pre > code {
     max-width: 100%;
     min-width: 0;
     display: block;
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: pre-wrap !important;
   }
   
   .file-editor .editor-actions {
@@ -418,5 +509,43 @@
     opacity: 1 !important;
     width: auto;
     min-width: 0;
+  }
+
+  .create-file-header {
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 0.5rem;
+  }
+
+  .create-file-button {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--button-primary);
+    color: var(--accent-text, #ffffff);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.9rem;
+    transition: background 0.2s;
+  }
+
+  .create-file-button:hover:not(:disabled) {
+    background: var(--button-primary-hover);
+  }
+
+  .create-file-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .create-file-button .icon {
+    width: 16px;
+    height: 16px;
+    filter: brightness(0) invert(1);
   }
 </style>

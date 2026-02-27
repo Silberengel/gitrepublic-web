@@ -591,25 +591,16 @@ export async function loadFile(
       state.preview.file.showPreview = true;
       state.preview.file.html = '';
       
-      // Render markdown/asciidoc/HTML/CSV files as HTML for preview
-      if (state.files.content && (ext === 'md' || ext === 'markdown' || ext === 'adoc' || ext === 'asciidoc' || ext === 'html' || ext === 'htm' || ext === 'csv')) {
-        await callbacks.renderFileAsHtml(state.files.content, ext || '');
+      // ALWAYS apply syntax highlighting for ALL files - this ensures raw view always has highlighting
+      // We'll apply it regardless of preview mode so it's ready when user switches to raw view
+      if (state.files.content && state.files.content.trim().length > 0) {
+        await callbacks.applySyntaxHighlighting(state.files.content, ext || '');
       }
       
-      // Apply syntax highlighting
-      // For files that support HTML preview (markdown, HTML, etc.), only show highlighting in raw mode
-      // For code files and other non-markup files, always show syntax highlighting
-      const hasHtmlPreview = supportsPreview(ext);
-      if (state.files.content) {
-        if (hasHtmlPreview) {
-          // Markup files: only show highlighting when not in preview mode (raw mode)
-          if (!state.preview.file.showPreview) {
-            await callbacks.applySyntaxHighlighting(state.files.content, ext || '');
-          }
-        } else {
-          // Code files and other non-markup files: always show syntax highlighting
-          await callbacks.applySyntaxHighlighting(state.files.content, ext || '');
-        }
+      // Render markdown/asciidoc/HTML/CSV files as HTML for preview (if in preview mode)
+      // This happens after highlighting so both are available
+      if (state.files.content && (ext === 'md' || ext === 'markdown' || ext === 'adoc' || ext === 'asciidoc' || ext === 'html' || ext === 'htm' || ext === 'csv')) {
+        await callbacks.renderFileAsHtml(state.files.content, ext || '');
       }
     }
   } catch (err: any) {

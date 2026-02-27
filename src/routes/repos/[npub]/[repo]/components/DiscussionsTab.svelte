@@ -103,6 +103,40 @@
         combinedRelays
       );
       
+      // Helper function to normalize comments (ensure kind and pubkey are always present)
+      const normalizeComment = (comment: {
+        id: string;
+        content: string;
+        author: string;
+        createdAt: number;
+        kind?: number;
+        pubkey?: string;
+        replies?: Array<{
+          id: string;
+          content: string;
+          author: string;
+          createdAt: number;
+          kind?: number;
+          pubkey?: string;
+          replies?: Array<{
+            id: string;
+            content: string;
+            author: string;
+            createdAt: number;
+            kind?: number;
+            pubkey?: string;
+          }>;
+        }>;
+      }): Comment => ({
+        id: comment.id,
+        content: comment.content,
+        author: comment.author,
+        createdAt: comment.createdAt,
+        kind: comment.kind ?? KIND.COMMENT,
+        pubkey: comment.pubkey ?? comment.author,
+        replies: comment.replies?.map(normalizeComment)
+      });
+
       const fetchedDiscussions = discussionEntries.map(entry => ({
         type: entry.type,
         id: entry.id,
@@ -112,7 +146,7 @@
         createdAt: entry.createdAt,
         kind: entry.kind ?? KIND.THREAD,
         pubkey: entry.pubkey ?? '',
-        comments: entry.comments
+        comments: entry.comments?.map(normalizeComment)
       }));
       
       discussions = fetchedDiscussions;
@@ -498,8 +532,14 @@
 
 <style>
   .discussions-sidebar {
+    width: 100%;
+    max-width: 100%;
     height: 100%;
     overflow-y: auto;
+    position: relative;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
   }
 
   .discussions-header {
@@ -508,12 +548,15 @@
     justify-content: space-between;
     margin-bottom: 1rem;
     padding-bottom: 0.5rem;
-    border-bottom: 1px solid var(--border-color, #e0e0e0);
+    border-bottom: 1px solid var(--border-color);
+    width: 100%;
+    box-sizing: border-box;
   }
 
   .discussions-header h2 {
     margin: 0;
     font-size: 1.25rem;
+    color: var(--text-primary);
   }
 
   .create-discussion-button {
@@ -538,6 +581,10 @@
     list-style: none;
     padding: 0;
     margin: 0;
+    width: 100%;
+    box-sizing: border-box;
+    flex: 1;
+    overflow-y: auto;
   }
 
   .discussion-item {
@@ -548,20 +595,21 @@
     width: 100%;
     text-align: left;
     padding: 0.75rem;
-    background: var(--item-bg, #fff);
-    border: 1px solid var(--border-color, #e0e0e0);
+    background: var(--bg-secondary, var(--bg-primary));
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
     border-radius: 4px;
     cursor: pointer;
     transition: background 0.2s;
   }
 
   .discussion-item-button:hover {
-    background: var(--item-hover-bg, #f5f5f5);
+    background: var(--bg-hover, var(--bg-secondary));
   }
 
   .discussion-item.selected .discussion-item-button {
-    background: var(--selected-bg, #e3f2fd);
-    border-color: var(--selected-border, #2196f3);
+    background: var(--bg-selected, var(--bg-secondary));
+    border-color: var(--accent-color, var(--button-primary));
   }
 
   .discussion-header {
@@ -578,12 +626,13 @@
     align-items: center;
     gap: 0.5rem;
     font-size: 0.875rem;
-    color: var(--text-secondary, #666);
+    color: var(--text-secondary);
   }
 
   .discussion-type {
     padding: 0.125rem 0.5rem;
-    background: var(--type-bg, #e0e0e0);
+    background: var(--bg-tertiary, var(--bg-secondary));
+    color: var(--text-primary);
     border-radius: 4px;
     font-size: 0.75rem;
   }
@@ -595,13 +644,14 @@
   .empty-state {
     padding: 2rem;
     text-align: center;
-    color: var(--text-secondary, #666);
+    color: var(--text-secondary);
   }
 
   .error {
     padding: 1rem;
-    background: var(--error-bg, #ffebee);
-    color: var(--error-color, #c62828);
+    background: var(--bg-secondary);
+    color: var(--accent-error, #ff5252);
+    border: 1px solid var(--accent-error, #ff5252);
     border-radius: 4px;
     margin-bottom: 1rem;
   }
@@ -620,7 +670,9 @@
   }
 
   .modal {
-    background: var(--modal-bg, #fff);
+    background: var(--modal-bg, var(--bg-primary));
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 1.5rem;
     max-width: 500px;
@@ -631,11 +683,13 @@
 
   .modal h3 {
     margin: 0 0 1rem 0;
+    color: var(--text-primary);
   }
 
   .modal label {
     display: block;
     margin-bottom: 1rem;
+    color: var(--text-primary);
   }
 
   .modal label input,
@@ -643,8 +697,24 @@
     width: 100%;
     padding: 0.5rem;
     margin-top: 0.25rem;
-    border: 1px solid var(--border-color, #e0e0e0);
+    border: 1px solid var(--border-color);
     border-radius: 4px;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: inherit;
+  }
+
+  .modal label textarea {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.9rem;
+    resize: vertical;
+  }
+
+  .modal label input:focus,
+  .modal label textarea:focus {
+    outline: none;
+    border-color: var(--button-primary);
+    box-shadow: 0 0 0 2px rgba(var(--button-primary-rgb, 220, 20, 60), 0.2);
   }
 
   .modal-actions {
@@ -659,15 +729,27 @@
     border: none;
     border-radius: 4px;
     cursor: pointer;
+    font-family: 'IBM Plex Serif', serif;
+    transition: background 0.2s ease;
   }
 
   .cancel-button {
-    background: var(--cancel-bg, #e0e0e0);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+  }
+
+  .cancel-button:hover {
+    background: var(--bg-secondary);
   }
 
   .save-button {
-    background: var(--primary-color, #2196f3);
-    color: white;
+    background: var(--button-primary);
+    color: var(--accent-text, #ffffff);
+  }
+
+  .save-button:hover:not(:disabled) {
+    background: var(--button-primary-hover);
   }
 
   .save-button:disabled {

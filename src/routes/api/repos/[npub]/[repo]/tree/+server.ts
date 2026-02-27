@@ -323,5 +323,5 @@ export const GET: RequestHandler = createRepoGetHandler(
       );
     }
   },
-  { operation: 'listFiles', requireRepoExists: false, requireRepoAccess: true } // Handle on-demand fetching, but check access for private repos
+  { operation: 'listFiles', requireRepoExists: false, requireRepoAccess: false } // Tree listing should be publicly accessible for public repos
 );

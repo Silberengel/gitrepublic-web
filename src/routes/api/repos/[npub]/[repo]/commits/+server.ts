@@ -155,5 +155,5 @@ export const GET: RequestHandler = createRepoGetHandler(
       );
     }
   },
-  { operation: 'getCommits', requireRepoExists: false, requireRepoAccess: true } // Handle on-demand fetching, but check access for private repos
+  { operation: 'getCommits', requireRepoExists: false, requireRepoAccess: false } // Commits should be publicly accessible for public repos
 );

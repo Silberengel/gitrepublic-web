@@ -1,3 +1,15 @@
+<script module lang="ts">
+  export interface Comment {
+    id: string;
+    content: string;
+    author: string;
+    createdAt: number;
+    kind: number;
+    pubkey: string;
+    replies?: Comment[];
+  }
+</script>
+
 <script lang="ts">
   import UserBadge from '$lib/components/UserBadge.svelte';
   import EventCopyButton from '$lib/components/EventCopyButton.svelte';
@@ -9,16 +21,6 @@
   } from '$lib/utils/nostr-links.js';
   import type { NostrEvent } from '$lib/types/nostr.js';
   import CommentRendererSelf from './CommentRenderer.svelte';
-
-  export interface Comment {
-    id: string;
-    content: string;
-    author: string;
-    createdAt: number;
-    kind: number;
-    pubkey: string;
-    replies?: Comment[];
-  }
 
   interface Props {
     comment: Comment;
@@ -113,15 +115,16 @@
   .comment-item {
     margin-bottom: 1rem;
     padding: 0.75rem;
-    border-left: 2px solid var(--border-color, #e0e0e0);
-    background: var(--comment-bg, #f9f9f9);
+    border-left: 2px solid var(--border-color);
+    background: var(--bg-tertiary, var(--bg-secondary));
+    color: var(--text-primary);
   }
 
   .nested-comment {
     margin-left: 1.5rem;
     margin-top: 0.5rem;
-    border-left-color: var(--nested-border-color, #ccc);
-    background: var(--nested-comment-bg, #f5f5f5);
+    border-left-color: var(--border-color);
+    background: var(--bg-secondary, var(--bg-primary));
   }
 
   .comment-meta {
@@ -130,11 +133,12 @@
     gap: 0.5rem;
     margin-bottom: 0.5rem;
     font-size: 0.875rem;
-    color: var(--text-secondary, #666);
+    color: var(--text-secondary);
   }
 
   .comment-content {
     margin-top: 0.5rem;
+    color: var(--text-primary);
   }
 
   .create-reply-button {
@@ -164,9 +168,10 @@
   .referenced-event {
     margin-bottom: 0.75rem;
     padding: 0.5rem;
-    background: var(--referenced-bg, #f0f0f0);
+    background: var(--bg-secondary, var(--bg-primary));
+    color: var(--text-primary);
     border-radius: 4px;
-    border-left: 2px solid var(--referenced-border, #999);
+    border-left: 2px solid var(--border-color);
   }
 
   .referenced-event-header {
@@ -178,20 +183,21 @@
   }
 
   .referenced-event-time {
-    color: var(--text-secondary, #666);
+    color: var(--text-secondary);
   }
 
   .referenced-event-content {
     font-size: 0.9rem;
-    color: var(--text-secondary, #666);
+    color: var(--text-primary);
   }
 
   .nostr-link-event {
     margin: 0.5rem 0;
     padding: 0.5rem;
-    background: var(--link-event-bg, #f0f0f0);
+    background: var(--bg-secondary, var(--bg-primary));
+    color: var(--text-primary);
     border-radius: 4px;
-    border-left: 2px solid var(--link-event-border, #999);
+    border-left: 2px solid var(--border-color);
   }
 
   .nostr-link-event-header {
@@ -203,16 +209,16 @@
   }
 
   .nostr-link-event-time {
-    color: var(--text-secondary, #666);
+    color: var(--text-secondary);
   }
 
   .nostr-link-event-content {
     font-size: 0.9rem;
-    color: var(--text-secondary, #666);
+    color: var(--text-primary);
   }
 
   .nostr-link-placeholder {
-    color: var(--link-color, #0066cc);
+    color: var(--accent-color, var(--button-primary));
     text-decoration: underline;
   }
 </style>

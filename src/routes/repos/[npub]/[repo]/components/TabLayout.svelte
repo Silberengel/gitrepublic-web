@@ -25,8 +25,7 @@
     activeTab = '',
     tabs = [],
     onTabChange = () => {},
-    title = '',
-    headerActions
+    title = ''
   }: Props = $props();
 </script>
 
@@ -112,18 +111,29 @@
   }
   
   .left-pane {
-    flex: 0 0 300px;
-    min-width: 300px;
-    max-width: 300px;
+    flex: 0 0 400px;
+    min-width: 400px;
+    max-width: 400px;
     border-right: 1px solid var(--border-color);
     overflow-y: auto;
     padding: 1rem;
+    box-sizing: border-box;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    display: flex;
+    flex-direction: column;
+  }
+  
+  .left-pane > * {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
     box-sizing: border-box;
   }
   
   .right-panel {
     flex: 1 1 auto;
-    min-width: 0;
+    min-width: 400px;
     width: auto;
     max-width: none;
     overflow-y: auto;
@@ -132,6 +142,8 @@
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
+    background: var(--bg-primary);
+    color: var(--text-primary);
   }
   
   .right-panel > * {

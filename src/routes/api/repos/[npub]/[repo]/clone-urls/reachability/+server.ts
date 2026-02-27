@@ -9,12 +9,13 @@ import type { RequestHandler } from './$types';
 import { getCloneUrlsReachability, type ReachabilityResult } from '$lib/services/git/clone-url-reachability.js';
 import { extractCloneUrls } from '$lib/utils/nostr-utils.js';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
-import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
+import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS } from '$lib/config.js';
 import { KIND } from '$lib/types/nostr.js';
 import { nip19 } from 'nostr-tools';
 import { requireNpubHex } from '$lib/utils/npub-utils.js';
 import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 import { eventCache } from '$lib/services/nostr/event-cache.js';
+import { nostrClient } from '$lib/services/service-registry.js';
 import logger from '$lib/services/logger.js';
 
 /**
@@ -38,12 +39,23 @@ export const GET: RequestHandler = async ({ params, url }) => {
     
     const repoOwnerPubkey = decoded.data as string;
     
-    // Fetch repository announcement
-    const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
-    const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoOwnerPubkey, eventCache);
-    const announcement = findRepoAnnouncement(allEvents, repo);
+    // Fetch repository announcement (case-insensitive) with caching
+    let allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoOwnerPubkey, eventCache);
+    let announcement = findRepoAnnouncement(allEvents, repo);
+    
+    // If no events found in cache/default relays, try all relays (default + search)
+    if (!announcement) {
+      const allRelays = [...new Set([...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS])];
+      // Only create new client if we have additional relays to try
+      if (allRelays.length > DEFAULT_NOSTR_RELAYS.length) {
+        const allRelaysClient = new NostrClient(allRelays);
+        allEvents = await fetchRepoAnnouncementsWithCache(allRelaysClient, repoOwnerPubkey, eventCache);
+        announcement = findRepoAnnouncement(allEvents, repo);
+      }
+    }
     
     if (!announcement) {
+      logger.warn({ npub, repo, repoOwnerPubkey, eventCount: allEvents.length }, 'Repository announcement not found for clone URL reachability check');
       return error(404, 'Repository announcement not found');
     }
     

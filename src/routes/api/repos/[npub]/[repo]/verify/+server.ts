@@ -222,10 +222,32 @@ export const POST: RequestHandler = createRepoPostHandler(
     }
 
     try {
-      // Get default branch
-      const defaultBranch = await fileManager.getDefaultBranch(context.npub, context.repo);
+      // Check if repository has any commits
+      const git = simpleGit(repoPath);
+      let hasCommits = false;
+      // Use same default branch logic as repo-manager (master, or from env)
+      let defaultBranch = process.env.DEFAULT_BRANCH || 'master';
       
-      // Get worktree for the default branch
+      try {
+        const commitCount = await git.raw(['rev-list', '--count', '--all']);
+        hasCommits = parseInt(commitCount.trim(), 10) > 0;
+      } catch {
+        // If we can't check, assume no commits
+        hasCommits = false;
+      }
+      
+      // If repository has commits, get the default branch
+      if (hasCommits) {
+        try {
+          defaultBranch = await fileManager.getDefaultBranch(context.npub, context.repo);
+        } catch {
+          // Fallback to default if getDefaultBranch fails
+          defaultBranch = process.env.DEFAULT_BRANCH || 'master';
+        }
+      }
+      
+      // Get worktree for the default branch (worktree manager will create branch if needed)
+      logger.info({ npub: context.npub, repo: context.repo, branch: defaultBranch, hasCommits }, 'Getting worktree for announcement commit');
       const worktreePath = await fileManager.getWorktree(repoPath, defaultBranch, context.npub, context.repo);
       
       // Check if announcement already exists
@@ -264,9 +286,37 @@ export const POST: RequestHandler = createRepoPostHandler(
 
       // Commit the announcement
       const commitMessage = `Verify repository ownership by committing repo announcement event\n\nEvent ID: ${announcement.id}`;
+      
+      // For empty repositories, ensure the branch is set up in the worktree
+      if (!hasCommits) {
+        try {
+          // Check if branch exists in worktree
+          const currentBranch = await workGit.revparse(['--abbrev-ref', 'HEAD']).catch(() => null);
+          if (!currentBranch || currentBranch === 'HEAD') {
+            // Branch doesn't exist, create orphan branch in worktree
+            logger.debug({ npub: context.npub, repo: context.repo, branch: defaultBranch }, 'Creating orphan branch in worktree');
+            await workGit.raw(['checkout', '--orphan', defaultBranch]);
+          } else if (currentBranch !== defaultBranch) {
+            // Switch to the correct branch
+            logger.debug({ npub: context.npub, repo: context.repo, currentBranch, targetBranch: defaultBranch }, 'Switching to target branch in worktree');
+            await workGit.checkout(defaultBranch);
+          }
+        } catch (branchErr) {
+          logger.warn({ error: branchErr, npub: context.npub, repo: context.repo, branch: defaultBranch }, 'Branch setup in worktree failed, attempting commit anyway');
+        }
+      }
+      
+      logger.info({ npub: context.npub, repo: context.repo, branch: defaultBranch, hasCommits }, 'Committing announcement file');
       await workGit.commit(commitMessage, ['nostr/repo-events.jsonl'], {
         '--author': `${authorName} <${authorEmail}>`
       });
+      
+      // Verify commit was created
+      const commitHash = await workGit.revparse(['HEAD']).catch(() => null);
+      if (!commitHash) {
+        throw new Error('Commit was created but HEAD is not pointing to a valid commit');
+      }
+      logger.info({ npub: context.npub, repo: context.repo, commitHash, branch: defaultBranch }, 'Announcement committed successfully');
 
       // Push to default branch (if there's a remote)
       try {

@@ -1,26 +1,25 @@
 /**
- * File Manager - Refactored to use modular components
- * Main class that delegates to focused modules
+ * File Manager - Core service for git repository operations
+ * Handles branches, files, commits, tags, and worktrees
  */
 
 import { join, resolve } from 'path';
 import simpleGit, { type SimpleGit } from 'simple-git';
 import { RepoManager } from './repo-manager.js';
 import logger from '$lib/services/logger.js';
-import { sanitizeError, isValidBranchName } from '$lib/utils/security.js';
+import { isValidBranchName } from '$lib/utils/security.js';
 import { repoCache, RepoCache } from './repo-cache.js';
 
 // Import modular operations
 import { getOrCreateWorktree, removeWorktree } from './file-manager/worktree-manager.js';
 import { validateFilePath, validateRepoName, validateNpub } from './file-manager/path-validator.js';
 import { listFiles, getFileContent } from './file-manager/file-operations.js';
-import { getBranches, validateBranchName } from './file-manager/branch-operations.js';
+import { getBranches as getBranchesModule } from './file-manager/branch-operations.js';
 import { writeFile, deleteFile } from './file-manager/write-operations.js';
 import { getCommitHistory, getDiff } from './file-manager/commit-operations.js';
 import { createTag, getTags } from './file-manager/tag-operations.js';
 
-// Types are defined below
-
+// Type definitions
 export interface FileEntry {
   name: string;
   path: string;
@@ -59,8 +58,6 @@ export interface Tag {
 export class FileManager {
   private repoManager: RepoManager;
   private repoRoot: string;
-  private dirExistenceCache: Map<string, { exists: boolean; timestamp: number }> = new Map();
-  private readonly DIR_CACHE_TTL = 5 * 60 * 1000;
   private fsPromises: typeof import('fs/promises') | null = null;
 
   constructor(repoRoot: string = '/repos') {
@@ -73,39 +70,6 @@ export class FileManager {
       this.fsPromises = await import('fs/promises');
     }
     return this.fsPromises;
-  }
-
-  private async pathExists(path: string): Promise<boolean> {
-    try {
-      const fs = await this.getFsPromises();
-      await fs.access(path);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  private sanitizePathForError(path: string): string {
-    const resolvedPath = resolve(path).replace(/\\/g, '/');
-    const resolvedRoot = resolve(this.repoRoot).replace(/\\/g, '/');
-    if (resolvedPath.startsWith(resolvedRoot + '/')) {
-      return resolvedPath.slice(resolvedRoot.length + 1);
-    }
-    return path.split(/[/\\]/).pop() || path;
-  }
-
-  private async ensureDirectoryExists(dirPath: string, description: string): Promise<void> {
-    const exists = await this.pathExists(dirPath);
-    if (exists) return;
-
-    try {
-      const { mkdir } = await this.getFsPromises();
-      await mkdir(dirPath, { recursive: true });
-      logger.debug({ dirPath: this.sanitizePathForError(dirPath) }, `Created ${description}`);
-    } catch (err) {
-      logger.error({ error: err, dirPath: this.sanitizePathForError(dirPath) }, `Failed to create ${description}`);
-      throw new Error(`Failed to create ${description}: ${err instanceof Error ? err.message : String(err)}`);
-    }
   }
 
   getRepoPath(npub: string, repoName: string): string {
@@ -188,7 +152,6 @@ export class FileManager {
       throw new Error('Repository not found');
     }
 
-    // Check repo size
     const repoSizeCheck = await this.repoManager.checkRepoSizeLimit(repoPath);
     if (!repoSizeCheck.withinLimit) {
       throw new Error(repoSizeCheck.error || 'Repository size limit exceeded');
@@ -196,12 +159,10 @@ export class FileManager {
 
     const worktreePath = await this.getWorktree(repoPath, branch, npub, repoName);
 
-    // Save commit signature helper
     const saveCommitSignature = async (worktreePath: string, event: any) => {
       await this.saveCommitSignatureEventToWorktree(worktreePath, event);
     };
 
-    // Check if repo is private
     const isRepoPrivate = async (npub: string, repoName: string) => {
       return this.isRepoPrivate(npub, repoName);
     };
@@ -301,17 +262,20 @@ export class FileManager {
         if (match) return match[1];
       }
     } catch {
-      try {
-        const remoteHead = await git.raw(['symbolic-ref', 'refs/remotes/origin/HEAD']);
-        if (remoteHead) {
-          const match = remoteHead.trim().match(/^refs\/remotes\/origin\/(.+)$/);
-          if (match) return match[1];
-        }
-      } catch {
-        // Fall through
-      }
+      // HEAD doesn't point to a branch, try remote
     }
 
+    try {
+      const remoteHead = await git.raw(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+      if (remoteHead) {
+        const match = remoteHead.trim().match(/^refs\/remotes\/origin\/(.+)$/);
+        if (match) return match[1];
+      }
+    } catch {
+      // No remote HEAD
+    }
+
+    // Try to get branches and find main/master
     try {
       const branches = await git.branch(['-r']);
       const branchList = branches.all
@@ -332,7 +296,7 @@ export class FileManager {
     if (!this.repoExists(npub, repoName)) {
       throw new Error('Repository not found');
     }
-    return getBranches({
+    return getBranchesModule({
       npub,
       repoName,
       repoPath,
@@ -340,29 +304,207 @@ export class FileManager {
     });
   }
 
+  /**
+   * Create a branch in a repository
+   * Handles empty repositories by creating orphan branches
+   */
   async createBranch(
     npub: string,
     repoName: string,
     branchName: string,
-    fromBranch: string = 'main'
+    fromBranch?: string
   ): Promise<void> {
+    logger.info({ npub, repoName, branchName, fromBranch }, '[FileManager.createBranch] START - called with parameters');
+    
     const repoPath = this.getRepoPath(npub, repoName);
+    logger.info({ npub, repoName, repoPath }, '[FileManager.createBranch] Repository path resolved');
+    
     if (!this.repoExists(npub, repoName)) {
+      logger.error({ npub, repoName, repoPath }, '[FileManager.createBranch] Repository does not exist');
       throw new Error('Repository not found');
     }
+    logger.info({ npub, repoName }, '[FileManager.createBranch] Repository exists confirmed');
 
     if (!isValidBranchName(branchName)) {
+      logger.error({ npub, repoName, branchName }, '[FileManager.createBranch] Invalid branch name');
       throw new Error(`Invalid branch name: ${branchName}`);
     }
+    logger.info({ npub, repoName, branchName }, '[FileManager.createBranch] Branch name validated');
 
     const git: SimpleGit = simpleGit(repoPath);
+    logger.info({ npub, repoName, repoPath }, '[FileManager.createBranch] Git instance created');
 
     try {
-      await git.raw(['branch', branchName, fromBranch]);
+      // Check if repository has any commits - use multiple methods for reliability
+      let hasCommits = false;
+      let commitCount = 0;
+      try {
+        // Method 1: rev-list count
+        const commitCountStr = await git.raw(['rev-list', '--count', '--all']);
+        commitCount = parseInt(commitCountStr.trim(), 10);
+        hasCommits = !isNaN(commitCount) && commitCount > 0;
+        
+        logger.info({ npub, repoName, branchName, fromBranch, commitCount, hasCommits }, '[FileManager] createBranch - rev-list result');
+        
+        // Method 2: Verify by checking if any refs exist
+        if (hasCommits) {
+          try {
+            const refs = await git.raw(['for-each-ref', '--count=1', 'refs/heads/']);
+            if (!refs || refs.trim().length === 0) {
+              hasCommits = false;
+              logger.warn({ npub, repoName }, '[FileManager] No refs found despite commit count, treating as empty');
+            }
+          } catch (refError) {
+            hasCommits = false;
+            logger.warn({ npub, repoName, error: refError }, '[FileManager] Failed to check refs, treating as empty');
+          }
+        }
+      } catch (revListError) {
+        // rev-list fails for empty repos - this is expected
+        hasCommits = false;
+        logger.info({ npub, repoName, error: revListError }, '[FileManager] rev-list failed (empty repo expected)');
+      }
+
+      // CRITICAL SAFETY: Use local variable and clear it if no commits
+      let sourceBranch: string | undefined = fromBranch;
+      
+      // CRITICAL SAFETY: If fromBranch is 'master' or 'main' and we have no commits, clear it
+      if ((sourceBranch === 'master' || sourceBranch === 'main') && !hasCommits) {
+        logger.error({ npub, repoName, sourceBranch, hasCommits }, '[FileManager] ERROR: sourceBranch is master/main but no commits! Clearing it.');
+        sourceBranch = undefined;
+      }
+      
+      // CRITICAL: If no commits, ALWAYS clear sourceBranch
+      if (!hasCommits) {
+        sourceBranch = undefined;
+        logger.info({ npub, repoName }, '[FileManager] No commits - forcing sourceBranch to undefined');
+      }
+
+      logger.info({ npub, repoName, branchName, sourceBranch, fromBranch, hasCommits, commitCount }, '[FileManager] createBranch - final values before branch creation');
+
+      // CRITICAL: If repo has no commits, ALWAYS create orphan branch (completely ignore sourceBranch)
+      if (!hasCommits) {
+        logger.info({ npub, repoName, branchName, sourceBranch, fromBranch, hasCommits }, '[FileManager.createBranch] PATH: Creating orphan branch (no commits)');
+        // For empty repos, we need to create an empty commit first, then create the branch
+        // This is the only way git will recognize the branch
+        try {
+          logger.info({ npub, repoName, branchName, repoPath }, '[FileManager.createBranch] Step 1: Creating empty tree for initial commit');
+          // Create empty tree object - empty tree hash is always the same: 4b825dc642cb6eb9a060e54bf8d69288fbee4904
+          // We'll use mktree to create it if needed
+          let emptyTreeHash = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+          // Ensure it exists in the repo
+          try {
+            await git.raw(['cat-file', '-e', emptyTreeHash]);
+            logger.info({ npub, repoName, branchName }, '[FileManager.createBranch] Empty tree already exists in repo');
+          } catch {
+            // Create it using mktree with empty input
+            logger.info({ npub, repoName, branchName }, '[FileManager.createBranch] Creating empty tree object');
+            const { spawn } = await import('child_process');
+            const createdHash = await new Promise<string>((resolve, reject) => {
+              const proc = spawn('git', ['hash-object', '-t', 'tree', '-w', '--stdin'], { cwd: repoPath });
+              proc.stdin.end();
+              let output = '';
+              proc.stdout.on('data', (data) => { output += data.toString(); });
+              proc.on('close', (code) => {
+                if (code === 0) resolve(output.trim());
+                else reject(new Error(`hash-object failed with code ${code}`));
+              });
+              proc.on('error', reject);
+            });
+            emptyTreeHash = createdHash || emptyTreeHash;
+            logger.info({ npub, repoName, branchName, emptyTreeHash }, '[FileManager.createBranch] Created empty tree object');
+          }
+          logger.info({ npub, repoName, branchName, emptyTreeHash }, '[FileManager.createBranch] Step 1 complete: empty tree ready');
+          
+          logger.info({ npub, repoName, branchName }, '[FileManager.createBranch] Step 2: Creating empty commit');
+          // Create an empty commit pointing to the empty tree
+          const commitHash = await git.raw(['commit-tree', '-m', `Initial commit on ${branchName}`, emptyTreeHash]);
+          const commit = commitHash.trim();
+          logger.info({ npub, repoName, branchName, commit }, '[FileManager.createBranch] Step 2 complete: empty commit created');
+          
+          logger.info({ npub, repoName, branchName, commit }, '[FileManager.createBranch] Step 3: Creating branch ref pointing to empty commit');
+          // Create the branch ref pointing to the empty commit
+          const updateRefResult = await git.raw(['update-ref', `refs/heads/${branchName}`, commit]);
+          logger.info({ npub, repoName, branchName, commit, updateRefResult }, '[FileManager.createBranch] Step 3 complete: update-ref created branch');
+          
+          logger.info({ npub, repoName, branchName }, '[FileManager.createBranch] Step 4: Setting HEAD to point to new branch');
+          // Set HEAD to point to the new branch
+          const symRefResult = await git.raw(['symbolic-ref', 'HEAD', `refs/heads/${branchName}`]);
+          logger.info({ npub, repoName, branchName, symRefResult }, '[FileManager.createBranch] Step 4 complete: symbolic-ref HEAD set');
+          
+          // Verify the branch was created
+          try {
+            const branches = await git.branchLocal();
+            logger.info({ npub, repoName, branchName, branches: branches.all }, '[FileManager.createBranch] Verification: branch list after creation');
+          } catch (verifyErr) {
+            logger.warn({ npub, repoName, branchName, error: verifyErr }, '[FileManager.createBranch] Warning: Could not verify branch in list');
+          }
+          
+          logger.info({ npub, repoName, branchName }, '[FileManager.createBranch] SUCCESS: Orphan branch created with empty commit');
+        } catch (orphanError) {
+          logger.error({ 
+            error: orphanError, 
+            errorMessage: orphanError instanceof Error ? orphanError.message : String(orphanError),
+            errorStack: orphanError instanceof Error ? orphanError.stack : undefined,
+            npub, 
+            repoName, 
+            branchName,
+            sourceBranch,
+            fromBranch,
+            hasCommits,
+            repoPath
+          }, '[FileManager.createBranch] ERROR: Failed to create orphan branch');
+          throw new Error(`Failed to create orphan branch: ${orphanError instanceof Error ? orphanError.message : String(orphanError)}`);
+        }
+      } else if (!sourceBranch) {
+        // Repository has commits but no source branch - create orphan branch
+        logger.info({ npub, repoName, branchName, hasCommits }, '[FileManager.createBranch] PATH: Creating orphan branch (has commits but no source branch)');
+        logger.info({ npub, repoName, branchName }, '[FileManager.createBranch] Setting HEAD to new branch');
+        await git.raw(['symbolic-ref', 'HEAD', `refs/heads/${branchName}`]);
+        logger.info({ npub, repoName, branchName }, '[FileManager.createBranch] Creating branch');
+        await git.raw(['branch', branchName]);
+        logger.info({ npub, repoName, branchName }, '[FileManager.createBranch] SUCCESS: Orphan branch created');
+      } else {
+        // Repository has commits and source branch provided - verify it exists first
+        logger.info({ npub, repoName, branchName, sourceBranch, hasCommits }, '[FileManager.createBranch] PATH: Creating branch from source');
+        try {
+          logger.info({ npub, repoName, sourceBranch }, '[FileManager.createBranch] Verifying source branch exists');
+          // Verify the source branch exists
+          const verifyResult = await git.raw(['rev-parse', '--verify', `refs/heads/${sourceBranch}`]);
+          logger.info({ npub, repoName, sourceBranch, verifyResult }, '[FileManager.createBranch] Source branch verified, creating branch');
+          await git.raw(['branch', branchName, sourceBranch]);
+          logger.info({ npub, repoName, branchName, sourceBranch }, '[FileManager.createBranch] SUCCESS: Branch created from source');
+        } catch (verifyError) {
+          // Source branch doesn't exist - create orphan branch instead
+          logger.warn({ 
+            npub, 
+            repoName, 
+            branchName, 
+            sourceBranch, 
+            error: verifyError,
+            errorMessage: verifyError instanceof Error ? verifyError.message : String(verifyError)
+          }, '[FileManager.createBranch] Source branch does not exist, creating orphan branch instead');
+          await git.raw(['symbolic-ref', 'HEAD', `refs/heads/${branchName}`]);
+          await git.raw(['branch', branchName]);
+          logger.info({ npub, repoName, branchName }, '[FileManager.createBranch] SUCCESS: Orphan branch created (fallback)');
+        }
+      }
+      
+      // Clear branch cache
       const cacheKey = RepoCache.branchesKey(npub, repoName);
       repoCache.delete(cacheKey);
+      logger.info({ npub, repoName, branchName }, '[FileManager.createBranch] Branch cache cleared');
     } catch (error) {
-      logger.error({ error, repoPath, branchName, fromBranch }, 'Error creating branch');
+      logger.error({ 
+        error, 
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorStack: error instanceof Error ? error.stack : undefined,
+        repoPath, 
+        branchName, 
+        fromBranch,
+        npub,
+        repoName
+      }, '[FileManager.createBranch] ERROR: Exception caught in createBranch');
       throw new Error(`Failed to create branch: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

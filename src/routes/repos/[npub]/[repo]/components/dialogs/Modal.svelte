@@ -7,9 +7,10 @@
     ariaLabel?: string;
     onClose: () => void;
     children?: Snippet;
+    maxWidth?: string;
   }
 
-  let { open, title, ariaLabel, onClose, children }: Props = $props();
+  let { open, title, ariaLabel, onClose, children, maxWidth = '500px' }: Props = $props();
 </script>
 
 {#if open}
@@ -27,6 +28,7 @@
     <div 
       class="modal" 
       role="dialog"
+      style="max-width: {maxWidth};"
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => e.stopPropagation()}
       tabindex="-1"
@@ -56,7 +58,6 @@
     color: var(--text-primary, #e0e0e0);
     border-radius: 8px;
     padding: 1.5rem;
-    max-width: 500px;
     width: 90%;
     max-height: 90vh;
     overflow-y: auto;

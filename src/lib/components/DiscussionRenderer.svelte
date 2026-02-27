@@ -114,21 +114,28 @@
 
 <style>
   .discussion-item {
+    width: 100%;
+    max-width: 100%;
     padding: 1rem;
     margin-bottom: 1.5rem;
-    border: 1px solid var(--border-color, #e0e0e0);
+    border: 1px solid var(--border-color);
     border-radius: 8px;
-    background: var(--discussion-bg, #fff);
+    background: var(--bg-secondary, var(--bg-primary));
+    color: var(--text-primary);
+    box-sizing: border-box;
   }
 
   .discussion-header {
     margin-bottom: 1rem;
+    width: 100%;
+    box-sizing: border-box;
   }
 
   .discussion-title {
     margin: 0 0 0.5rem 0;
     font-size: 1.25rem;
     font-weight: 600;
+    color: var(--text-primary);
   }
 
   .discussion-meta {
@@ -136,12 +143,15 @@
     align-items: center;
     gap: 0.75rem;
     font-size: 0.875rem;
-    color: var(--text-secondary, #666);
+    color: var(--text-secondary);
+    width: 100%;
+    box-sizing: border-box;
   }
 
   .discussion-type {
     padding: 0.25rem 0.5rem;
-    background: var(--type-bg, #e0e0e0);
+    background: var(--bg-tertiary, var(--bg-secondary));
+    color: var(--text-primary);
     border-radius: 4px;
     font-weight: 500;
   }
@@ -170,25 +180,32 @@
   }
 
   .discussion-body {
+    width: 100%;
     margin-bottom: 1rem;
     padding: 0.75rem;
-    background: var(--body-bg, #f9f9f9);
+    background: var(--bg-tertiary, var(--bg-secondary));
+    color: var(--text-primary);
     border-radius: 4px;
+    box-sizing: border-box;
   }
 
   .discussion-body p {
     margin: 0;
+    color: var(--text-primary);
   }
 
   .comments-section {
+    width: 100%;
     margin-top: 1rem;
     padding-top: 1rem;
-    border-top: 1px solid var(--border-color, #e0e0e0);
+    border-top: 1px solid var(--border-color);
+    box-sizing: border-box;
   }
 
   .comments-section h4 {
     margin: 0 0 1rem 0;
     font-size: 1rem;
     font-weight: 600;
+    color: var(--text-primary);
   }
 </style>

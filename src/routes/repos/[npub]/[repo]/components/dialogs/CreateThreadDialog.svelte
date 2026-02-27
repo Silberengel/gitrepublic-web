@@ -37,6 +37,7 @@
   label {
     display: block;
     margin-bottom: 1rem;
+    color: var(--text-primary);
   }
 
   label input,
@@ -46,6 +47,22 @@
     margin-top: 0.25rem;
     border: 1px solid var(--border-color, #e0e0e0);
     border-radius: 4px;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: inherit;
+  }
+
+  label textarea {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.9rem;
+    resize: vertical;
+  }
+
+  label input:focus,
+  label textarea:focus {
+    outline: none;
+    border-color: var(--button-primary);
+    box-shadow: 0 0 0 2px rgba(var(--button-primary-rgb, 220, 20, 60), 0.2);
   }
 
   .modal-actions {

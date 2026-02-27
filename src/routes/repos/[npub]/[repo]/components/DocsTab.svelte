@@ -20,6 +20,8 @@
     activeTab?: string;
     tabs?: Array<{ id: string; label: string; icon?: string }>;
     onTabChange?: (tab: string) => void;
+    isMaintainer?: boolean;
+    onCreateDocumentation?: () => void;
   }
   
   let {
@@ -29,7 +31,9 @@
     relays = DEFAULT_NOSTR_RELAYS,
     activeTab = '',
     tabs = [],
-    onTabChange = () => {}
+    onTabChange = () => {},
+    isMaintainer = false,
+    onCreateDocumentation = () => {}
   }: Props = $props();
   
   let documentationContent = $state<string | null>(null);
@@ -183,7 +187,18 @@
 >
   {#snippet leftPane()}
     <div class="docs-sidebar">
-      <h3>Documentation</h3>
+      <div class="docs-header">
+        <h3>Documentation</h3>
+        {#if isMaintainer && onCreateDocumentation}
+          <button 
+            onclick={onCreateDocumentation}
+            class="create-doc-button"
+            title="Create Documentation Event"
+          >
+            <img src="/icons/plus.svg" alt="New" class="icon" />
+          </button>
+        {/if}
+      </div>
       {#if loadingDocs}
         <div class="loading">Loading...</div>
       {:else if error}
@@ -261,21 +276,63 @@
 
 <style>
   .docs-sidebar {
-    padding: 1rem;
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    padding: 0;
     color: var(--text-primary);
+    position: relative;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
   }
   
+  .docs-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+    width: 100%;
+    box-sizing: border-box;
+  }
+
   .docs-sidebar h3 {
-    margin: 0 0 1rem 0;
+    margin: 0;
     font-size: 1rem;
     font-weight: 600;
     color: var(--text-primary);
+  }
+
+  .create-doc-button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0.25rem;
+    display: flex;
+    align-items: center;
+    transition: opacity 0.2s;
+  }
+
+  .create-doc-button:hover {
+    opacity: 0.7;
+  }
+
+  .create-doc-button .icon {
+    width: 20px;
+    height: 20px;
+    filter: var(--icon-filter, none);
   }
   
   .doc-list {
     list-style: none;
     padding: 0;
     margin: 0;
+    width: 100%;
+    box-sizing: border-box;
+    flex: 1;
+    overflow-y: auto;
   }
   
   .doc-item {
