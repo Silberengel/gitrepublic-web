@@ -417,7 +417,32 @@
     await cloneRepositoryService(state, { checkCloneStatus, loadBranches, loadFiles, loadReadme, loadTags, loadCommitHistory });
   }
   async function forkRepository() {
-    await forkRepositoryService(state);
+    // Check if user is owner - if not, check if server is localhost
+    const isOwner = repoOwnerPubkeyDerived && state.user.pubkeyHex === repoOwnerPubkeyDerived;
+    
+    // Only create local-only fork if:
+    // 1. User is not owner AND
+    // 2. Server is on localhost (not a public domain or Tor)
+    let localOnly = false;
+    if (!isOwner) {
+      // Check if server is localhost by checking window location or environment
+      let gitDomain = 'localhost:6543';
+      if (typeof window !== 'undefined') {
+        // Client-side: check current hostname
+        const hostname = window.location.hostname;
+        const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
+        if (isLocalhost) {
+          gitDomain = `${hostname}:${window.location.port || '6543'}`;
+        } else {
+          // Public domain or Tor - don't use local-only
+          gitDomain = hostname;
+        }
+      }
+      const isLocalhost = gitDomain.startsWith('localhost') || gitDomain.startsWith('127.0.0.1');
+      localOnly = isLocalhost;
+    }
+    
+    await forkRepositoryService(state, localOnly);
   }
   
   // Discussion operations

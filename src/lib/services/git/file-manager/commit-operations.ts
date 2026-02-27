@@ -31,7 +31,12 @@ export interface DiffOptions {
  * Get commit history
  */
 export async function getCommitHistory(options: CommitHistoryOptions): Promise<Commit[]> {
-  const { npub, repoName, branch = 'main', limit = 50, path, repoPath } = options;
+  let { npub, repoName, branch = 'main', limit = 50, path, repoPath } = options;
+  
+  // Normalize 'null' string to undefined, then use default
+  if (branch === 'null' || branch === null) {
+    branch = 'main';
+  }
   
   // Validate inputs
   const npubValidation = validateNpub(npub);

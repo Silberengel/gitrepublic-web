@@ -89,6 +89,28 @@
     topics = []
   }: Props = $props();
 
+  // Check if user is the repo owner
+  // userPubkey can be in npub format, so we need to decode it if needed
+  const userPubkeyHex = $derived.by(() => {
+    if (!userPubkey) return null;
+    // If it's already hex (64 chars), return as-is
+    if (/^[0-9a-f]{64}$/i.test(userPubkey)) {
+      return userPubkey.toLowerCase();
+    }
+    // Try to decode as npub
+    try {
+      const decoded = nip19.decode(userPubkey);
+      if (decoded.type === 'npub') {
+        return decoded.data as string;
+      }
+    } catch {
+      // Not an npub, assume it's hex
+    }
+    return userPubkey.toLowerCase();
+  });
+  
+  const isOwner = $derived(userPubkeyHex && ownerPubkey && userPubkeyHex === ownerPubkey.toLowerCase());
+
   let showMoreMenu = $state(false);
   let showBranchMenu = $state(false);
   let showOwnerMenu = $state(false);
@@ -208,20 +230,34 @@
                   Create Patch
                 </button>
               {/if}
-              {#if (isRepoCloned === false || isRepoCloned === null) && onCloneToServer}
-                <button 
-                  class="menu-item" 
-                  onclick={() => { 
-                    if (hasUnlimitedAccess) {
-                      onCloneToServer(); 
-                    }
-                    showMoreMenu = false; 
-                  }} 
-                  disabled={cloning || checkingCloneStatus || !hasUnlimitedAccess}
-                  title={!hasUnlimitedAccess ? 'Unlimited access required to clone repositories' : undefined}
-                >
-                  {cloning ? 'Cloning...' : (checkingCloneStatus ? 'Checking...' : 'Clone to Server')}
-                </button>
+              {#if (isRepoCloned === false || isRepoCloned === null)}
+                {#if isOwner && onCloneToServer}
+                  <button 
+                    class="menu-item" 
+                    onclick={() => { 
+                      if (hasUnlimitedAccess) {
+                        onCloneToServer(); 
+                      }
+                      showMoreMenu = false; 
+                    }} 
+                    disabled={cloning || checkingCloneStatus || !hasUnlimitedAccess}
+                    title={!hasUnlimitedAccess ? 'Unlimited access required to clone repositories' : undefined}
+                  >
+                    {cloning ? 'Cloning...' : (checkingCloneStatus ? 'Checking...' : 'Clone to Server')}
+                  </button>
+                {:else if !isOwner && onFork && hasUnlimitedAccess}
+                  <button 
+                    class="menu-item" 
+                    onclick={() => { 
+                      onFork(); 
+                      showMoreMenu = false; 
+                    }} 
+                    disabled={forking || !hasUnlimitedAccess}
+                    title={!hasUnlimitedAccess ? 'Unlimited access required to fork repositories' : 'Create a local-only fork (private, not published to Nostr)'}
+                  >
+                    {forking ? 'Forking...' : 'Fork to Server'}
+                  </button>
+                {/if}
               {/if}
               {#if isMaintainer && onSettings}
                 <button class="menu-item" onclick={() => { onSettings(); showMoreMenu = false; }}>

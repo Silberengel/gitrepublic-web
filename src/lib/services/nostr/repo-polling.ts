@@ -99,6 +99,12 @@ export class RepoPollingService {
 
       // Filter for repos that list our domain
       const relevantEvents = events.filter(event => {
+        // Skip local-only forks (synthetic announcements not published to Nostr)
+        const isLocalOnly = event.tags.some(t => t[0] === 'local-only' && t[1] === 'true');
+        if (isLocalOnly) {
+          return false;
+        }
+        
         const cloneUrls = this.extractCloneUrls(event);
         return cloneUrls.some(url => url.includes(this.domain));
       });

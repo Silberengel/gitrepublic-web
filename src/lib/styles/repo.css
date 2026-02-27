@@ -2317,6 +2317,7 @@ span.clone-more {
 }
 
 .verification-badge.unverified {
+  background: var(--error-bg);
   color: var(--error-text);
 }
 

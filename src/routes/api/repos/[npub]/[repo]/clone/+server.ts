@@ -21,6 +21,7 @@ import { eventCache } from '$lib/services/nostr/event-cache.js';
 import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 import { repoManager, nostrClient } from '$lib/services/service-registry.js';
 import { DEFAULT_NOSTR_RELAYS } from '$lib/config.js';
+import simpleGit from 'simple-git';
 
 // Resolve GIT_REPO_ROOT to absolute path (handles both relative and absolute paths)
 const repoRootEnv = process.env.GIT_REPO_ROOT || '/repos';
@@ -159,15 +160,43 @@ export const POST: RequestHandler = async (event) => {
   try {
     // Decode npub to get pubkey
     const repoOwnerPubkey = requireNpubHex(npub);
+    
+    // Check if user is the repository owner
+    // Only owners can clone repositories directly; non-owners must create a fork
+    if (userPubkeyHex !== repoOwnerPubkey) {
+      logger.warn({ 
+        userPubkeyHex: userPubkeyHex.slice(0, 16) + '...',
+        repoOwnerPubkey: repoOwnerPubkey.slice(0, 16) + '...',
+        npub,
+        repo
+      }, 'Non-owner attempted to clone repository');
+      throw error(403, 'Only repository owners can clone repositories directly. Please create a fork instead.');
+    }
     const repoPath = join(repoRoot, npub, `${repo}.git`);
 
     // Check if repo already exists
     if (existsSync(repoPath)) {
-      return json({ 
-        success: true, 
-        message: 'Repository already exists locally',
-        alreadyExists: true
-      });
+      // Check if repo is empty (no commits)
+      let isEmpty = false;
+      try {
+        const bareGit = simpleGit(repoPath);
+        const logResult = await bareGit.log(['--all', '-1']);
+        isEmpty = logResult.total === 0;
+      } catch {
+        // If log fails, assume repo is empty
+        isEmpty = true;
+      }
+      
+      // If repo is empty, we should still try to commit the announcement
+      if (!isEmpty) {
+        return json({ 
+          success: true, 
+          message: 'Repository already exists locally',
+          alreadyExists: true
+        });
+      }
+      // If empty, continue to fetch announcement and commit it
+      logger.info({ npub, repo }, 'Repository exists but is empty, will commit announcement');
     }
 
     // Fetch repository announcement (case-insensitive)

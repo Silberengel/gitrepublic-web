@@ -938,11 +938,22 @@ button.theme-option.active img.theme-icon-option,
 
 [data-theme="dark"] .verification-badge.unverified .icon-inline img,
 [data-theme="black"] .verification-badge.unverified .icon-inline img {
-  filter: brightness(0) saturate(100%) invert(0.5) sepia(1) saturate(3) hue-rotate(0deg);
+  filter: brightness(0) saturate(100%) invert(1) sepia(1) saturate(5) hue-rotate(0deg);
 }
 
 [data-theme="light"] .verification-badge.unverified .icon-inline img {
-  filter: brightness(0) saturate(100%) invert(0.3) sepia(1) saturate(3) hue-rotate(0deg);
+  filter: brightness(0) saturate(100%) invert(0.2) sepia(1) saturate(3) hue-rotate(0deg);
+}
+
+/* Alert triangle icons in verification badges - ensure visibility on dark backgrounds */
+.verification-badge.unverified img[src*="alert-triangle.svg"].icon-inline,
+.verification-badge.unverified .icon-inline img[src*="alert-triangle.svg"] {
+  filter: brightness(0) saturate(100%) invert(1) sepia(1) saturate(5) hue-rotate(0deg);
+}
+
+[data-theme="light"] .verification-badge.unverified img[src*="alert-triangle.svg"].icon-inline,
+[data-theme="light"] .verification-badge.unverified .icon-inline img[src*="alert-triangle.svg"] {
+  filter: brightness(0) saturate(100%) invert(0.2) sepia(1) saturate(3) hue-rotate(0deg);
 }
 
 .clear-lookup-button img,

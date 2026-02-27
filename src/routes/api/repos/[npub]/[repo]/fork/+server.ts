@@ -90,11 +90,14 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
   try {
     const body = await request.json();
-    const { userPubkey, forkName } = body;
+    const { userPubkey, forkName, localOnly } = body;
 
     if (!userPubkey) {
       return error(401, 'Authentication required. Please provide userPubkey.');
     }
+    
+    // Validate localOnly parameter
+    const isLocalOnly = localOnly === true;
 
     // Decode original repo owner npub
     let originalOwnerPubkey: string;
@@ -253,9 +256,15 @@ export const POST: RequestHandler = async ({ params, request }) => {
       ['p', originalOwnerPubkey], // Original owner
     ];
     
-    // Preserve visibility from original repo (defaults to public if not set)
-    if (originalVisibility !== 'public') {
-      tags.push(['visibility', originalVisibility]);
+    // Local-only forks are always private and marked as synthetic
+    if (isLocalOnly) {
+      tags.push(['visibility', 'private']);
+      tags.push(['local-only', 'true']); // Mark as synthetic/local-only
+    } else {
+      // Preserve visibility from original repo (defaults to public if not set)
+      if (originalVisibility !== 'public') {
+        tags.push(['visibility', originalVisibility]);
+      }
     }
     
     // Preserve project-relay tags from original repo
@@ -277,99 +286,117 @@ export const POST: RequestHandler = async ({ params, request }) => {
       tags
     };
 
-    // Sign and publish fork announcement
+    // Sign fork announcement
     const signedForkAnnouncement = await signEventWithNIP07(forkAnnouncementTemplate);
     
-    const { outbox } = await getUserRelays(userPubkeyHex, nostrClient);
-    const combinedRelays = combineRelays(outbox);
-
     // Security: Truncate npub in logs and create context (must be before use)
     const truncatedNpub = userNpub.length > 16 ? `${userNpub.slice(0, 12)}...` : userNpub;
     const truncatedOriginalNpub = npub.length > 16 ? `${npub.slice(0, 12)}...` : npub;
     const context = `[${truncatedOriginalNpub}/${repo} → ${truncatedNpub}/${forkRepoName}]`;
     
-    logger.info({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}`, relayCount: combinedRelays.length, relays: combinedRelays }, 'Starting fork process');
+    let publishResult: { success: string[]; failed: Array<{ relay: string; error: string }> } | null = null;
+    let ownershipPublishResult: { success: string[]; failed: Array<{ relay: string; error: string }> } | null = null;
+    let signedOwnershipEvent: NostrEvent | null = null;
 
-    const publishResult = await publishEventWithRetry(
-      signedForkAnnouncement,
-      combinedRelays,
-      'fork announcement',
-      3,
-      context
-    );
-
-    if (publishResult.success.length === 0) {
-      // Clean up repo if announcement failed
-      logger.error({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}`, failed: publishResult.failed }, 'Fork announcement failed after all retries. Cleaning up repository.');
-      await rm(forkRepoPath, { recursive: true, force: true }).catch(() => {});
-      const errorDetails = `All relays failed: ${publishResult.failed.map(f => `${f.relay}: ${f.error}`).join('; ')}`;
-      return json({
-        success: false,
-        error: 'Failed to publish fork announcement to relays after 3 attempts',
-        details: errorDetails,
-        eventName: 'fork announcement'
-      }, { status: 500 });
-    }
-
-    // Create and publish initial ownership proof (self-transfer event)
-    // This MUST succeed for the fork to be valid - without it, there's no proof of ownership on Nostr
-    const ownershipService = new OwnershipTransferService(combinedRelays);
-    const initialOwnershipEvent = ownershipService.createInitialOwnershipEvent(userPubkeyHex, forkRepoName);
-    const signedOwnershipEvent = await signEventWithNIP07(initialOwnershipEvent);
-    
-    const ownershipPublishResult = await publishEventWithRetry(
-      signedOwnershipEvent,
-      combinedRelays,
-      'ownership transfer event',
-      3,
-      context
-    );
-
-    if (ownershipPublishResult.success.length === 0) {
-      // Clean up repo if ownership proof failed
-      logger.error({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}`, failed: ownershipPublishResult.failed }, 'Ownership transfer event failed after all retries. Cleaning up repository and publishing deletion request.');
-      await rm(forkRepoPath, { recursive: true, force: true }).catch(() => {});
+    if (isLocalOnly) {
+      // Local-only fork: Skip publishing to Nostr relays
+      logger.info({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}`, localOnly: true }, 'Creating local-only fork (not publishing to Nostr)');
+      publishResult = { success: [], failed: [] };
+      ownershipPublishResult = { success: [], failed: [] };
       
-      // Publish deletion request (NIP-09) for the announcement since it's invalid without ownership proof
-      logger.info({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}` }, 'Publishing deletion request for invalid fork announcement...');
-      const deletionRequest = {
-        kind: KIND.DELETION_REQUEST, // NIP-09: Event Deletion Request
-        pubkey: userPubkeyHex,
-        created_at: Math.floor(Date.now() / 1000),
-        content: 'Fork failed: ownership transfer event could not be published after 3 attempts. This announcement is invalid.',
-        tags: [
-          ['a', `${KIND.REPO_ANNOUNCEMENT}:${userPubkeyHex}:${forkRepoName}`], // Reference to the repo announcement
-          ['k', KIND.REPO_ANNOUNCEMENT.toString()] // Kind of event being deleted
-        ]
-      };
+      // For local-only forks, create a synthetic ownership event (not published)
+      const ownershipService = new OwnershipTransferService([]);
+      const initialOwnershipEvent = ownershipService.createInitialOwnershipEvent(userPubkeyHex, forkRepoName);
+      signedOwnershipEvent = await signEventWithNIP07(initialOwnershipEvent);
+      logger.info({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}` }, 'Created synthetic ownership event for local-only fork');
+    } else {
+      // Public fork: Publish to Nostr relays
+      const { outbox } = await getUserRelays(userPubkeyHex, nostrClient);
+      const combinedRelays = combineRelays(outbox);
       
-      const signedDeletionRequest = await signEventWithNIP07(deletionRequest);
-      const deletionResult = await publishEventWithRetry(
-        signedDeletionRequest,
+      logger.info({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}`, relayCount: combinedRelays.length, relays: combinedRelays }, 'Starting fork process');
+
+      publishResult = await publishEventWithRetry(
+        signedForkAnnouncement,
         combinedRelays,
-        'deletion request',
+        'fork announcement',
         3,
         context
       );
-      
-      if (deletionResult.success.length > 0) {
-        logger.info({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}` }, 'Deletion request published successfully');
-      } else {
-        logger.error({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}`, failed: deletionResult.failed }, 'Failed to publish deletion request');
+
+      if (publishResult.success.length === 0) {
+        // Clean up repo if announcement failed
+        logger.error({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}`, failed: publishResult.failed }, 'Fork announcement failed after all retries. Cleaning up repository.');
+        await rm(forkRepoPath, { recursive: true, force: true }).catch(() => {});
+        const errorDetails = `All relays failed: ${publishResult.failed.map(f => `${f.relay}: ${f.error}`).join('; ')}`;
+        return json({
+          success: false,
+          error: 'Failed to publish fork announcement to relays after 3 attempts',
+          details: errorDetails,
+          eventName: 'fork announcement'
+        }, { status: 500 });
       }
+
+      // Create and publish initial ownership proof (self-transfer event)
+      // This MUST succeed for the fork to be valid - without it, there's no proof of ownership on Nostr
+      const ownershipService = new OwnershipTransferService(combinedRelays);
+      const initialOwnershipEvent = ownershipService.createInitialOwnershipEvent(userPubkeyHex, forkRepoName);
+      signedOwnershipEvent = await signEventWithNIP07(initialOwnershipEvent);
       
-      const errorDetails = `Fork is invalid without ownership proof. All relays failed: ${ownershipPublishResult.failed.map(f => `${f.relay}: ${f.error}`).join('; ')}. Deletion request ${deletionResult.success.length > 0 ? 'published' : 'failed to publish'}.`;
-      return json({
-        success: false,
-        error: 'Failed to publish ownership transfer event to relays after 3 attempts',
-        details: errorDetails,
-        eventName: 'ownership transfer event'
-      }, { status: 500 });
+      ownershipPublishResult = await publishEventWithRetry(
+        signedOwnershipEvent,
+        combinedRelays,
+        'ownership transfer event',
+        3,
+        context
+      );
+
+      if (ownershipPublishResult.success.length === 0) {
+        // Clean up repo if ownership proof failed
+        logger.error({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}`, failed: ownershipPublishResult.failed }, 'Ownership transfer event failed after all retries. Cleaning up repository and publishing deletion request.');
+        await rm(forkRepoPath, { recursive: true, force: true }).catch(() => {});
+        
+        // Publish deletion request (NIP-09) for the announcement since it's invalid without ownership proof
+        logger.info({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}` }, 'Publishing deletion request for invalid fork announcement...');
+        const deletionRequest = {
+          kind: KIND.DELETION_REQUEST, // NIP-09: Event Deletion Request
+          pubkey: userPubkeyHex,
+          created_at: Math.floor(Date.now() / 1000),
+          content: 'Fork failed: ownership transfer event could not be published after 3 attempts. This announcement is invalid.',
+          tags: [
+            ['a', `${KIND.REPO_ANNOUNCEMENT}:${userPubkeyHex}:${forkRepoName}`], // Reference to the repo announcement
+            ['k', KIND.REPO_ANNOUNCEMENT.toString()] // Kind of event being deleted
+          ]
+        };
+        
+        const signedDeletionRequest = await signEventWithNIP07(deletionRequest);
+        const deletionResult = await publishEventWithRetry(
+          signedDeletionRequest,
+          combinedRelays,
+          'deletion request',
+          3,
+          context
+        );
+        
+        if (deletionResult.success.length > 0) {
+          logger.info({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}` }, 'Deletion request published successfully');
+        } else {
+          logger.error({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}`, failed: deletionResult.failed }, 'Failed to publish deletion request');
+        }
+        
+        const errorDetails = `Fork is invalid without ownership proof. All relays failed: ${ownershipPublishResult.failed.map(f => `${f.relay}: ${f.error}`).join('; ')}. Deletion request ${deletionResult.success.length > 0 ? 'published' : 'failed to publish'}.`;
+        return json({
+          success: false,
+          error: 'Failed to publish ownership transfer event to relays after 3 attempts',
+          details: errorDetails,
+          eventName: 'ownership transfer event'
+        }, { status: 500 });
+      }
     }
 
     // Provision the fork repo (this will create verification file and include self-transfer)
-    logger.info({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}` }, 'Provisioning fork repository...');
-    await repoManager.provisionRepo(signedForkAnnouncement, signedOwnershipEvent, false);
+    logger.info({ operation: 'fork', originalRepo: `${npub}/${repo}`, forkRepo: `${userNpub}/${forkRepoName}`, localOnly: isLocalOnly }, 'Provisioning fork repository...');
+    await repoManager.provisionRepo(signedForkAnnouncement, signedOwnershipEvent || undefined, false);
 
     // Save fork announcement to repo (offline papertrail) in nostr/repo-events.jsonl
     try {
@@ -412,11 +439,16 @@ export const POST: RequestHandler = async ({ params, request }) => {
       operation: 'fork',
       originalRepo: `${npub}/${repo}`,
       forkRepo: `${userNpub}/${forkRepoName}`,
+      localOnly: isLocalOnly,
       announcementId: signedForkAnnouncement.id,
-      ownershipTransferId: signedOwnershipEvent.id,
-      announcementRelays: publishResult.success.length,
-      ownershipRelays: ownershipPublishResult.success.length
+      ownershipTransferId: signedOwnershipEvent?.id,
+      announcementRelays: publishResult?.success.length || 0,
+      ownershipRelays: ownershipPublishResult?.success.length || 0
     }, 'Fork completed successfully');
+
+    const message = isLocalOnly
+      ? 'Local-only fork created successfully! This fork is private and only exists on this server.'
+      : `Repository forked successfully! Published to ${publishResult?.success.length || 0} relay(s) for announcement and ${ownershipPublishResult?.success.length || 0} relay(s) for ownership proof.`;
 
     return json({
       success: true,
@@ -424,14 +456,15 @@ export const POST: RequestHandler = async ({ params, request }) => {
         npub: userNpub,
         repo: forkRepoName,
         url: forkGitUrl,
+        localOnly: isLocalOnly,
         announcementId: signedForkAnnouncement.id,
-        ownershipTransferId: signedOwnershipEvent.id,
-        publishedTo: {
-          announcement: publishResult.success.length,
-          ownershipTransfer: ownershipPublishResult.success.length
+        ownershipTransferId: signedOwnershipEvent?.id,
+        publishedTo: isLocalOnly ? null : {
+          announcement: publishResult?.success.length || 0,
+          ownershipTransfer: ownershipPublishResult?.success.length || 0
         }
       },
-      message: `Repository forked successfully! Published to ${publishResult.success.length} relay(s) for announcement and ${ownershipPublishResult.success.length} relay(s) for ownership proof.`
+      message
     });
   } catch (err) {
     return handleApiError(err, { operation: 'fork', npub, repo }, 'Failed to fork repository');

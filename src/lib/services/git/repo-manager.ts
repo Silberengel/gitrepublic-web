@@ -362,14 +362,18 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         return { success: true };
       }
       
-      // Repo exists but no announcement - try to fetch from relays
-      const { requireNpubHex: requireNpubHexUtil } = await import('../../utils/npub-utils.js');
-      const repoOwnerPubkey = requireNpubHexUtil(npub);
-      const fetchedAnnouncement = await this.announcementManager.fetchAnnouncementFromRelays(repoOwnerPubkey, repoName);
-      if (fetchedAnnouncement) {
-        // Save fetched announcement to repo
-        await this.announcementManager.ensureAnnouncementInRepo(repoPath, fetchedAnnouncement);
-        return { success: true, announcement: fetchedAnnouncement };
+      // Repo exists but no announcement - use provided announcement or try to fetch from relays
+      let announcementToUse: NostrEvent | null | undefined = announcementEvent;
+      if (!announcementToUse) {
+        const { requireNpubHex: requireNpubHexUtil } = await import('../../utils/npub-utils.js');
+        const repoOwnerPubkey = requireNpubHexUtil(npub);
+        announcementToUse = await this.announcementManager.fetchAnnouncementFromRelays(repoOwnerPubkey, repoName);
+      }
+      
+      if (announcementToUse) {
+        // Save announcement to repo (this will create initial commit if repo is empty)
+        await this.announcementManager.ensureAnnouncementInRepo(repoPath, announcementToUse);
+        return { success: true, announcement: announcementToUse };
       }
       
       // Repo exists but no announcement found - needs announcement

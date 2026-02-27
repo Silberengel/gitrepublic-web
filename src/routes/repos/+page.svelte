@@ -12,8 +12,9 @@
   import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
 
   // Registered repos (with domain in clone URLs)
-  let registeredRepos = $state<Array<{ event: NostrEvent; npub: string; repoName: string }>>([]);
-  let allRegisteredRepos = $state<Array<{ event: NostrEvent; npub: string; repoName: string }>>([]);
+  // Also includes local-only forks (marked with isLocalOnly flag)
+  let registeredRepos = $state<Array<{ event: NostrEvent; npub: string; repoName: string; isLocalOnly?: boolean }>>([]);
+  let allRegisteredRepos = $state<Array<{ event: NostrEvent; npub: string; repoName: string; isLocalOnly?: boolean }>>([]);
   
   // Local clones (repos without domain in clone URLs)
   let localRepos = $state<Array<{ npub: string; repoName: string; announcement: NostrEvent | null; lastModified: number }>>([]);
@@ -329,15 +330,33 @@
       
       // API returns { registered, total }
       registeredRepos = data.registered || [];
+      
+      // Load local repos and merge them into registered repos list
+      await loadLocalRepos();
+      
+      // Merge local repos into registered repos list with special icon
+      const mergedRepos = [...registeredRepos];
+      for (const localRepo of localRepos) {
+        // Check if this local repo is already in registered repos
+        const exists = mergedRepos.some(r => r.npub === localRepo.npub && r.repoName === localRepo.repoName);
+        if (!exists && localRepo.announcement) {
+          // Add local repo to registered list with a flag indicating it's local-only
+          mergedRepos.push({
+            event: localRepo.announcement,
+            npub: localRepo.npub,
+            repoName: localRepo.repoName,
+            isLocalOnly: true // Flag to show special icon
+          });
+        }
+      }
+      
+      registeredRepos = mergedRepos;
       allRegisteredRepos = [...registeredRepos];
       
       // Load fork counts for registered repos (in parallel, but don't block)
       loadForkCounts(registeredRepos.map(r => r.event)).catch(err => {
         console.warn('[RepoList] Failed to load some fork counts:', err);
       });
-      
-      // Load local repos separately (async, don't block)
-      loadLocalRepos();
     } catch (e) {
       error = String(e);
       console.error('[RepoList] Failed to load repos:', e);
@@ -673,7 +692,10 @@
                   <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
                   {#if getForkCount(repo) > 0}
                     {@const forkCount = getForkCount(repo)}
-                    <span class="fork-count">🍴 {forkCount} fork{forkCount === 1 ? '' : 's'}</span>
+                    <span class="fork-count">
+                      <img src="/icons/git-fork.svg" alt="Fork" class="fork-icon" />
+                      {forkCount} fork{forkCount === 1 ? '' : 's'}
+                    </span>
                   {/if}
                 </div>
               </div>
@@ -724,7 +746,10 @@
                   <span class="favorite-count">⭐ {item.favoriteCount} {item.favoriteCount === 1 ? 'favorite' : 'favorites'}</span>
                   {#if getForkCount(repo) > 0}
                     {@const forkCount = getForkCount(repo)}
-                    <span class="fork-count">🍴 {forkCount} fork{forkCount === 1 ? '' : 's'}</span>
+                    <span class="fork-count">
+                      <img src="/icons/git-fork.svg" alt="Fork" class="fork-icon" />
+                      {forkCount} fork{forkCount === 1 ? '' : 's'}
+                    </span>
                   {/if}
                 </div>
               </div>
@@ -778,6 +803,7 @@
             {#each registeredRepos as item}
               {@const repo = item.event}
               {@const repoImage = getRepoImage(repo)}
+              {@const isLocalOnly = item.isLocalOnly || false}
               <div class="repo-card repo-card-registered">
                 <div class="repo-card-content">
                   <div class="repo-header">
@@ -787,6 +813,9 @@
                           <img src={repoImage} alt="Repository" class="repo-avatar" />
                         {/if}
                         <h3>{getRepoName(repo)}</h3>
+                        {#if isLocalOnly}
+                          <img src="/icons/hard-drive.svg" alt="Local-only fork" class="local-only-icon" title="Local-only fork (not published to Nostr)" />
+                        {/if}
                       </div>
                       {#if getRepoDescription(repo)}
                         <p class="description">{getRepoDescription(repo)}</p>
@@ -798,6 +827,9 @@
                   </div>
                   <div class="repo-meta">
                     <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
+                    {#if isLocalOnly}
+                      <span class="local-only-badge" title="Local-only fork (not published to Nostr)">Local Fork</span>
+                    {/if}
                     {#if getForkCount(repo) > 0}
                       {@const forkCount = getForkCount(repo)}
                       <span class="fork-count">🍴 {forkCount} fork{forkCount === 1 ? '' : 's'}</span>
@@ -810,61 +842,6 @@
         {/if}
       </div>
 
-      <!-- Local Clones Section -->
-      <div class="repo-section">
-        <div class="section-header">
-          <h3>Local Clones</h3>
-          <span class="section-badge">{localRepos.length}</span>
-          <span class="section-description">Repositories cloned locally but not registered with this domain</span>
-        </div>
-        {#if loadingLocal}
-          <div class="loading">Loading local repositories...</div>
-        {:else if localRepos.length === 0}
-          <div class="empty">No local clones found.</div>
-        {:else}
-          <div class="repos-list">
-            {#each localRepos as item}
-              {@const repo = item.announcement}
-              {@const repoImage = repo ? getRepoImage(repo) : null}
-              {@const canDelete = isOwner(item.npub, item.repoName)}
-              <div class="repo-card repo-card-local">
-                <div class="repo-card-content">
-                  <div class="repo-header">
-                    <div class="repo-header-text">
-                      <div class="repo-title-row">
-                        {#if repoImage}
-                          <img src={repoImage} alt="Repository" class="repo-avatar" />
-                        {/if}
-                        <h3>{repo ? getRepoName(repo) : item.repoName}</h3>
-                      </div>
-                      {#if repo && getRepoDescription(repo)}
-                        <p class="description">{getRepoDescription(repo)}</p>
-                      {:else}
-                        <p class="description">No description available</p>
-                      {/if}
-                    </div>
-                    <div class="repo-actions">
-                      <a href="/repos/{item.npub}/{item.repoName}" class="view-button" title="View repository">
-                        <img src="/icons/arrow-right.svg" alt="View" />
-                      </a>
-                    </div>
-                  </div>
-                  <div class="repo-meta">
-                    <span>Last modified: {new Date(item.lastModified).toLocaleDateString()}</span>
-                    {#if repo}
-                      <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
-                      {#if getForkCount(repo) > 0}
-                        {@const forkCount = getForkCount(repo)}
-                        <span class="fork-count">🍴 {forkCount} fork{forkCount === 1 ? '' : 's'}</span>
-                      {/if}
-                    {/if}
-                  </div>
-                </div>
-              </div>
-            {/each}
-          </div>
-        {/if}
-      </div>
     {/if}
   </main>
 </div>
@@ -963,6 +940,23 @@
     border: 1px solid var(--border-color, #e0e0e0);
   }
 
+  .local-only-icon {
+    width: 16px;
+    height: 16px;
+    opacity: 0.7;
+    flex-shrink: 0;
+    filter: brightness(0) invert(1);
+  }
+
+  .local-only-badge {
+    background: var(--bg-tertiary, #f5f5f5);
+    color: var(--text-secondary, #666);
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
   .repo-header-text {
     flex: 1;
     min-width: 0;
@@ -1016,33 +1010,6 @@
     filter: brightness(0) invert(1);
   }
 
-  .repo-actions {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-  }
-
-  .delete-button {
-    padding: 0.375rem 0.75rem;
-    background: var(--error, #dc3545);
-    color: var(--error-text, #ffffff);
-    border: none;
-    border-radius: 0.25rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-
-  .delete-button:hover:not(:disabled) {
-    background: var(--error-hover, #c82333);
-  }
-
-  .delete-button:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
   .repo-meta {
     display: flex;
     flex-wrap: wrap;
@@ -1056,6 +1023,16 @@
 
   .fork-count {
     color: var(--text-secondary, #666);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .fork-icon {
+    width: 14px;
+    height: 14px;
+    opacity: 0.8;
+    filter: brightness(0) invert(1);
   }
 
   .favorite-count {
@@ -1102,12 +1079,6 @@
     border-radius: 1rem;
     font-size: 0.875rem;
     color: var(--text-secondary, #666);
-  }
-
-  .section-description {
-    font-size: 0.875rem;
-    color: var(--text-secondary, #666);
-    margin-left: auto;
   }
 
   @media (max-width: 768px) {

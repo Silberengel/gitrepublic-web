@@ -233,7 +233,8 @@ export async function cloneRepository(
  * Fork repository
  */
 export async function forkRepository(
-  state: RepoState
+  state: RepoState,
+  localOnly: boolean = false
 ): Promise<void> {
   if (!state.user.pubkey) {
     alert('Please connect your NIP-07 extension');
@@ -246,7 +247,7 @@ export async function forkRepository(
   try {
     // Security: Truncate npub in logs
     const truncatedNpub = state.npub.length > 16 ? `${state.npub.slice(0, 12)}...` : state.npub;
-    console.log(`[Fork UI] Starting fork of ${truncatedNpub}/${state.repo}...`);
+    console.log(`[Fork UI] Starting ${localOnly ? 'local-only ' : ''}fork of ${truncatedNpub}/${state.repo}...`);
     
     const data = await apiPost<{
       success?: boolean;
@@ -254,21 +255,28 @@ export async function forkRepository(
       fork?: {
         npub: string;
         repo: string;
-        publishedTo?: { announcement?: number };
+        localOnly?: boolean;
+        publishedTo?: { announcement?: number; ownershipTransfer?: number } | null;
         announcementId?: string;
         ownershipTransferId?: string;
       };
       error?: string;
       details?: string;
       eventName?: string;
-    }>(`/api/repos/${state.npub}/${state.repo}/fork`, { userPubkey: state.user.pubkey });
+    }>(`/api/repos/${state.npub}/${state.repo}/fork`, { 
+      userPubkey: state.user.pubkey,
+      localOnly 
+    });
     
     if (data.success !== false && data.fork) {
-      const message = data.message || `Repository forked successfully! Published to ${data.fork.publishedTo?.announcement || 0} relay(s).`;
+      const message = data.message || (data.fork.localOnly 
+        ? 'Local-only fork created successfully! This fork is private and only exists on this server.'
+        : `Repository forked successfully! Published to ${data.fork.publishedTo?.announcement || 0} relay(s).`);
       console.log(`[Fork UI] ✓ ${message}`);
       // Security: Truncate npub in logs
       const truncatedForkNpub = data.fork.npub.length > 16 ? `${data.fork.npub.slice(0, 12)}...` : data.fork.npub;
       console.log(`[Fork UI]   - Fork location: /repos/${truncatedForkNpub}/${data.fork.repo}`);
+      console.log(`[Fork UI]   - Local-only: ${data.fork.localOnly || false}`);
       console.log(`[Fork UI]   - Announcement ID: ${data.fork.announcementId}`);
       console.log(`[Fork UI]   - Ownership Transfer ID: ${data.fork.ownershipTransferId}`);
       

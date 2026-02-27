@@ -88,9 +88,13 @@ export function extractRequestContext(
   }
   
   // Extract common query parameters
-  const ref = requestUrl.searchParams.get('ref') || undefined;
-  const path = requestUrl.searchParams.get('path') || undefined;
-  const branch = requestUrl.searchParams.get('branch') || undefined;
+  // Normalize 'null' string to undefined (query params are always strings)
+  const refParam = requestUrl.searchParams.get('ref');
+  const ref = (refParam && refParam !== 'null') ? refParam : undefined;
+  const pathParam = requestUrl.searchParams.get('path');
+  const path = (pathParam && pathParam !== 'null') ? pathParam : undefined;
+  const branchParam = requestUrl.searchParams.get('branch');
+  const branch = (branchParam && branchParam !== 'null') ? branchParam : undefined;
   const limit = requestUrl.searchParams.get('limit') 
     ? parseInt(requestUrl.searchParams.get('limit')!, 10) 
     : undefined;

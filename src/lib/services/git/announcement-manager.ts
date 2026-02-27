@@ -5,8 +5,9 @@
 
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
-import { join } from 'path';
-import { mkdir, writeFile, rm } from 'fs/promises';
+import { join, dirname } from 'path';
+import { mkdir, writeFile, rm, readdir } from 'fs/promises';
+import { copyFileSync, mkdirSync, existsSync as fsExistsSync } from 'fs';
 import simpleGit, { type SimpleGit } from 'simple-git';
 import logger from '../logger.js';
 import type { NostrEvent } from '../../types/nostr.js';
@@ -190,6 +191,7 @@ export class AnnouncementManager {
    * Only saves if not already present (avoids redundant entries)
    */
   async ensureAnnouncementInRepo(repoPath: string, event: NostrEvent, selfTransferEvent?: NostrEvent): Promise<void> {
+    let isEmpty = false;
     try {
       // Create a temporary working directory
       const repoName = this.urlParser.parseRepoPathForName(repoPath)?.repoName || 'temp';
@@ -201,9 +203,37 @@ export class AnnouncementManager {
       }
       await mkdir(workDir, { recursive: true });
 
-      // Clone the bare repo
+      // Check if repo has any commits (is empty)
+      const bareGit: SimpleGit = simpleGit(repoPath);
+      try {
+        const logResult = await bareGit.log(['--all', '-1']);
+        isEmpty = logResult.total === 0;
+      } catch {
+        // If log fails, assume repo is empty
+        isEmpty = true;
+      }
+
       const git: SimpleGit = simpleGit();
-      await git.clone(repoPath, workDir);
+      let workGit: SimpleGit;
+      
+      if (isEmpty) {
+        // Repo is empty - initialize worktree and create initial branch
+        // Use default branch from environment or try 'main' first, then 'master'
+        const defaultBranch = process.env.DEFAULT_BRANCH || 'main';
+        
+        // Initialize git in workdir
+        workGit = simpleGit(workDir);
+        await workGit.init(false);
+        await workGit.raw(['-C', workDir, 'checkout', '-b', defaultBranch]);
+        
+        // Add the bare repo as remote
+        await workGit.addRemote('origin', repoPath);
+      } else {
+        // Repo has commits - clone normally
+        await git.clone(repoPath, workDir);
+        // Create workGit instance after clone
+        workGit = simpleGit(workDir);
+      }
 
       // Check if announcement already exists in nostr/repo-events.jsonl
       const hasAnnouncement = await this.hasAnnouncementInRepo(workDir, event.id);
@@ -233,7 +263,7 @@ export class AnnouncementManager {
 
       // Only commit if we added files
       if (filesToAdd.length > 0) {
-        const workGit: SimpleGit = simpleGit(workDir);
+        logger.info({ repoPath, filesToAdd, isEmpty }, 'Adding files and committing announcement');
         await workGit.add(filesToAdd);
         
         // Use the event timestamp for commit date
@@ -245,38 +275,189 @@ export class AnnouncementManager {
         // Note: Initial commits are unsigned. The repository owner can sign their own commits
         // when they make changes. The server should never sign commits on behalf of users.
         
+        logger.info({ repoPath, commitMessage, isEmpty }, 'Committing announcement file');
         await workGit.commit(commitMessage, filesToAdd, {
           '--author': `Nostr <${event.pubkey}@nostr>`,
           '--date': commitDate
         });
+        
+        // Verify commit was created
+        const commitHash = await workGit.revparse(['HEAD']).catch(() => null);
+        if (!commitHash) {
+          throw new Error('Commit was created but HEAD is not pointing to a valid commit');
+        }
+        logger.info({ repoPath, commitHash, isEmpty, workDir }, 'Commit created successfully');
+        
+        // Verify objects were created
+        const workObjectsDir = join(workDir, '.git', 'objects');
+        if (!fsExistsSync(workObjectsDir)) {
+          throw new Error(`Objects directory does not exist at ${workObjectsDir} after commit`);
+        }
+        const objectEntries = await readdir(workObjectsDir, { withFileTypes: true });
+        const hasObjects = objectEntries.some(entry => {
+          if (entry.isDirectory()) return true; // Loose objects in subdirectories
+          if (entry.isFile() && entry.name.endsWith('.pack')) return true; // Pack files
+          return false;
+        });
+        if (!hasObjects) {
+          throw new Error(`No objects found in ${workObjectsDir} after commit - commit may have failed`);
+        }
+        logger.info({ repoPath, commitHash, objectCount: objectEntries.length }, 'Objects verified after commit');
 
         // Push back to bare repo
         // Use default branch from environment or try 'main' first, then 'master'
         const defaultBranch = process.env.DEFAULT_BRANCH || 'main';
-        await workGit.push(['origin', defaultBranch]).catch(async () => {
-          // If default branch doesn't exist, try to create it
+        
+        if (isEmpty) {
+          // For empty repos, directly copy objects and update refs (more reliable than push)
           try {
-            await workGit.checkout(['-b', defaultBranch]);
-            await workGit.push(['origin', defaultBranch]);
-          } catch {
-            // If default branch creation fails, try 'main' or 'master' as fallback
+            logger.info({ repoPath, workDir, commitHash, defaultBranch }, 'Starting object copy for empty repo');
+            
+            // Copy all objects from workdir to bare repo
+            const workObjectsDir = join(workDir, '.git', 'objects');
+            const bareObjectsDir = join(repoPath, 'objects');
+            
+            logger.info({ workObjectsDir, bareObjectsDir, exists: fsExistsSync(workObjectsDir) }, 'Checking objects directory');
+            
+            // Ensure bare objects directory exists
+            await mkdir(bareObjectsDir, { recursive: true });
+            
+            // Copy object files (pack files and loose objects)
+            if (fsExistsSync(workObjectsDir)) {
+              const objectEntries = await readdir(workObjectsDir, { withFileTypes: true });
+              logger.info({ objectEntryCount: objectEntries.length }, 'Found object entries to copy');
+              
+              for (const entry of objectEntries) {
+                const sourcePath = join(workObjectsDir, entry.name);
+                const targetPath = join(bareObjectsDir, entry.name);
+                
+                if (entry.isDirectory()) {
+                  // Copy subdirectory (for loose objects: XX/YYYY...)
+                  await mkdir(targetPath, { recursive: true });
+                  const subEntries = await readdir(sourcePath, { withFileTypes: true });
+                  logger.debug({ subdir: entry.name, subEntryCount: subEntries.length }, 'Copying object subdirectory');
+                  for (const subEntry of subEntries) {
+                    const subSource = join(sourcePath, subEntry.name);
+                    const subTarget = join(targetPath, subEntry.name);
+                    if (subEntry.isFile()) {
+                      copyFileSync(subSource, subTarget);
+                    }
+                  }
+                } else if (entry.isFile()) {
+                  // Copy file (pack files, etc.)
+                  logger.debug({ file: entry.name }, 'Copying object file');
+                  copyFileSync(sourcePath, targetPath);
+                }
+              }
+              logger.info({ repoPath }, 'Finished copying objects');
+            } else {
+              logger.warn({ workObjectsDir }, 'Workdir objects directory does not exist');
+            }
+            
+            // Update the ref in bare repo
+            const refPath = join(repoPath, 'refs', 'heads', defaultBranch);
+            const refDir = dirname(refPath);
+            await mkdir(refDir, { recursive: true });
+            await writeFile(refPath, `${commitHash}\n`);
+            logger.info({ refPath, commitHash }, 'Updated branch ref');
+            
+            // Update HEAD in bare repo to point to the new branch
+            await bareGit.raw(['symbolic-ref', 'HEAD', `refs/heads/${defaultBranch}`]);
+            logger.info({ repoPath, defaultBranch, commitHash }, 'Successfully copied objects and updated refs in bare repo');
+          } catch (copyError) {
+            // If copy fails, try fallback branch
             const fallbackBranch = defaultBranch === 'main' ? 'master' : 'main';
             try {
-              await workGit.checkout(['-b', fallbackBranch]);
-              await workGit.push(['origin', fallbackBranch]);
-            } catch {
-              // If all fails, log but don't throw - announcement is saved
-              logger.warn({ repoPath, defaultBranch, fallbackBranch }, 'Failed to push announcement to any branch');
+              // Rename current branch to fallback
+              await workGit.raw(['-C', workDir, 'branch', '-m', fallbackBranch]);
+              
+              // Get the commit hash
+              const commitHash = await workGit.revparse(['HEAD']);
+              
+              // Copy objects (same as above)
+              const workObjectsDir = join(workDir, '.git', 'objects');
+              const bareObjectsDir = join(repoPath, 'objects');
+              await mkdir(bareObjectsDir, { recursive: true });
+              
+              if (fsExistsSync(workObjectsDir)) {
+                const objectEntries = await readdir(workObjectsDir, { withFileTypes: true });
+                for (const entry of objectEntries) {
+                  const sourcePath = join(workObjectsDir, entry.name);
+                  const targetPath = join(bareObjectsDir, entry.name);
+                  
+                  if (entry.isDirectory()) {
+                    await mkdir(targetPath, { recursive: true });
+                    const subEntries = await readdir(sourcePath, { withFileTypes: true });
+                    for (const subEntry of subEntries) {
+                      const subSource = join(sourcePath, subEntry.name);
+                      const subTarget = join(targetPath, subEntry.name);
+                      if (subEntry.isFile()) {
+                        copyFileSync(subSource, subTarget);
+                      }
+                    }
+                  } else if (entry.isFile()) {
+                    copyFileSync(sourcePath, targetPath);
+                  }
+                }
+              }
+              
+              // Update ref
+              const refPath = join(repoPath, 'refs', 'heads', fallbackBranch);
+              const refDir = dirname(refPath);
+              await mkdir(refDir, { recursive: true });
+              await writeFile(refPath, `${commitHash}\n`);
+              
+              // Update HEAD
+              await bareGit.raw(['symbolic-ref', 'HEAD', `refs/heads/${fallbackBranch}`]);
+              
+              logger.info({ repoPath, fallbackBranch, commitHash }, 'Successfully copied objects and updated refs with fallback branch');
+            } catch (fallbackError) {
+              logger.error({ repoPath, defaultBranch, fallbackBranch, copyError, fallbackError }, 'Failed to copy objects and update refs');
+              throw fallbackError; // Re-throw to be caught by outer try-catch
             }
           }
-        });
+        } else {
+          // For non-empty repos, push normally
+          await workGit.push(['origin', defaultBranch]).catch(async () => {
+            // If default branch doesn't exist, try to create it
+            try {
+              await workGit.checkout(['-b', defaultBranch]);
+              await workGit.push(['origin', defaultBranch]);
+            } catch {
+              // If default branch creation fails, try 'main' or 'master' as fallback
+              const fallbackBranch = defaultBranch === 'main' ? 'master' : 'main';
+              try {
+                await workGit.checkout(['-b', fallbackBranch]);
+                await workGit.push(['origin', fallbackBranch]);
+              } catch {
+                // If all fails, log but don't throw - announcement is saved
+                logger.warn({ repoPath, defaultBranch, fallbackBranch }, 'Failed to push announcement to any branch');
+              }
+            }
+          });
+        }
       }
 
       // Clean up
       await rm(workDir, { recursive: true, force: true });
     } catch (error) {
-      logger.error({ error, repoPath }, 'Failed to ensure announcement in repo');
-      // Don't throw - announcement file creation is important but shouldn't block provisioning
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      logger.error({ 
+        error: errorMessage, 
+        errorStack,
+        repoPath,
+        eventId: event.id,
+        isEmpty
+      }, 'Failed to ensure announcement in repo');
+      
+      // For empty repos, this is critical - we need the initial commit
+      // For non-empty repos, it's less critical but still important
+      if (isEmpty) {
+        // Re-throw for empty repos so caller knows it failed
+        throw new Error(`Failed to commit announcement to empty repo: ${errorMessage}`);
+      }
+      // For non-empty repos, don't throw - announcement file creation is important but shouldn't block provisioning
     }
   }
 

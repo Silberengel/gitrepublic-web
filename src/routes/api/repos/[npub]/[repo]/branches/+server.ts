@@ -10,7 +10,7 @@ import { createRepoGetHandler, createRepoPostHandler } from '$lib/utils/api-hand
 import type { RepoRequestContext, RequestEvent } from '$lib/utils/api-context.js';
 import { handleValidationError, handleApiError, handleNotFoundError } from '$lib/utils/error-handler.js';
 import { KIND } from '$lib/types/nostr.js';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import { existsSync, accessSync, constants } from 'fs';
 import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
 import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS } from '$lib/config.js';
@@ -44,9 +44,11 @@ function checkDirectoryWritable(dirPath: string, description: string): void {
   }
 }
 
-const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
+// Resolve GIT_REPO_ROOT to absolute path (handles both relative and absolute paths)
+const repoRootEnv = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
   : '/repos';
+const repoRoot = resolve(repoRootEnv);
 
 export const GET: RequestHandler = createRepoGetHandler(
   async (context: RepoRequestContext, event: RequestEvent) => {

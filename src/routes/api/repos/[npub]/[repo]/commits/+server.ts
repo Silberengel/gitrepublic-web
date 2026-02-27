@@ -9,16 +9,18 @@ import { createRepoGetHandler } from '$lib/utils/api-handlers.js';
 import type { RepoRequestContext } from '$lib/utils/api-context.js';
 import { handleApiError, handleNotFoundError } from '$lib/utils/error-handler.js';
 import { KIND } from '$lib/types/nostr.js';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { existsSync } from 'fs';
 import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
 import logger from '$lib/services/logger.js';
 import { eventCache } from '$lib/services/nostr/event-cache.js';
 import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 
-const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
+// Resolve GIT_REPO_ROOT to absolute path (handles both relative and absolute paths)
+const repoRootEnv = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
   : '/repos';
+const repoRoot = resolve(repoRootEnv);
 
 export const GET: RequestHandler = createRepoGetHandler(
   async (context: RepoRequestContext) => {
@@ -77,7 +79,8 @@ export const GET: RequestHandler = createRepoGetHandler(
     }
 
     // Get default branch if not specified
-    let branch = context.branch;
+    // Normalize 'null' string to undefined (defensive check)
+    let branch = (context.branch && context.branch !== 'null') ? context.branch : undefined;
     if (!branch) {
       try {
         branch = await fileManager.getDefaultBranch(context.npub, context.repo);

@@ -448,17 +448,17 @@ export class NostrClient {
         
         // Publish to relays - wrap in try-catch to catch synchronous errors
         try {
-          // SimplePool.publish returns a promise, but errors from individual relays
-          // may not be properly caught. We'll handle them at multiple levels.
-          const poolPublishPromise = this.pool.publish(targetRelays, event);
+          // SimplePool.publish returns Promise<string>[] (array of promises, one per relay)
+          // We need to use Promise.all() to wait for all of them
+          const poolPublishPromises = this.pool.publish(targetRelays, event);
           
-          // Handle the promise result
-          poolPublishPromise
-            .then(() => {
+          // Handle the promise results
+          Promise.all(poolPublishPromises)
+            .then((results) => {
               clearTimeout(timeout);
-              // If publish succeeded, all relays succeeded
-              // Note: SimplePool.publish doesn't return per-relay results, so we assume all succeeded
-              resolve(targetRelays);
+              // results is string[] - the relay URLs that succeeded
+              // If all succeeded, results should contain all targetRelays
+              resolve(results);
             })
             .catch((error: unknown) => {
               clearTimeout(timeout);
@@ -488,12 +488,12 @@ export class NostrClient {
       });
       
       // Wait for publish with timeout and catch all errors
-      const publishedRelays = await Promise.race([
+      const publishedRelays: string[] = await Promise.race([
         publishPromise,
         new Promise<string[]>((_, reject) => 
           setTimeout(() => reject(new Error('Publish timeout')), 30000)
         )
-      ]).catch((error: unknown) => {
+      ]).catch((error: unknown): string[] => {
         // Log error but don't throw - we'll mark relays as failed below
         const errorMessage = error instanceof Error ? error.message : String(error);
         logger.debug({ error: errorMessage, eventId: event.id }, 'Error publishing event to relays');

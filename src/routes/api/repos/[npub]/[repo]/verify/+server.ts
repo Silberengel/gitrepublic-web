@@ -68,55 +68,72 @@ export const GET: RequestHandler = createRepoGetHandler(
     let localVerified = false;
     let localOwner: string | null = null;
     let localError: string | undefined;
+    const repoPath = join(repoRoot, context.npub, `${context.repo}.git`);
+    const repoExists = existsSync(repoPath);
     
-    try {
-      // Get current owner from the most recent announcement file in the repo
-      localOwner = await fileManager.getCurrentOwnerFromRepo(context.npub, context.repo);
-      
-      if (localOwner) {
-        // Verify the announcement in nostr/repo-events.jsonl matches the announcement event
-        try {
-          const repoEventsFile = await fileManager.getFileContent(context.npub, context.repo, 'nostr/repo-events.jsonl', 'HEAD');
-          // Parse repo-events.jsonl and find the most recent announcement
-          const lines = repoEventsFile.content.trim().split('\n').filter(Boolean);
-          let repoAnnouncement: NostrEvent | null = null;
-          let latestTimestamp = 0;
-          
-          for (const line of lines) {
-            try {
-              const entry = JSON.parse(line);
-              if (entry.type === 'announcement' && entry.event && entry.timestamp) {
-                if (entry.timestamp > latestTimestamp) {
-                  latestTimestamp = entry.timestamp;
-                  repoAnnouncement = entry.event;
+    if (repoExists) {
+      // Repo is cloned - verify the announcement file matches
+      try {
+        // Get current owner from the most recent announcement file in the repo
+        localOwner = await fileManager.getCurrentOwnerFromRepo(context.npub, context.repo);
+        
+        if (localOwner) {
+          // Verify the announcement in nostr/repo-events.jsonl matches the announcement event
+          try {
+            const repoEventsFile = await fileManager.getFileContent(context.npub, context.repo, 'nostr/repo-events.jsonl', 'HEAD');
+            // Parse repo-events.jsonl and find the most recent announcement
+            const lines = repoEventsFile.content.trim().split('\n').filter(Boolean);
+            let repoAnnouncement: NostrEvent | null = null;
+            let latestTimestamp = 0;
+            
+            for (const line of lines) {
+              try {
+                const entry = JSON.parse(line);
+                if (entry.type === 'announcement' && entry.event && entry.timestamp) {
+                  if (entry.timestamp > latestTimestamp) {
+                    latestTimestamp = entry.timestamp;
+                    repoAnnouncement = entry.event;
+                  }
                 }
+              } catch {
+                continue;
               }
-            } catch {
-              continue;
             }
-          }
-          
-          if (repoAnnouncement) {
-            const verification = verifyRepositoryOwnership(announcement, JSON.stringify(repoAnnouncement));
-            localVerified = verification.valid;
-            if (!verification.valid) {
-              localError = verification.error;
+            
+            if (repoAnnouncement) {
+              const verification = verifyRepositoryOwnership(announcement, JSON.stringify(repoAnnouncement));
+              localVerified = verification.valid;
+              if (!verification.valid) {
+                localError = verification.error;
+              }
+            } else {
+              localVerified = false;
+              localError = 'No announcement found in nostr/repo-events.jsonl';
             }
-          } else {
+          } catch (err) {
             localVerified = false;
-            localError = 'No announcement found in nostr/repo-events.jsonl';
+            localError = 'Announcement file not found in repository';
           }
-        } catch (err) {
+        } else {
           localVerified = false;
-          localError = 'Announcement file not found in repository';
+          localError = 'No announcement found in repository';
         }
+      } catch (err) {
+        localVerified = false;
+        localError = err instanceof Error ? err.message : 'Failed to verify local clone';
+      }
+    } else {
+      // Repo is not cloned yet - verify from Nostr announcement alone
+      // The announcement pubkey must match the repo owner
+      if (announcement.pubkey === context.repoOwnerPubkey) {
+        localVerified = true;
+        localOwner = context.repoOwnerPubkey;
+        localError = undefined;
       } else {
         localVerified = false;
-        localError = 'No announcement found in repository';
+        localOwner = announcement.pubkey;
+        localError = 'Announcement pubkey does not match repository owner';
       }
-    } catch (err) {
-      localVerified = false;
-      localError = err instanceof Error ? err.message : 'Failed to verify local clone';
     }
     
     // Add local clone verification
