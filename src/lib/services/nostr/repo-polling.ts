@@ -18,6 +18,8 @@ export class RepoPollingService {
   private intervalId: NodeJS.Timeout | null = null;
   private domain: string;
   private relays: string[];
+  private initialPollPromise: Promise<void> | null = null;
+  private isInitialPollComplete: boolean = false;
 
   constructor(
     relays: string[],
@@ -34,28 +36,51 @@ export class RepoPollingService {
 
   /**
    * Start polling for repo announcements
+   * Returns a promise that resolves when the initial poll completes
    */
-  start(): void {
+  start(): Promise<void> {
     if (this.intervalId) {
       this.stop();
     }
 
-    // Poll immediately
-    this.poll();
+    // Poll immediately and wait for it to complete
+    this.initialPollPromise = this.poll();
 
     // Then poll at intervals
     this.intervalId = setInterval(() => {
       this.poll();
     }, this.pollingInterval);
+
+    return this.initialPollPromise;
   }
 
   /**
-   * Stop polling
+   * Wait for initial poll to complete (useful for server startup)
+   */
+  async waitForInitialPoll(): Promise<void> {
+    if (this.initialPollPromise) {
+      await this.initialPollPromise;
+    }
+  }
+
+  /**
+   * Check if initial poll has completed
+   */
+  isReady(): boolean {
+    return this.isInitialPollComplete;
+  }
+
+  /**
+   * Stop polling and cleanup resources
    */
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
+    }
+    // Close Nostr client connections
+    if (this.nostrClient) {
+      this.nostrClient.close();
     }
   }
 
@@ -64,6 +89,7 @@ export class RepoPollingService {
    */
   private async poll(): Promise<void> {
     try {
+      logger.debug('Starting repo poll...');
       const events = await this.nostrClient.fetchEvents([
         {
           kinds: [KIND.REPO_ANNOUNCEMENT],
@@ -186,8 +212,20 @@ export class RepoPollingService {
           logger.error({ error, eventId: event.id }, 'Failed to provision repo from announcement');
         }
       }
+      
+      // Mark initial poll as complete
+      if (!this.isInitialPollComplete) {
+        this.isInitialPollComplete = true;
+        logger.info('Initial repo poll completed');
+      }
     } catch (error) {
       logger.error({ error }, 'Error polling for repo announcements');
+      
+      // Still mark as complete even on error (to prevent blocking)
+      if (!this.isInitialPollComplete) {
+        this.isInitialPollComplete = true;
+        logger.warn('Initial repo poll completed with errors');
+      }
     }
   }
 

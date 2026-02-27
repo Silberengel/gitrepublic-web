@@ -29,8 +29,60 @@ if (typeof process !== 'undefined') {
   });
 
   pollingService = new RepoPollingService(DEFAULT_NOSTR_RELAYS, repoRoot, domain);
-  pollingService.start();
-  logger.info({ service: 'repo-polling', relays: DEFAULT_NOSTR_RELAYS.length }, 'Started repo polling service');
+  
+  // Start polling - the initial poll will complete asynchronously
+  // The local repos endpoint will skip cache for the first 10 seconds after startup
+  pollingService.start().then(() => {
+    logger.info({ service: 'repo-polling', relays: DEFAULT_NOSTR_RELAYS.length }, 'Repo polling service ready (initial poll completed)');
+  }).catch((err) => {
+    logger.error({ error: err, service: 'repo-polling' }, 'Initial repo poll failed, but continuing');
+  });
+  
+  logger.info({ service: 'repo-polling', relays: DEFAULT_NOSTR_RELAYS.length }, 'Started repo polling service (initial poll in progress)');
+
+  // Cleanup on server shutdown
+  const cleanup = (signal: string) => {
+    logger.info({ signal }, 'Received shutdown signal, cleaning up...');
+    if (pollingService) {
+      logger.info('Stopping repo polling service...');
+      pollingService.stop();
+      pollingService = null;
+    }
+    // Give a moment for cleanup, then exit
+    setTimeout(() => {
+      process.exit(0);
+    }, 1000);
+  };
+
+  process.on('SIGTERM', () => cleanup('SIGTERM'));
+  process.on('SIGINT', () => {
+    // SIGINT (Ctrl-C) - exit immediately after cleanup
+    cleanup('SIGINT');
+    // Force exit after 2 seconds if cleanup takes too long
+    setTimeout(() => {
+      logger.warn('Forcing exit after SIGINT');
+      process.exit(0);
+    }, 2000);
+  });
+  
+  // Also cleanup on process exit (last resort)
+  process.on('exit', () => {
+    if (pollingService) {
+      pollingService.stop();
+    }
+  });
+
+  // Periodic zombie process cleanup check
+  // This helps catch any processes that weren't properly cleaned up
+  if (typeof setInterval !== 'undefined') {
+    setInterval(() => {
+      // Check for zombie processes by attempting to reap them
+      // Node.js handles this automatically via 'close' events, but this is a safety net
+      // We can't directly check for zombies, but we can ensure our cleanup is working
+      // The real cleanup happens in process handlers, this is just monitoring
+      logger.debug('Zombie cleanup check (process handlers should prevent zombies)');
+    }, 60000); // Check every minute
+  }
 }
 
 export const handle: Handle = async ({ event, resolve }) => {

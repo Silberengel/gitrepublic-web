@@ -19,6 +19,7 @@ import { isValidBranchName, sanitizeError, validateRepoPath } from '$lib/utils/s
 import { extractCloneUrls, fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/utils/nostr-utils.js';
 import { eventCache } from '$lib/services/nostr/event-cache.js';
 import { repoManager, maintainerService, ownershipTransferService, branchProtectionService, nostrClient } from '$lib/services/service-registry.js';
+import { killProcessGroup, forceKillProcessGroup, cleanupProcess, closeProcessStreams } from '$lib/utils/process-cleanup.js';
 
 // Resolve GIT_REPO_ROOT to absolute path (handles both relative and absolute paths)
 const repoRootEnv = process.env.GIT_REPO_ROOT || '/repos';
@@ -353,6 +354,8 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
     // Security: Set timeout for git operations
     const timeoutMs = GIT_OPERATION_TIMEOUT_MS;
     let timeoutId: NodeJS.Timeout;
+    let forceKillTimeout: NodeJS.Timeout | null = null;
+    let resolved = false;
     
     const gitProcess = spawn(gitHttpBackend, [], {
       env: envVars,
@@ -361,19 +364,16 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       shell: false
     });
 
-    timeoutId = setTimeout(() => {
-      gitProcess.kill('SIGTERM');
-      // Force kill after grace period if process doesn't terminate
-      const forceKillTimeout = setTimeout(() => {
-        if (!gitProcess.killed) {
-          gitProcess.kill('SIGKILL');
-        }
-      }, 5000); // 5 second grace period
+    const chunks: Buffer[] = [];
+    let errorOutput = '';
+
+    // Set up error handlers BEFORE writing to stdin to prevent race conditions
+    gitProcess.on('error', (err) => {
+      // Aggressive cleanup on error
+      cleanupProcess(gitProcess, [timeoutId, forceKillTimeout], 'SIGTERM');
       
-      // Clear force kill timeout if process terminates
-      gitProcess.on('close', () => {
-        clearTimeout(forceKillTimeout);
-      });
+      if (resolved) return;
+      resolved = true;
       
       auditLogger.logRepoAccess(
         originalOwnerPubkey,
@@ -381,13 +381,11 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
         operation,
         `${npub}/${repoName}`,
         'failure',
-        'Operation timeout'
+        `Process error: ${err.message}`
       );
-      resolve(error(504, 'Git operation timeout'));
-    }, timeoutMs);
-
-    const chunks: Buffer[] = [];
-    let errorOutput = '';
+      const sanitizedError = sanitizeError(err);
+      resolve(error(500, `Failed to execute git-http-backend: ${sanitizedError}`));
+    });
 
     gitProcess.stdout.on('data', (chunk: Buffer) => {
       chunks.push(chunk);
@@ -397,8 +395,48 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
       errorOutput += chunk.toString();
     });
 
+    // Set up timeout handler with aggressive cleanup
+    timeoutId = setTimeout(() => {
+      if (resolved) return;
+      
+      // Kill entire process group (prevents zombies from child processes)
+      killProcessGroup(gitProcess, 'SIGTERM');
+      
+      // Force kill after grace period if process doesn't terminate
+      forceKillTimeout = forceKillProcessGroup(gitProcess, 5000);
+      
+      // Ensure streams are closed
+      closeProcessStreams(gitProcess);
+      
+      auditLogger.logRepoAccess(
+        originalOwnerPubkey,
+        clientIp,
+        operation,
+        `${npub}/${repoName}`,
+        'failure',
+        'Operation timeout'
+      );
+      
+      if (!resolved) {
+        resolved = true;
+        resolve(error(504, 'Git operation timeout'));
+      }
+    }, timeoutMs);
+
+    // Add exit handler as backup cleanup (in case close doesn't fire)
+    gitProcess.on('exit', (code, signal) => {
+      // Ensure cleanup happens even if close event doesn't fire
+      if (!resolved) {
+        cleanupProcess(gitProcess, [timeoutId, forceKillTimeout]);
+      }
+    });
+
     gitProcess.on('close', (code) => {
-      clearTimeout(timeoutId);
+      // Aggressive cleanup: clear timeouts and ensure streams are closed
+      cleanupProcess(gitProcess, [timeoutId, forceKillTimeout]);
+      
+      if (resolved) return;
+      resolved = true;
       
       // Log audit entry after operation completes
       if (code === 0) {
@@ -892,6 +930,8 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
     // Security: Set timeout for git operations
     const timeoutMs = GIT_OPERATION_TIMEOUT_MS;
     let timeoutId: NodeJS.Timeout;
+    let forceKillTimeout: NodeJS.Timeout | null = null;
+    let resolved = false;
     
     const gitProcess = spawn(gitHttpBackend, [], {
       env: envVars,
@@ -900,19 +940,16 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
       shell: false
     });
 
-    timeoutId = setTimeout(() => {
-      gitProcess.kill('SIGTERM');
-      // Force kill after grace period if process doesn't terminate
-      const forceKillTimeout = setTimeout(() => {
-        if (!gitProcess.killed) {
-          gitProcess.kill('SIGKILL');
-        }
-      }, 5000); // 5 second grace period
+    const chunks: Buffer[] = [];
+    let errorOutput = '';
+
+    // Set up error handlers BEFORE writing to stdin to prevent race conditions
+    gitProcess.on('error', (err) => {
+      // Aggressive cleanup on error
+      cleanupProcess(gitProcess, [timeoutId, forceKillTimeout], 'SIGTERM');
       
-      // Clear force kill timeout if process terminates
-      gitProcess.on('close', () => {
-        clearTimeout(forceKillTimeout);
-      });
+      if (resolved) return;
+      resolved = true;
       
       auditLogger.logRepoAccess(
         currentOwnerPubkey,
@@ -920,17 +957,31 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
         operation,
         `${npub}/${repoName}`,
         'failure',
-        'Operation timeout'
+        `Process error: ${err.message}`
       );
-      resolve(error(504, 'Git operation timeout'));
-    }, timeoutMs);
+      const sanitizedError = sanitizeError(err);
+      resolve(error(500, `Failed to execute git-http-backend: ${sanitizedError}`));
+    });
 
-    const chunks: Buffer[] = [];
-    let errorOutput = '';
-
-    // Write request body to git-http-backend stdin
-    gitProcess.stdin.write(bodyBuffer);
-    gitProcess.stdin.end();
+    // Handle stdin errors
+    gitProcess.stdin.on('error', (err) => {
+      // Aggressive cleanup on stdin error
+      cleanupProcess(gitProcess, [timeoutId, forceKillTimeout], 'SIGTERM');
+      
+      if (resolved) return;
+      resolved = true;
+      
+      auditLogger.logRepoAccess(
+        currentOwnerPubkey,
+        clientIp,
+        operation,
+        `${npub}/${repoName}`,
+        'failure',
+        `Stdin error: ${err.message}`
+      );
+      const sanitizedError = sanitizeError(err);
+      resolve(error(500, `Failed to write to git-http-backend: ${sanitizedError}`));
+    });
 
     gitProcess.stdout.on('data', (chunk: Buffer) => {
       chunks.push(chunk);
@@ -940,8 +991,52 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
       errorOutput += chunk.toString();
     });
 
+    // Set up timeout handler with aggressive cleanup
+    timeoutId = setTimeout(() => {
+      if (resolved) return;
+      
+      // Kill entire process group (prevents zombies from child processes)
+      killProcessGroup(gitProcess, 'SIGTERM');
+      
+      // Force kill after grace period if process doesn't terminate
+      forceKillTimeout = forceKillProcessGroup(gitProcess, 5000);
+      
+      // Ensure streams are closed
+      closeProcessStreams(gitProcess);
+      
+      auditLogger.logRepoAccess(
+        currentOwnerPubkey,
+        clientIp,
+        operation,
+        `${npub}/${repoName}`,
+        'failure',
+        'Operation timeout'
+      );
+      
+      if (!resolved) {
+        resolved = true;
+        resolve(error(504, 'Git operation timeout'));
+      }
+    }, timeoutMs);
+
+    // Add exit handler as backup cleanup (in case close doesn't fire)
+    gitProcess.on('exit', (code, signal) => {
+      // Ensure cleanup happens even if close event doesn't fire
+      if (!resolved) {
+        cleanupProcess(gitProcess, [timeoutId, forceKillTimeout]);
+      }
+    });
+
+    // Write request body to git-http-backend stdin AFTER error handlers are set up
+    gitProcess.stdin.write(bodyBuffer);
+    gitProcess.stdin.end();
+
     gitProcess.on('close', async (code) => {
-      clearTimeout(timeoutId);
+      // Aggressive cleanup: clear timeouts and ensure streams are closed
+      cleanupProcess(gitProcess, [timeoutId, forceKillTimeout]);
+      
+      if (resolved) return;
+      resolved = true;
       
       // Log audit entry after operation completes
       if (code === 0) {
@@ -1039,21 +1134,6 @@ export const POST: RequestHandler = async ({ params, url, request }) => {
           'Content-Length': responseBody.length.toString(),
         }
       }));
-    });
-
-    gitProcess.on('error', (err) => {
-      clearTimeout(timeoutId);
-      // Log audit entry for process error
-      auditLogger.logRepoAccess(
-        currentOwnerPubkey,
-        clientIp,
-        operation,
-        `${npub}/${repoName}`,
-        'failure',
-        `Process error: ${err.message}`
-      );
-      const sanitizedError = sanitizeError(err);
-      resolve(error(500, `Failed to execute git-http-backend: ${sanitizedError}`));
     });
   });
 };

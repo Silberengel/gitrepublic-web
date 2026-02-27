@@ -18,32 +18,10 @@ import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import { eventCache } from '$lib/services/nostr/event-cache.js';
 import { decodeNostrAddress } from '$lib/services/nostr/nip19-utils.js';
 import logger from '$lib/services/logger.js';
+import { isParameterizedReplaceable } from '$lib/utils/nostr-event-utils.js';
 
 // Replaceable event kinds (only latest per pubkey matters)
 const REPLACEABLE_KINDS = [0, 3, 10002]; // Profile, Contacts, Relay List
-
-/**
- * Check if an event is a parameterized replaceable event (NIP-33)
- * Parameterized replaceable events have:
- * - kind >= 10000 && kind < 20000 (replaceable range) with a 'd' tag, OR
- * - kind >= 30000 && kind < 40000 (addressable range) with a 'd' tag
- */
-function isParameterizedReplaceable(event: NostrEvent): boolean {
-  const hasDTag = event.tags.some(t => t[0] === 'd' && t[1]);
-  if (!hasDTag) return false;
-  
-  // Replaceable range (NIP-33)
-  if (event.kind >= 10000 && event.kind < 20000) {
-    return true;
-  }
-  
-  // Addressable range (NIP-34) - also parameterized replaceable
-  if (event.kind >= 30000 && event.kind < 40000) {
-    return true;
-  }
-  
-  return false;
-}
 
 /**
  * Get the deduplication key for an event

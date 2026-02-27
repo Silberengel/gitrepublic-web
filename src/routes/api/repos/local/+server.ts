@@ -33,6 +33,19 @@ interface CacheEntry {
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 let cache: CacheEntry | null = null;
 
+// Track server startup time to invalidate cache on first request after startup
+let serverStartTime = Date.now();
+const STARTUP_GRACE_PERIOD = 10000; // 10 seconds - allow time for initial poll
+
+/**
+ * Invalidate cache (internal use only - not exported to avoid SvelteKit build errors)
+ */
+function invalidateLocalReposCache(): void {
+  cache = null;
+  serverStartTime = Date.now();
+  logger.debug('Local repos cache invalidated');
+}
+
 interface LocalRepoItem {
   npub: string;
   repoName: string;
@@ -207,9 +220,17 @@ export const GET: RequestHandler = async (event) => {
     const gitDomain = event.url.searchParams.get('domain') || GIT_DOMAIN;
     const forceRefresh = event.url.searchParams.get('refresh') === 'true';
     
-    // Check cache
-    if (!forceRefresh && cache && (Date.now() - cache.timestamp) < CACHE_TTL) {
+    // If server just started, always refresh to ensure we get latest repos
+    const timeSinceStartup = Date.now() - serverStartTime;
+    const isRecentStartup = timeSinceStartup < STARTUP_GRACE_PERIOD;
+    
+    // Check cache (but skip if recent startup or force refresh)
+    if (!forceRefresh && !isRecentStartup && cache && (Date.now() - cache.timestamp) < CACHE_TTL) {
       return json(cache.repos);
+    }
+    
+    if (isRecentStartup) {
+      logger.debug({ timeSinceStartup }, 'Skipping cache due to recent server startup');
     }
     
     // Scan filesystem
