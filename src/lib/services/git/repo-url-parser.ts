@@ -90,8 +90,50 @@ export class RepoUrlParser {
   /**
    * Filter and prepare remote URLs from clone URLs
    * Respects the repo owner's order in the clone list
+   * In development (localhost), prefers localhost URLs over remote URLs
    */
   prepareRemoteUrls(cloneUrls: string[]): string[] {
+    // Check if we're in development mode (localhost)
+    const isLocalhost = this.domain.includes('localhost') || this.domain.includes('127.0.0.1');
+    
+    // In development, prefer localhost URLs
+    if (isLocalhost) {
+      const localhostUrls: string[] = [];
+      const otherUrls: string[] = [];
+      
+      for (const url of cloneUrls) {
+        const lowerUrl = url.toLowerCase();
+        if (lowerUrl.includes('localhost') || 
+            lowerUrl.includes('127.0.0.1') || 
+            url.includes(this.domain)) {
+          localhostUrls.push(url);
+        } else {
+          otherUrls.push(url);
+        }
+      }
+      
+      // Prefer localhost URLs in development
+      if (localhostUrls.length > 0) {
+        return localhostUrls;
+      }
+      
+      // Fall back to other URLs if no localhost URLs found
+      if (otherUrls.length > 0) {
+        return this.prepareRemoteUrlsFromList(otherUrls);
+      }
+      
+      // If no URLs at all, return empty
+      return [];
+    }
+    
+    // Production mode: filter out localhost/our domain
+    return this.prepareRemoteUrlsFromList(cloneUrls);
+  }
+  
+  /**
+   * Helper method to prepare remote URLs from a list (filters out localhost/our domain)
+   */
+  private prepareRemoteUrlsFromList(cloneUrls: string[]): string[] {
     const httpsUrls: string[] = [];
     const sshUrls: string[] = [];
     
@@ -130,12 +172,6 @@ export class RepoUrlParser {
     // If no external URLs, try any URL that's not our domain (preserve order)
     if (remoteUrls.length === 0) {
       remoteUrls = cloneUrls.filter(url => !url.includes(this.domain));
-    }
-
-    // If still no remote URLs, but there are *any* clone URLs, try the first one
-    // This handles cases where the only clone URL is our own domain, but the repo doesn't exist locally yet
-    if (remoteUrls.length === 0 && cloneUrls.length > 0) {
-      remoteUrls.push(cloneUrls[0]);
     }
 
     return remoteUrls;

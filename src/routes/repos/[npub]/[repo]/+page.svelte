@@ -192,6 +192,7 @@
     generateAnnouncementFileForRepo as generateAnnouncementFileForRepoService,
     copyVerificationToClipboard as copyVerificationToClipboardService,
     downloadVerificationFile as downloadVerificationFileService,
+    saveAnnouncementToRepo as saveAnnouncementToRepoService,
     verifyCloneUrl as verifyCloneUrlService,
     deleteAnnouncement as deleteAnnouncementService,
     copyEventId as copyEventIdService
@@ -598,13 +599,47 @@
     await generateAnnouncementFileForRepoService(state, repoOwnerPubkeyDerived);
   }
   const copyVerificationToClipboard = () => copyVerificationToClipboardService(state);
+  const downloadVerificationFile = () => downloadVerificationFileService(state);
+  async function saveAnnouncementToRepo() {
+    await saveAnnouncementToRepoService(state, repoOwnerPubkeyDerived);
+    // Reload branches and files to show the new commit
+    if (state.clone.isCloned) {
+      await loadBranches();
+      await loadFiles();
+    }
+  }
   async function verifyCloneUrl() {
     await verifyCloneUrlService(state, repoOwnerPubkeyDerived, { checkVerification });
   }
   async function deleteAnnouncement() {
     await deleteAnnouncementService(state, repoOwnerPubkeyDerived, announcementEventId);
   }
-  const downloadVerificationFile = () => downloadVerificationFileService(state);
+
+  async function removeRepoFromServer() {
+    if (!confirm(`Are you sure you want to remove "${state.repo}" from this server?\n\nThis will permanently delete the local clone of the repository. The announcement on Nostr will NOT be deleted.\n\nThis action cannot be undone.\n\nClick OK to delete, or Cancel to abort.`)) {
+      return;
+    }
+
+    try {
+      const headers = buildApiHeaders();
+      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/delete`, {
+        method: 'DELETE', 
+        headers
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to delete repository');
+      }
+
+      // Redirect to repos list after successful deletion
+      alert('Repository removed from server successfully');
+      goto('/repos');
+    } catch (err) {
+      alert(`Failed to remove repository: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   const downloadRepository = (ref?: string, filename?: string) => downloadRepoUtil({ npub: state.npub, repo: state.repo, ref, filename });
   
   // Safe wrapper functions for SSR
@@ -613,6 +648,7 @@
   const safeToggleBookmark = () => safeAsync(() => toggleBookmark());
   const safeForkRepository = () => safeAsync(() => forkRepository());
   const safeCloneRepository = () => safeAsync(() => cloneRepository());
+  const safeRemoveRepoFromServer = () => safeAsync(removeRepoFromServer);
   const safeHandleBranchChange = (branch: string) => safeSync(() => handleBranchChangeDirect(branch));
   
   // Initialize activeTab from URL query parameter
@@ -855,6 +891,18 @@
     await checkVerification();
     if (!state.isMounted) return;
     
+    // Log verification status for maintenance (after check completes)
+    if (state.verification.status) {
+      const status = state.verification.status;
+      console.log('[Page Load] Verification Status:', {
+        verified: status.verified,
+        error: status.error || null,
+        message: status.message || null,
+        cloneCount: status.cloneVerifications?.length || 0,
+        verifiedClones: status.cloneVerifications?.filter(cv => cv.verified).length || 0
+      });
+    }
+    
     await loadReadme();
     if (!state.isMounted) return;
     
@@ -1055,6 +1103,7 @@
       needsClone={needsClone}
       allMaintainers={state.maintainers.all}
       onCopyEventId={copyEventId}
+      onRemoveFromServer={repoOwnerPubkeyDerived && state.user.pubkeyHex === repoOwnerPubkeyDerived && state.clone.isCloned ? safeRemoveRepoFromServer : undefined}
     />
   {/if}
 
@@ -1905,6 +1954,7 @@
     {state}
     onCopy={copyVerificationToClipboard}
     onDownload={downloadVerificationFile}
+    onSave={state.clone.isCloned && (state.maintainers.isMaintainer || state.user.pubkeyHex === repoOwnerPubkeyDerived) ? saveAnnouncementToRepo : undefined}
     onClose={() => state.openDialog = null}
   />
 

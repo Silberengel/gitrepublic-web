@@ -847,16 +847,6 @@
                       <a href="/repos/{item.npub}/{item.repoName}" class="view-button" title="View repository">
                         <img src="/icons/arrow-right.svg" alt="View" />
                       </a>
-                      {#if userPubkey && canDelete}
-                        <button 
-                          class="delete-button"
-                          onclick={() => deleteLocalRepo(item.npub, item.repoName)}
-                          disabled={deletingRepo?.npub === item.npub && deletingRepo?.repo === item.repoName}
-                          title="Delete repository"
-                        >
-                          {deletingRepo?.npub === item.npub && deletingRepo?.repo === item.repoName ? 'Deleting...' : 'Delete'}
-                        </button>
-                      {/if}
                     </div>
                   </div>
                   <div class="repo-meta">

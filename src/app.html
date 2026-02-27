@@ -17,6 +17,28 @@
           document.documentElement.setAttribute('data-theme', 'dark');
         }
       })();
+      
+      // Handle unhandled promise rejections from relay errors
+      // This prevents console errors from relay payment/restriction messages
+      window.addEventListener('unhandledrejection', (event) => {
+        const reason = event.reason;
+        const errorMessage = reason instanceof Error ? reason.message : String(reason);
+        
+        // Handle relay-specific errors gracefully (payment requirements, restrictions, etc.)
+        if (errorMessage.includes('restricted') || 
+            errorMessage.includes('Pay on') ||
+            errorMessage.includes('payment required') ||
+            errorMessage.includes('rate limit') ||
+            errorMessage.includes('bad req')) {
+          // These are expected relay errors - prevent them from showing as uncaught errors
+          event.preventDefault();
+          // Optionally log for debugging (but don't spam console)
+          if (typeof console !== 'undefined' && console.debug) {
+            console.debug('[Relay]', errorMessage);
+          }
+        }
+        // Other unhandled rejections will still be logged by the browser
+      });
     </script>
     %sveltekit.head%
   </head>

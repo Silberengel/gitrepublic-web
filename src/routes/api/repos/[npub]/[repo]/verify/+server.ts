@@ -183,10 +183,11 @@ export const POST: RequestHandler = createRepoPostHandler(
       return error(401, 'Authentication required. Please provide userPubkey.');
     }
 
-    // Check if user is a maintainer
+    // Check if user is a maintainer or the repository owner
     const isMaintainer = await maintainerService.isMaintainer(userPubkeyHex, context.repoOwnerPubkey, context.repo);
-    if (!isMaintainer) {
-      return error(403, 'Only repository maintainers can verify clone URLs.');
+    const isOwner = userPubkeyHex === context.repoOwnerPubkey;
+    if (!isMaintainer && !isOwner) {
+      return error(403, 'Only repository owners and maintainers can save announcements.');
     }
 
     // Check if repository is cloned

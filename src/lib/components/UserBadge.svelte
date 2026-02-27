@@ -5,6 +5,8 @@
   import { KIND } from '../types/nostr.js';
   import { eventCache } from '../services/nostr/event-cache.js';
   import { nip19 } from 'nostr-tools';
+  import { userStore } from '../stores/user-store.js';
+  import { hasUnlimitedAccess } from '../utils/user-access.js';
 
   interface Props {
     pubkey: string;
@@ -13,6 +15,38 @@
   }
 
   let { pubkey, disableLink = false, inline = false }: Props = $props();
+  
+  // Check if this user has unlimited access (verified)
+  const isVerified = $derived.by(() => {
+    const currentUser = $userStore;
+    // Check if the pubkey matches the current user's pubkey
+    try {
+      // Convert pubkey to hex for comparison
+      let pubkeyHex: string;
+      if (/^[0-9a-f]{64}$/i.test(pubkey)) {
+        pubkeyHex = pubkey.toLowerCase();
+      } else {
+        try {
+          const decoded = nip19.decode(pubkey);
+          if (decoded.type === 'npub') {
+            pubkeyHex = decoded.data as string;
+          } else {
+            return false;
+          }
+        } catch {
+          return false;
+        }
+      }
+      
+      // Compare with current user's pubkey
+      if (currentUser?.userPubkeyHex === pubkeyHex) {
+        return hasUnlimitedAccess(currentUser.userLevel);
+      }
+    } catch {
+      // If comparison fails, not verified
+    }
+    return false;
+  });
   
   // Convert pubkey to npub for navigation (reactive)
   const profileUrl = $derived.by(() => {
@@ -200,11 +234,16 @@
   {/if}
 {:else if disableLink}
   <div class="user-badge">
-    {#if userProfile?.picture}
-      <img src={userProfile.picture} alt="Profile" class="user-badge-avatar" />
-    {:else}
-      <img src="/favicon.png" alt="Profile" class="user-badge-avatar user-badge-avatar-fallback" />
-    {/if}
+    <div class="user-badge-avatar-wrapper" title={isVerified ? 'Verified.' : undefined}>
+      {#if userProfile?.picture}
+        <img src={userProfile.picture} alt="Profile" class="user-badge-avatar" />
+      {:else}
+        <img src="/favicon.png" alt="Profile" class="user-badge-avatar user-badge-avatar-fallback" />
+      {/if}
+      {#if isVerified}
+        <div class="verification-wreath" aria-label="Verified"></div>
+      {/if}
+    </div>
     <span class="user-badge-name">{truncateHandle(userProfile?.name)}</span>
   </div>
 {:else}
@@ -215,11 +254,16 @@
       e.stopPropagation();
     }}
   >
-    {#if userProfile?.picture}
-      <img src={userProfile.picture} alt="Profile" class="user-badge-avatar" />
-    {:else}
-      <img src="/favicon.png" alt="Profile" class="user-badge-avatar user-badge-avatar-fallback" />
-    {/if}
+    <div class="user-badge-avatar-wrapper" title={isVerified ? 'Verified. This user has write-access to the server because it has write-access to at least one default Nostr relay.' : undefined}>
+      {#if userProfile?.picture}
+        <img src={userProfile.picture} alt="Profile" class="user-badge-avatar" />
+      {:else}
+        <img src="/favicon.png" alt="Profile" class="user-badge-avatar user-badge-avatar-fallback" />
+      {/if}
+      {#if isVerified}
+        <div class="verification-wreath" aria-label="Verified"></div>
+      {/if}
+    </div>
     <span class="user-badge-name">{truncateHandle(userProfile?.name)}</span>
   </a>
 {/if}
@@ -244,17 +288,79 @@
     background: var(--bg-secondary);
   }
 
+  .user-badge-avatar-wrapper {
+    position: relative;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+
   .user-badge-avatar {
     width: 24px;
     height: 24px;
     border-radius: 50%;
     object-fit: cover;
-    flex-shrink: 0;
+    display: block;
   }
 
   .user-badge-avatar-fallback {
     filter: grayscale(100%);
     opacity: 0.7;
+  }
+
+  /* Theme-aware laurel wreath verification indicator */
+  .verification-wreath {
+    position: absolute;
+    top: -3px;
+    left: -3px;
+    right: -3px;
+    bottom: -3px;
+    border-radius: 50%;
+    border: 2.5px solid var(--accent); /* Theme-aware accent color */
+    pointer-events: none;
+    /* Create laurel wreath effect with theme-aware glow */
+    box-shadow: 
+      0 0 0 1px var(--accent),
+      inset 0 0 0 1px var(--accent),
+      /* Decorative shadows for laurel wreath effect */
+      2px -2px 0 -1px var(--accent),
+      -2px 2px 0 -1px var(--accent),
+      2px 2px 0 -1px var(--accent),
+      -2px -2px 0 -1px var(--accent),
+      /* Subtle outer glow */
+      0 0 4px var(--accent);
+    filter: opacity(0.85);
+    animation: verification-pulse 2s ease-in-out infinite;
+  }
+
+  .user-badge-avatar-wrapper {
+    cursor: help; /* Show help cursor to indicate tooltip */
+  }
+
+  .user-badge-avatar-wrapper:hover .verification-wreath {
+    border-color: var(--accent-hover); /* Theme-aware hover color */
+    filter: opacity(1);
+    box-shadow: 
+      0 0 0 1px var(--accent-hover),
+      inset 0 0 0 1px var(--accent-hover),
+      /* Enhanced laurel wreath effect on hover */
+      2px -2px 0 -1px var(--accent-hover),
+      -2px 2px 0 -1px var(--accent-hover),
+      2px 2px 0 -1px var(--accent-hover),
+      -2px -2px 0 -1px var(--accent-hover),
+      /* Enhanced glow on hover */
+      0 0 8px var(--accent-hover),
+      0 0 12px var(--accent);
+  }
+
+  @keyframes verification-pulse {
+    0%, 100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.85;
+      transform: scale(1.02);
+    }
   }
 
   .user-badge-name {

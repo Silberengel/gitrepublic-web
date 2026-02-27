@@ -436,19 +436,54 @@ export class NostrClient {
     const failed: Array<{ relay: string; error: string }> = [];
     
     // Use nostr-tools SimplePool to publish to all relays
-    // Wrap in Promise.resolve().then() to catch any synchronous errors and ensure all async errors are caught
+    // SimplePool.publish can throw errors from WebSocket handlers that aren't caught by normal try-catch
+    // We need to wrap it carefully to catch all errors
     try {
-      // Create a promise that will catch all errors, including those from WebSocket event handlers
-      const publishPromise = Promise.resolve().then(async () => {
+      // Wrap publish in a promise that catches all errors, including unhandled promise rejections
+      const publishPromise = new Promise<string[]>((resolve, reject) => {
+        // Set up a timeout to prevent hanging
+        const timeout = setTimeout(() => {
+          reject(new Error('Publish timeout after 30 seconds'));
+        }, 30000);
+        
+        // Publish to relays - wrap in try-catch to catch synchronous errors
         try {
-          await this.pool.publish(targetRelays, event);
-          // If publish succeeded, all relays succeeded
-          // Note: SimplePool.publish doesn't return per-relay results, so we assume all succeeded
-          return targetRelays;
-        } catch (error) {
-          // If publish failed, mark all as failed
-          // In a more sophisticated implementation, we could check individual relays
-          throw error;
+          // SimplePool.publish returns a promise, but errors from individual relays
+          // may not be properly caught. We'll handle them at multiple levels.
+          const poolPublishPromise = this.pool.publish(targetRelays, event);
+          
+          // Handle the promise result
+          poolPublishPromise
+            .then(() => {
+              clearTimeout(timeout);
+              // If publish succeeded, all relays succeeded
+              // Note: SimplePool.publish doesn't return per-relay results, so we assume all succeeded
+              resolve(targetRelays);
+            })
+            .catch((error: unknown) => {
+              clearTimeout(timeout);
+              // Handle specific relay errors gracefully
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              
+              // Check for common relay error messages that shouldn't be fatal
+              if (errorMessage.includes('restricted') || 
+                  errorMessage.includes('Pay on') ||
+                  errorMessage.includes('payment required') ||
+                  errorMessage.includes('rate limit')) {
+                // These are relay-specific restrictions, not fatal errors
+                // Log but don't fail - we'll mark relays as failed below
+                logger.debug({ error: errorMessage, eventId: event.id }, 'Relay restriction encountered (payment/rate limit)');
+                // Resolve with empty success - we'll mark all as failed below
+                resolve([]);
+              } else {
+                // Other errors should be rejected
+                reject(error);
+              }
+            });
+        } catch (syncError) {
+          // Catch any synchronous errors
+          clearTimeout(timeout);
+          reject(syncError);
         }
       });
       
@@ -458,14 +493,21 @@ export class NostrClient {
         new Promise<string[]>((_, reject) => 
           setTimeout(() => reject(new Error('Publish timeout')), 30000)
         )
-      ]).catch(error => {
+      ]).catch((error: unknown) => {
         // Log error but don't throw - we'll mark relays as failed below
-        logger.debug({ error, eventId: event.id }, 'Error publishing event to relays');
-        return null;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.debug({ error: errorMessage, eventId: event.id }, 'Error publishing event to relays');
+        return [];
       });
       
-      if (publishedRelays) {
+      if (publishedRelays && publishedRelays.length > 0) {
         success.push(...publishedRelays);
+        // Mark any relays not in success as failed
+        targetRelays.forEach(relay => {
+          if (!publishedRelays.includes(relay)) {
+            failed.push({ relay, error: 'Relay did not accept event' });
+          }
+        });
       } else {
         // If publish failed or timed out, mark all as failed
         targetRelays.forEach(relay => {
@@ -474,9 +516,10 @@ export class NostrClient {
       }
     } catch (error) {
       // Catch any synchronous errors
-      logger.debug({ error, eventId: event.id }, 'Synchronous error in publishEvent');
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.debug({ error: errorMessage, eventId: event.id }, 'Synchronous error in publishEvent');
       targetRelays.forEach(relay => {
-        failed.push({ relay, error: String(error) });
+        failed.push({ relay, error: errorMessage });
       });
     }
     

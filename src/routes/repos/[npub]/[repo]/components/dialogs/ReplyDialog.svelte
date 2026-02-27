@@ -71,12 +71,26 @@
   }
 
   .cancel-button {
-    background: var(--cancel-bg, #e0e0e0);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-family: 'IBM Plex Serif', serif;
+    transition: background 0.2s ease, color 0.2s ease;
+  }
+
+  .cancel-button:hover {
+    background: var(--bg-secondary);
   }
 
   .save-button {
-    background: var(--primary-color, #2196f3);
-    color: white;
+    background: var(--button-primary);
+    color: var(--accent-text, #ffffff);
+    font-family: 'IBM Plex Serif', serif;
+    transition: background 0.2s ease;
+  }
+
+  .save-button:hover:not(:disabled) {
+    background: var(--button-primary-hover);
   }
 
   .save-button:disabled {

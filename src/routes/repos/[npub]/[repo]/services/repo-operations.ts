@@ -13,6 +13,8 @@ import { getUserRelays } from '$lib/services/nostr/user-relays.js';
 import { KIND } from '$lib/types/nostr.js';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import { goto } from '$app/navigation';
+import logger from '$lib/services/logger.js';
+import { isNIP07Available } from '$lib/services/nostr/nip07-signer.js';
 
 interface RepoOperationsCallbacks {
   checkCloneStatus: (force: boolean) => Promise<void>;
@@ -110,9 +112,94 @@ export async function cloneRepository(
 ): Promise<void> {
   if (state.clone.cloning) return;
   
+  if (!state.user.pubkeyHex) {
+    alert('Please log in to clone repositories.');
+    return;
+  }
+
   state.clone.cloning = true;
   try {
-    const data = await apiPost<{ alreadyExists?: boolean }>(`/api/repos/${state.npub}/${state.repo}/clone`, {});
+    // Create and send proof event to verify write access
+    // This ensures the clone endpoint can verify access even if cache is empty
+    let proofEvent: NostrEvent | null = null;
+    try {
+      if (isNIP07Available() && state.user.pubkeyHex) {
+        const { createProofEvent } = await import('$lib/services/nostr/relay-write-proof.js');
+        const { signEventWithNIP07 } = await import('$lib/services/nostr/nip07-signer.js');
+        
+        // Create proof event template
+        const proofEventTemplate = createProofEvent(
+          state.user.pubkeyHex,
+          `gitrepublic-clone-proof-${Date.now()}`
+        );
+        
+        // Sign with NIP-07
+        proofEvent = await signEventWithNIP07(proofEventTemplate);
+        
+        // Publish to relays so server can verify it
+        // User only needs write access to ONE relay, not all
+        const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+        let publishResult;
+        try {
+          publishResult = await nostrClient.publishEvent(proofEvent, DEFAULT_NOSTR_RELAYS).catch((err: unknown) => {
+            // Catch any unhandled errors from publishEvent
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            logger.debug({ error: errorMessage }, '[Clone] Error in publishEvent, marking all relays as failed');
+            // Return a result with all relays failed
+            return {
+              success: [],
+              failed: DEFAULT_NOSTR_RELAYS.map(relay => ({ relay, error: errorMessage }))
+            };
+          });
+        } catch (err) {
+          // Catch synchronous errors
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          logger.debug({ error: errorMessage }, '[Clone] Synchronous error publishing proof event');
+          publishResult = {
+            success: [],
+            failed: DEFAULT_NOSTR_RELAYS.map(relay => ({ relay, error: errorMessage }))
+          };
+        }
+        
+        // If at least one relay accepted the event, wait for propagation
+        // If all relays failed, still try (might be cached or server can retry)
+        if (publishResult && publishResult.success.length > 0) {
+          logger.debug({ 
+            successCount: publishResult.success.length, 
+            successfulRelays: publishResult.success,
+            failedRelays: publishResult.failed.map(f => f.relay)
+          }, '[Clone] Proof event published to at least one relay, waiting for propagation');
+          // Wait longer for event to propagate to relays (3 seconds should be enough)
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        } else {
+          const failedDetails = publishResult?.failed.map(f => `${f.relay}: ${f.error}`) || ['Unknown error'];
+          logger.warn({ 
+            failedRelays: failedDetails
+          }, '[Clone] Proof event failed to publish to all relays, but continuing (server may retry or use cache)');
+          // Still wait a bit in case some relays are slow
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+        
+        // Clean up client
+        try {
+          nostrClient.close();
+        } catch (closeErr) {
+          // Ignore close errors
+          logger.debug({ error: closeErr }, '[Clone] Error closing NostrClient');
+        }
+      }
+    } catch (proofErr) {
+      // If proof creation fails, continue anyway - clone endpoint will check cache
+      logger.debug({ error: proofErr }, '[Clone] Failed to create proof event, will rely on cache');
+    }
+
+    // Send clone request with proof event in body (if available)
+    const requestBody: { proofEvent?: NostrEvent } = {};
+    if (proofEvent) {
+      requestBody.proofEvent = proofEvent;
+    }
+    
+    const data = await apiPost<{ alreadyExists?: boolean }>(`/api/repos/${state.npub}/${state.repo}/clone`, requestBody);
     
     if (data.alreadyExists) {
       alert('Repository already exists locally.');
@@ -382,7 +469,25 @@ export async function checkVerification(
     state.verification.status = { verified: false, error: 'Failed to check verification' };
   } finally {
     state.loading.verification = false;
-    console.log('[Verification] Status after check:', state.verification.status);
+    
+    // Log verification status for maintenance
+    if (state.verification.status) {
+      const status = state.verification.status;
+      console.log('[Verification Status]', {
+        verified: status.verified,
+        error: status.error || null,
+        message: status.message || null,
+        cloneCount: status.cloneVerifications?.length || 0,
+        verifiedClones: status.cloneVerifications?.filter(cv => cv.verified).length || 0,
+        cloneDetails: status.cloneVerifications?.map(cv => ({
+          url: cv.url.substring(0, 50) + (cv.url.length > 50 ? '...' : ''),
+          verified: cv.verified,
+          error: cv.error || null
+        })) || []
+      });
+    } else {
+      console.log('[Verification Status] Not available');
+    }
   }
 }
 
@@ -593,26 +698,36 @@ export async function generateAnnouncementFileForRepo(
   }
 
   try {
-    // Fetch the repository announcement event
-    const { NostrClient } = await import('$lib/services/nostr/nostr-client.js');
-    const { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS } = await import('$lib/config.js');
-    const { KIND } = await import('$lib/types/nostr.js');
-    const nostrClient = new NostrClient([...new Set([...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS])]);
-    const events = await nostrClient.fetchEvents([
-      {
-        kinds: [KIND.REPO_ANNOUNCEMENT],
-        authors: [repoOwnerPubkeyDerived],
-        '#d': [state.repo],
-        limit: 1
-      }
-    ]);
+    // First, try to use the announcement from pageData (already loaded)
+    let announcement: NostrEvent | null = null;
+    
+    if (state.pageData?.announcement) {
+      announcement = state.pageData.announcement as NostrEvent;
+    }
+    
+    // If not available in pageData, fetch from Nostr
+    if (!announcement) {
+      const { NostrClient } = await import('$lib/services/nostr/nostr-client.js');
+      const { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS } = await import('$lib/config.js');
+      const { KIND } = await import('$lib/types/nostr.js');
+      const nostrClient = new NostrClient([...new Set([...DEFAULT_NOSTR_RELAYS, ...DEFAULT_NOSTR_SEARCH_RELAYS])]);
+      const events = await nostrClient.fetchEvents([
+        {
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          authors: [repoOwnerPubkeyDerived],
+          '#d': [state.repo],
+          limit: 1
+        }
+      ]);
 
-    if (events.length === 0) {
-      state.error = 'Repository announcement not found. Please ensure the repository is registered on Nostr.';
-      return;
+      if (events.length === 0) {
+        state.error = 'Repository announcement not found. Please ensure the repository is registered on Nostr.';
+        return;
+      }
+
+      announcement = events[0] as NostrEvent;
     }
 
-    const announcement = events[0] as NostrEvent;
     // Generate announcement event JSON (for download/reference)
     state.verification.fileContent = JSON.stringify(announcement, null, 2) + '\n';
     state.openDialog = 'verification';
@@ -634,6 +749,53 @@ export function copyVerificationToClipboard(state: RepoState): void {
     console.error('Failed to copy:', err);
     alert('Failed to copy to clipboard. Please select and copy manually.');
   });
+}
+
+/**
+ * Save announcement to repository
+ * Uses the existing verify endpoint which saves and commits the announcement
+ */
+export async function saveAnnouncementToRepo(
+  state: RepoState,
+  repoOwnerPubkeyDerived: string | null
+): Promise<void> {
+  if (!repoOwnerPubkeyDerived || !state.user.pubkeyHex) {
+    state.error = 'Unable to save announcement: missing repository or user information';
+    return;
+  }
+
+  if (!state.clone.isCloned) {
+    state.error = 'Repository must be cloned first. Please clone the repository before saving the announcement.';
+    return;
+  }
+
+  // Check if user is owner or maintainer
+  if (!state.maintainers.isMaintainer && state.user.pubkeyHex !== repoOwnerPubkeyDerived) {
+    state.error = 'Only repository owners and maintainers can save announcements.';
+    return;
+  }
+
+  try {
+    state.creating.announcement = true;
+    state.error = null;
+
+    // Use the existing verify endpoint which saves and commits the announcement
+    const data = await apiRequest<{ message?: string; announcementId?: string }>(`/api/repos/${state.npub}/${state.repo}/verify`, {
+      method: 'POST'
+    } as RequestInit);
+
+    // Close dialog and show success
+    state.openDialog = null;
+    alert(data.message || 'Announcement saved to repository successfully!');
+    
+    // Reload branches and files to show the new commit
+    // The callbacks will be passed from the component
+  } catch (err) {
+    console.error('Failed to save announcement:', err);
+    state.error = `Failed to save announcement: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    state.creating.announcement = false;
+  }
 }
 
 /**

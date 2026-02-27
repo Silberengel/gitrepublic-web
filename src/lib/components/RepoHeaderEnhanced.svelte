@@ -42,6 +42,7 @@
     needsClone?: boolean;
     allMaintainers?: Array<{ pubkey: string; isOwner: boolean }>;
     onCopyEventId?: () => void;
+    onRemoveFromServer?: () => void;
     topics?: string[];
   }
 
@@ -84,6 +85,7 @@
     needsClone = false,
     allMaintainers = [],
     onCopyEventId,
+    onRemoveFromServer,
     topics = []
   }: Props = $props();
 
@@ -266,6 +268,14 @@
                   disabled={deletingAnnouncement}
                 >
                   {deletingAnnouncement ? 'Deleting...' : 'Delete Announcement'}
+                </button>
+              {/if}
+              {#if onRemoveFromServer}
+                <button 
+                  class="menu-item menu-item-danger" 
+                  onclick={() => { onRemoveFromServer(); showMoreMenu = false; }}
+                >
+                  Remove this repo from the server
                 </button>
               {/if}
             </div>

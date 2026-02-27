@@ -105,18 +105,28 @@ export const POST: RequestHandler = async (event) => {
           logger.info({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'Verified unlimited access from proof event');
           userLevel = getCachedUserLevel(userPubkeyHex); // Get the cached value
         } else {
-          // Check if relays are down
-          if (verification.relayDown) {
-            // Relays are down - check cache again (might have been cached from previous request)
-            userLevel = getCachedUserLevel(userPubkeyHex);
-            if (!userLevel || !hasUnlimitedAccess(userLevel.level)) {
-              logger.warn({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...', error: verification.error }, 'Relays down and no cached unlimited access');
-              throw error(503, 'Relays are temporarily unavailable and no cached access level found. Please verify your access level first by visiting your profile page.');
-            }
+          // Verification failed - check cache before denying access
+          // Cache exists for exactly this reason: to allow access when verification temporarily fails
+          userLevel = getCachedUserLevel(userPubkeyHex);
+          
+          if (userLevel && hasUnlimitedAccess(userLevel.level)) {
+            // User has cached unlimited access - use it even though verification failed
+            // This handles cases where relays are down or proof event hasn't propagated yet
+            logger.info({ 
+              userPubkeyHex: userPubkeyHex.slice(0, 16) + '...', 
+              error: verification.error,
+              cachedLevel: userLevel.level,
+              cachedAt: new Date(userLevel.cachedAt).toISOString()
+            }, 'Verification failed but using cached unlimited access');
+          } else if (verification.relayDown) {
+            // Relays are down and no cache - temporary issue
+            logger.warn({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...', error: verification.error }, 'Relays down and no cached unlimited access');
+            throw error(503, 'Relays are temporarily unavailable and no cached access level found. Please verify your access level first by visiting your profile page.');
           } else {
-            // Verification failed - user doesn't have write access
+            // Verification failed and no cache - user doesn't have write access
             logger.warn({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...', error: verification.error }, 'User does not have unlimited access');
-            throw error(403, `Only users with unlimited access can clone repositories to the server. ${verification.error || 'Please verify you can write to at least one default Nostr relay.'}`);
+            const errorMsg = verification.error || 'Please verify you can write to at least one default Nostr relay.';
+            throw error(403, `Only users with unlimited access can clone repositories to the server. ${errorMsg} Note: You only need write access to ONE default relay, not all of them.`);
           }
         }
       } catch (err) {
@@ -132,7 +142,7 @@ export const POST: RequestHandler = async (event) => {
       // No proof event or auth header - check if we have any cached level
       if (!userLevel) {
         logger.warn({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'No cached user level and no proof event or NIP-98 auth header');
-        throw error(403, 'Only users with unlimited access can clone repositories to the server. Please verify your access level first by visiting your profile page or ensuring you can write to at least one default Nostr relay.');
+        throw error(403, 'Only users with unlimited access can clone repositories to the server. Please verify your access level first by visiting your profile page or ensuring you can write to at least one default Nostr relay. Note: You only need write access to ONE default relay, not all of them.');
       }
     }
   }
@@ -143,7 +153,7 @@ export const POST: RequestHandler = async (event) => {
       userPubkeyHex: userPubkeyHex.slice(0, 16) + '...', 
       cachedLevel: userLevel?.level || 'none' 
     }, 'User does not have unlimited access');
-    throw error(403, 'Only users with unlimited access can clone repositories to the server. Please verify you can write to at least one default Nostr relay.');
+    throw error(403, 'Only users with unlimited access can clone repositories to the server. Please verify you can write to at least one default Nostr relay. Note: You only need write access to ONE default relay, not all of them.');
   }
 
   try {

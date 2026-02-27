@@ -70,10 +70,28 @@ export class RepoManager {
    * @param event - The repo announcement event
    * @param selfTransferEvent - Optional self-transfer event to include in initial commit
    * @param isExistingRepo - Whether this is an existing repo being added to the server
+   * @param allowMissingDomainUrl - In development, allow provisioning even if domain URL isn't in announcement
    */
-  async provisionRepo(event: NostrEvent, selfTransferEvent?: NostrEvent, isExistingRepo: boolean = false): Promise<void> {
+  async provisionRepo(event: NostrEvent, selfTransferEvent?: NostrEvent, isExistingRepo: boolean = false, allowMissingDomainUrl: boolean = false): Promise<void> {
     const cloneUrls = this.urlParser.extractCloneUrls(event);
-    const domainUrl = cloneUrls.find(url => url.includes(this.domain));
+    let domainUrl = cloneUrls.find(url => url.includes(this.domain));
+    
+    // In development, if domain URL not found and allowed, construct it from the event
+    if (!domainUrl && allowMissingDomainUrl) {
+      const isLocalhost = this.domain.includes('localhost') || this.domain.includes('127.0.0.1');
+      if (isLocalhost) {
+        // Extract npub and repo name from event
+        const dTag = event.tags.find(t => t[0] === 'd')?.[1];
+        if (dTag) {
+          const protocol = this.domain.startsWith('localhost') || this.domain.startsWith('127.0.0.1') ? 'http' : 'https';
+          // Get npub from event pubkey
+          const { nip19 } = await import('nostr-tools');
+          const npub = nip19.npubEncode(event.pubkey);
+          domainUrl = `${protocol}://${this.domain}/${npub}/${dTag}.git`;
+          logger.info({ domain: this.domain, npub, repo: dTag, constructedUrl: domainUrl }, 'Constructed domain URL for development provisioning');
+        }
+      }
+    }
     
     if (!domainUrl) {
       throw new Error(`No ${this.domain} URL found in repo announcement`);
@@ -125,16 +143,29 @@ export class RepoManager {
       const git = simpleGit();
       await git.init(['--bare', repoPath.fullPath]);
       
-      // Ensure announcement event is saved to nostr/repo-events.jsonl in the repository
-      await this.announcementManager.ensureAnnouncementInRepo(repoPath.fullPath, event, selfTransferEvent);
-      
       // If there are other clone URLs, sync from them after creating the repo
       if (otherUrls.length > 0) {
         const remoteUrls = this.urlParser.prepareRemoteUrls(otherUrls);
         await this.remoteSync.syncFromRemotes(repoPath.fullPath, remoteUrls);
-      } else {
-        // No external URLs - this is a brand new repo, create initial branch and README
+      }
+      
+      // Check if branches exist after sync (if any)
+      const repoGit = simpleGit(repoPath.fullPath);
+      let hasBranches = false;
+      try {
+        const branches = await repoGit.branch(['-a']);
+        hasBranches = branches.all.length > 0;
+      } catch {
+        hasBranches = false;
+      }
+      
+      if (!hasBranches) {
+        // No branches exist - create initial branch and README (which includes announcement)
         await this.createInitialBranchAndReadme(repoPath.fullPath, repoPath.npub, repoPath.repoName, event);
+      } else {
+        // Branches exist (from sync) - ensure announcement is committed to the default branch
+        // This must happen after syncing so we can commit it to the existing default branch
+        await this.announcementManager.ensureAnnouncementInRepo(repoPath.fullPath, event, selfTransferEvent);
       }
     } else {
       // For existing repos, check if announcement exists in repo
@@ -169,8 +200,48 @@ export class RepoManager {
     announcementEvent: NostrEvent
   ): Promise<void> {
     try {
-      // Get default branch from environment or use 'master'
-      const defaultBranch = process.env.DEFAULT_BRANCH || 'master';
+      // Get default branch from git config, environment, or use 'master'
+      // Check git's init.defaultBranch config first (respects user's git settings)
+      let defaultBranch = process.env.DEFAULT_BRANCH || 'master';
+      
+      try {
+        const git = simpleGit();
+        // Try to get git's default branch setting
+        const defaultBranchConfig = await git.raw(['config', '--get', 'init.defaultBranch']).catch(() => null);
+        if (defaultBranchConfig && defaultBranchConfig.trim()) {
+          defaultBranch = defaultBranchConfig.trim();
+        }
+      } catch {
+        // If git config fails, use environment or fallback to 'master'
+      }
+      
+      // Check if any branches already exist (e.g., from a remote sync)
+      const repoGit = simpleGit(repoPath);
+      let existingBranches: string[] = [];
+      try {
+        const branches = await repoGit.branch(['-a']);
+        existingBranches = branches.all.map(b => b.replace(/^remotes\/origin\//, '').replace(/^remotes\//, '').replace(/^refs\/heads\//, ''));
+        // Remove duplicates
+        existingBranches = [...new Set(existingBranches)];
+        
+        // If branches exist, check if one matches our default branch preference
+        if (existingBranches.length > 0) {
+          // Prefer existing branches that match common defaults
+          const preferredBranches = [defaultBranch, 'main', 'master', 'dev'];
+          for (const preferred of preferredBranches) {
+            if (existingBranches.includes(preferred)) {
+              defaultBranch = preferred;
+              break;
+            }
+          }
+          // If no match, use the first existing branch
+          if (!existingBranches.includes(defaultBranch)) {
+            defaultBranch = existingBranches[0];
+          }
+        }
+      } catch {
+        // No branches exist, use the determined default
+      }
       
       // Get repo name from d-tag or use repoName from path
       const dTag = announcementEvent.tags.find(t => t[0] === 'd')?.[1] || repoName;
@@ -203,19 +274,9 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
       const { FileManager } = await import('./file-manager.js');
       const fileManager = new FileManager(this.repoRoot);
       
-      // For a new repo with no branches, we need to create an orphan branch first
-      // Check if repo has any branches
-      const git = simpleGit(repoPath);
-      let hasBranches = false;
-      try {
-        const branches = await git.branch(['-a']);
-        hasBranches = branches.all.length > 0;
-      } catch {
-        // No branches exist
-        hasBranches = false;
-      }
-      
-      if (!hasBranches) {
+      // If no branches exist, create an orphan branch
+      // We already checked for existing branches above, so if existingBranches is empty, create one
+      if (existingBranches.length === 0) {
         // Create orphan branch first (pass undefined for fromBranch to create orphan)
         await fileManager.createBranch(npub, repoName, defaultBranch, undefined);
       }
@@ -359,17 +420,25 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
     let remoteUrls: string[] = [];
 
     try {
-      // Prepare remote URLs (filters out localhost/our domain, converts SSH to HTTPS)
-      remoteUrls = this.urlParser.prepareRemoteUrls(cloneUrls);
-
-      if (remoteUrls.length === 0) {
-        logger.warn({ npub, repoName, cloneUrls, announcementEventId: announcementEvent.id }, 'No remote clone URLs found for on-demand fetch');
-        return { success: false, needsAnnouncement: false };
-      }
+      // Check if we're in development mode (localhost)
+      const isLocalhost = this.domain.includes('localhost') || this.domain.includes('127.0.0.1');
       
-      logger.debug({ npub, repoName, cloneUrls, remoteUrls, isPublic }, 'On-demand fetch details');
+      // If in development, prefer localhost URLs from GIT_DOMAIN
+      if (isLocalhost) {
+        // Construct localhost URL from GIT_DOMAIN
+        const protocol = this.domain.startsWith('localhost') || this.domain.startsWith('127.0.0.1') ? 'http' : 'https';
+        const localhostUrl = `${protocol}://${this.domain}/${npub}/${repoName}.git`;
+        
+        // Always use localhost URL in development, even if it's not in the clone URLs
+        // This allows cloning from the local server during development
+        remoteUrls = [localhostUrl];
+        logger.info({ npub, repoName, url: localhostUrl, domain: this.domain }, 'Using localhost URL for development clone');
+      } else {
+        // Prepare remote URLs (filters out localhost/our domain, converts SSH to HTTPS)
+        remoteUrls = this.urlParser.prepareRemoteUrls(cloneUrls);
+      }
 
-      // Check if repoRoot exists and is writable
+      // Check if repoRoot exists and is writable (needed for both provisioning and cloning)
       if (!existsSync(this.repoRoot)) {
         try {
           mkdirSync(this.repoRoot, { recursive: true });
@@ -417,6 +486,42 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         }
       }
 
+      if (remoteUrls.length === 0) {
+        // No remote URLs - this is an empty repo, provision it instead
+        logger.info({ npub, repoName, cloneUrls, announcementEventId: announcementEvent.id }, 'No remote clone URLs found - provisioning empty repository');
+        try {
+          await this.provisionRepo(announcementEvent, undefined, false);
+          logger.info({ npub, repoName }, 'Empty repository provisioned successfully');
+          return { success: true, cloneUrls, remoteUrls: [] };
+        } catch (err) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          logger.error({ npub, repoName, error: error.message }, 'Failed to provision empty repository');
+          return { success: false, error: error.message, cloneUrls, remoteUrls: [] };
+        }
+      }
+      
+      logger.debug({ npub, repoName, cloneUrls, remoteUrls, isPublic }, 'On-demand fetch details');
+
+      // In development mode, if using localhost URL, check if repo exists locally first
+      // If it doesn't exist, provision it instead of trying to clone from non-existent URL
+      if (isLocalhost && remoteUrls[0].includes(this.domain)) {
+        const localRepoPath = join(this.repoRoot, npub, `${repoName}.git`);
+        if (!existsSync(localRepoPath)) {
+          // Repo doesn't exist on localhost - provision it instead
+          logger.info({ npub, repoName, url: remoteUrls[0] }, 'Localhost URL specified but repo does not exist locally - provisioning instead');
+          try {
+            // In development, allow provisioning even if domain URL isn't in announcement
+            await this.provisionRepo(announcementEvent, undefined, false, true);
+            logger.info({ npub, repoName }, 'Repository provisioned successfully on localhost');
+            return { success: true, cloneUrls, remoteUrls: [] };
+          } catch (err) {
+            const error = err instanceof Error ? err : new Error(String(err));
+            logger.error({ npub, repoName, error: error.message }, 'Failed to provision repository on localhost');
+            return { success: false, error: error.message, cloneUrls, remoteUrls: [] };
+          }
+        }
+      }
+
       // Get git environment for URL (handles Tor proxy, etc.)
       const gitEnv = this.remoteSync.getGitEnvForUrl(remoteUrls[0]);
       
@@ -430,7 +535,8 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         repoName, 
         sourceUrl: remoteUrls[0], 
         cloneUrls,
-        authenticated: isAuthenticated
+        authenticated: isAuthenticated,
+        isLocalhost
       }, 'Fetching repository on-demand from remote');
       
       // Clone as bare repository with timeout
