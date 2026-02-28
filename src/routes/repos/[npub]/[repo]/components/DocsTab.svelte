@@ -65,6 +65,13 @@
     }
   });
   
+  // Ensure README is always selected by default if available
+  $effect(() => {
+    if (hasReadme && !selectedDoc) {
+      selectedDoc = 'README.md';
+    }
+  });
+  
   async function loadDocumentation() {
     loading = true;
     loadingDocs = true;
@@ -78,7 +85,8 @@
     try {
       logger.operation('Loading documentation', { npub, repo, branch: currentBranch });
       
-      // Load README FIRST and display immediately
+      // ALWAYS load README FIRST and display immediately if available
+      // README is standard documentation and should always be shown
       try {
         const readmeResponse = await fetch(`/api/repos/${npub}/${repo}/readme?ref=${currentBranch || 'HEAD'}`);
         if (readmeResponse.ok) {
@@ -96,7 +104,7 @@
         logger.debug({ error: readmeErr, npub, repo }, 'No README found');
       }
       
-      // Now check for docs folder in the background
+      // Now check for docs folder in the background (but don't replace README)
       try {
         const response = await fetch(`/api/repos/${npub}/${repo}/files?action=tree&ref=${currentBranch || 'HEAD'}&path=docs`);
         if (response.ok) {
@@ -121,6 +129,7 @@
       }
       
       // Load Nostr documentation events (kind 30818, 30041, 30817, 30023)
+      // These are additional docs, but README should still be shown if available
       await loadNostrDocumentation();
       
     } catch (err) {
@@ -165,6 +174,30 @@
       }
     } catch (err) {
       logger.warn({ error: err, path }, 'Failed to load doc file');
+      // If loading a doc file fails and we have a README, fall back to README
+      if (hasReadme) {
+        await loadReadme();
+      }
+    }
+  }
+  
+  // Helper function to reload README
+  async function loadReadme() {
+    try {
+      const readmeResponse = await fetch(`/api/repos/${npub}/${repo}/readme?ref=${currentBranch || 'HEAD'}`);
+      if (readmeResponse.ok) {
+        const readmeData = await readmeResponse.json();
+        if (readmeData.content) {
+          documentationContent = readmeData.content;
+          documentationKind = readmeData.type || 'markdown';
+          selectedDoc = 'README.md';
+          documentationTitle = null;
+          indexEvent = null;
+          logger.debug({ npub, repo }, 'README reloaded');
+        }
+      }
+    } catch (readmeErr) {
+      logger.debug({ error: readmeErr, npub, repo }, 'Failed to reload README');
     }
   }
   
@@ -305,7 +338,7 @@
                   // Clear any Nostr doc state first
                   documentationTitle = null;
                   indexEvent = null;
-                  loadDocumentation();
+                  loadReadme();
                 }}
               >
                 README.md
@@ -342,7 +375,7 @@
               </li>
             {/each}
           {/if}
-          {#if !hasReadme && docFiles.length === 0 && nostrDocs.length === 0}
+          {#if !hasReadme && docFiles.length === 0 && nostrDocs.length === 0 && !indexEvent}
             <div class="empty-sidebar">
               <p>No documentation files found</p>
             </div>
