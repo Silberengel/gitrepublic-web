@@ -13,7 +13,7 @@
   import { userStore } from '$lib/stores/user-store.js';
   import { fetchUserProfile, extractProfileData } from '$lib/utils/user-profile.js';
   import { combineRelays } from '$lib/config.js';
-  import { KIND, isEphemeralKind, isReplaceableKind } from '$lib/types/nostr.js';
+  import { KIND, isEphemeralKind, isReplaceableKind, isAddressableKind } from '$lib/types/nostr.js';
   import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
   import { eventCache } from '$lib/services/nostr/event-cache.js';
 
@@ -633,6 +633,19 @@ i   *
         return true;
       }
 
+      // Exclude addressable events (30000-39999) that are not repo-related
+      // Only allow known repo-related addressable events: REPO_ANNOUNCEMENT, REPO_STATE, BRANCH_PROTECTION
+      if (isAddressableKind(event.kind)) {
+        const allowedAddressableKinds: number[] = [
+          KIND.REPO_ANNOUNCEMENT,
+          KIND.REPO_STATE,
+          KIND.BRANCH_PROTECTION
+        ];
+        if (!allowedAddressableKinds.includes(event.kind)) {
+          return true;
+        }
+      }
+
       // Exclude specific regular kinds that are not repo-related:
       
       // Kind 1: Keep this one in, just for the user's convenience
@@ -944,41 +957,99 @@ i   *
     return date.toLocaleDateString();
   }
 
+  // Helper function to check if an event is repo-related
+  function isRepoRelatedEvent(event: NostrEvent): boolean {
+    const repoRelatedKinds: number[] = [
+      KIND.REPO_ANNOUNCEMENT,
+      KIND.REPO_STATE,
+      KIND.PATCH,
+      KIND.PULL_REQUEST,
+      KIND.PULL_REQUEST_UPDATE,
+      KIND.ISSUE,
+      KIND.STATUS_OPEN,
+      KIND.STATUS_APPLIED,
+      KIND.STATUS_CLOSED,
+      KIND.STATUS_DRAFT,
+      KIND.COMMIT_SIGNATURE,
+      KIND.OWNERSHIP_TRANSFER,
+      KIND.RELEASE,
+      KIND.COMMENT,
+      KIND.THREAD,
+      KIND.BRANCH_PROTECTION,
+      KIND.HIGHLIGHT
+    ];
+    return repoRelatedKinds.includes(event.kind);
+  }
+
+  // Helper function to check if an event references a repo via a-tag
+  function eventReferencesRepo(event: NostrEvent, repoATags: Set<string>): boolean {
+    const aTags = event.tags.filter(t => t[0] === 'a' && t[1]);
+    for (const aTag of aTags) {
+      if (aTag[1] && repoATags.has(aTag[1])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Helper function to check if an event has p-tag or q-tag referencing the user
+  function eventReferencesUser(event: NostrEvent, userPubkey: string): boolean {
+    // Check p-tags
+    const pTags = event.tags.filter(t => t[0] === 'p' && t[1]);
+    for (const pTag of pTags) {
+      if (pTag[1] && pTag[1].toLowerCase() === userPubkey.toLowerCase()) {
+        return true;
+      }
+    }
+    
+    // Check q-tags
+    const qTags = event.tags.filter(t => t[0] === 'q' && t[1]);
+    for (const qTag of qTags) {
+      if (qTag[1] && qTag[1].toLowerCase() === userPubkey.toLowerCase()) {
+        return true;
+      }
+    }
+    
+    return false;
+  }
+
   async function loadActivity() {
     if (!profileOwnerPubkeyHex || loadingActivity || activityLoaded) return;
 
     const userPubkey = profileOwnerPubkeyHex; // Store in local variable for type safety
     loadingActivity = true;
     try {
-      // Step 1: Fetch repo announcements in parallel (reduced limit)
+      // Step 1: Fetch all repo announcements where user is owner or maintainer
       const [repoAnnouncements, allAnnouncements] = await Promise.all([
         nostrClient.fetchEvents([
           {
             kinds: [KIND.REPO_ANNOUNCEMENT],
             authors: [userPubkey],
-            limit: 50 // Reduced from 100
+            limit: 100
           }
         ]),
         nostrClient.fetchEvents([
           {
             kinds: [KIND.REPO_ANNOUNCEMENT],
             '#p': [userPubkey],
-            limit: 50 // Reduced from 100
+            limit: 100
           }
         ])
       ]);
 
-      // Step 2: Extract a-tags from repo announcements
-      const aTags = new Set<string>();
+      // Step 2: Extract a-tags from repos where user is owner or maintainer
+      const repoATags = new Set<string>();
+      
+      // Add a-tags from repos owned by user
       for (const announcement of repoAnnouncements) {
         const dTag = announcement.tags.find(t => t[0] === 'd')?.[1];
         if (dTag) {
           const aTag = `${KIND.REPO_ANNOUNCEMENT}:${announcement.pubkey}:${dTag}`;
-          aTags.add(aTag);
+          repoATags.add(aTag);
         }
       }
 
-      // Step 3: Check for repos where user is a maintainer
+      // Add a-tags from repos where user is a maintainer
       for (const announcement of allAnnouncements) {
         const maintainersTag = announcement.tags.find(t => t[0] === 'maintainers');
         if (maintainersTag) {
@@ -998,43 +1069,95 @@ i   *
             const dTag = announcement.tags.find(t => t[0] === 'd')?.[1];
             if (dTag) {
               const aTag = `${KIND.REPO_ANNOUNCEMENT}:${announcement.pubkey}:${dTag}`;
-              aTags.add(aTag);
+              repoATags.add(aTag);
             }
           }
         }
       }
 
-      // Step 4: Fetch events that reference the user or their repos (reduced limits)
+      // If user has no repos, return empty activity
+      if (repoATags.size === 0) {
+        activityEvents = [];
+        activityLoaded = true;
+        loadingActivity = false;
+        return;
+      }
+
+      // Step 3: Define repo-related event kinds
+      const repoRelatedKinds = [
+        KIND.REPO_ANNOUNCEMENT,
+        KIND.REPO_STATE,
+        KIND.PATCH,
+        KIND.PULL_REQUEST,
+        KIND.PULL_REQUEST_UPDATE,
+        KIND.ISSUE,
+        KIND.STATUS_OPEN,
+        KIND.STATUS_APPLIED,
+        KIND.STATUS_CLOSED,
+        KIND.STATUS_DRAFT,
+        KIND.COMMIT_SIGNATURE,
+        KIND.OWNERSHIP_TRANSFER,
+        KIND.RELEASE,
+        KIND.COMMENT,
+        KIND.THREAD,
+        KIND.BRANCH_PROTECTION,
+        KIND.HIGHLIGHT
+      ];
+
+      // Step 4: Fetch events that:
+      // - Have p-tags or q-tags referencing the user
+      // - AND reference repos where user is owner/maintainer (via a-tags)
+      // - AND are repo-related kinds
       const filters: any[] = [];
 
-      // Events with user in p-tag
+      // Events with user in p-tag AND repo a-tags AND repo-related kinds
       filters.push({
         '#p': [userPubkey],
-        limit: 100 // Reduced from 200
+        '#a': Array.from(repoATags),
+        kinds: repoRelatedKinds,
+        limit: 200
       });
 
-      // Events with user in q-tag
+      // Events with user in q-tag AND repo a-tags AND repo-related kinds
       filters.push({
         '#q': [userPubkey],
-        limit: 100 // Reduced from 200
+        '#a': Array.from(repoATags),
+        kinds: repoRelatedKinds,
+        limit: 200
       });
-
-      // Events with repo a-tags
-      if (aTags.size > 0) {
-        filters.push({
-          '#a': Array.from(aTags),
-          limit: 100 // Reduced from 200
-        });
-      }
 
       const allActivityEvents = await Promise.race([
         nostrClient.fetchEvents(filters),
         new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 15000)) // 15s timeout
       ]);
 
-      // Step 5: Deduplicate, filter, and sort by created_at (newest first)
+      // Step 5: Additional filtering to ensure events:
+      // - Reference the user via p-tag or q-tag
+      // - Reference a repo the user owns/maintains via a-tag
+      // - Are repo-related kinds
       const eventMap = new Map<string, NostrEvent>();
       for (const event of allActivityEvents) {
+        // Skip user's own events
+        if (event.pubkey === userPubkey) {
+          continue;
+        }
+        
+        // Must be repo-related
+        if (!isRepoRelatedEvent(event)) {
+          continue;
+        }
+        
+        // Must reference the user via p-tag or q-tag
+        if (!eventReferencesUser(event, userPubkey)) {
+          continue;
+        }
+        
+        // Must reference a repo the user owns/maintains
+        if (!eventReferencesRepo(event, repoATags)) {
+          continue;
+        }
+        
+        // Apply standard exclusions
         if (shouldExcludeEvent(event, userPubkey, true)) {
           continue;
         }
@@ -1045,7 +1168,7 @@ i   *
         }
       }
 
-      // Sort by created_at descending and limit to 50 (reduced from 200)
+      // Sort by created_at descending and limit to 50
       activityEvents = Array.from(eventMap.values())
         .sort((a, b) => b.created_at - a.created_at)
         .slice(0, 50);
