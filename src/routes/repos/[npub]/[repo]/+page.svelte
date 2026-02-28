@@ -1410,24 +1410,6 @@
         </div>
       </div>
     {/if}
-    {#if state.error}
-      <div class="state.error">
-        <div class="state.error-message">
-          <strong>Error:</strong> {state.error}
-        </div>
-        {#if state.error.includes('not cloned locally') && hasUnlimitedAccess($userStore.userLevel)}
-          <div class="state.error-actions">
-            <button 
-              class="clone-button-inline"
-              onclick={cloneRepository}
-              disabled={state.clone.cloning || state.clone.checking}
-            >
-              {state.clone.cloning ? 'Cloning...' : (state.clone.checking ? 'Checking...' : 'Clone to Server')}
-            </button>
-          </div>
-        {/if}
-      </div>
-    {/if}
 
     <!-- Tabs - only show if we have repo data (header/clone section would be visible) -->
     {#if repoOwnerPubkeyDerived}

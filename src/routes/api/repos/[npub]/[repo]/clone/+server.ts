@@ -303,10 +303,22 @@ export const POST: RequestHandler = async (event) => {
     }, 'Repository announcement clone URLs');
 
     // Attempt to clone the repository
+    logger.debug({ npub, repo, preferredDefaultBranch, hasAnnouncement: !!announcementEvent }, 'Calling fetchRepoOnDemand');
     const result = await repoManager.fetchRepoOnDemand(npub, repo, announcementEvent, preferredDefaultBranch);
+    
+    logger.debug({ 
+      npub, 
+      repo, 
+      success: result.success, 
+      error: result.error,
+      needsAnnouncement: result.needsAnnouncement,
+      cloneUrls: result.cloneUrls?.length || 0,
+      remoteUrls: result.remoteUrls?.length || 0
+    }, 'fetchRepoOnDemand result');
 
     if (!result.success) {
       if (result.needsAnnouncement) {
+        logger.error({ npub, repo }, 'Clone failed: Repository announcement is required');
         throw handleValidationError(
           'Repository announcement is required. Please provide an announcement event or create one.',
           { operation: 'cloneRepo', npub, repo }
@@ -323,16 +335,18 @@ export const POST: RequestHandler = async (event) => {
       } else if (result.remoteUrls && result.remoteUrls.length === 0) {
         errorMessage += ' No accessible remote clone URLs found.';
       } else if (result.cloneUrls && result.cloneUrls.length > 0) {
-        errorMessage += ` Attempted to clone from: ${result.cloneUrls.join(', ')}`;
+        errorMessage += ` Attempted to clone from: ${result.cloneUrls.slice(0, 3).join(', ')}${result.cloneUrls.length > 3 ? '...' : ''}`;
       }
       
       logger.error({ 
         npub, 
         repo, 
         error: result.error,
+        errorMessage,
         cloneUrls: result.cloneUrls,
-        remoteUrls: result.remoteUrls
-      }, 'Failed to clone repository');
+        remoteUrls: result.remoteUrls,
+        needsAnnouncement: result.needsAnnouncement
+      }, 'Failed to clone repository - fetchRepoOnDemand returned success: false');
       
       throw handleApiError(
         new Error(result.error || 'Failed to clone repository from remote URLs'),

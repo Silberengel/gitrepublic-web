@@ -15,9 +15,15 @@ import { extractRequestContext } from '$lib/utils/api-context.js';
 import logger from '$lib/services/logger.js';
 import type { NostrEvent } from '$lib/types/nostr.js';
 import type { RequestEvent } from '@sveltejs/kit';
+import { existsSync } from 'fs';
+import { join, resolve } from 'path';
 
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
+
+const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
+  ? resolve(process.env.GIT_REPO_ROOT)
+  : resolve('/repos');
 
 interface RepoListItem {
   event: NostrEvent;
@@ -88,6 +94,14 @@ export const GET: RequestHandler = async (event) => {
         }
       } else {
         npub = nip19.npubEncode(event.pubkey);
+      }
+      
+      // Only include repos that actually exist locally on the server
+      // This ensures deleted repos don't show up in the list
+      const repoPath = join(repoRoot, npub, `${dTag}.git`);
+      if (!existsSync(repoPath)) {
+        logger.debug({ npub, repoName: dTag, repoPath }, 'Skipping repo - does not exist locally');
+        continue;
       }
       
       repos.push({

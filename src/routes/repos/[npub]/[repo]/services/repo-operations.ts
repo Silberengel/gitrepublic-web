@@ -225,28 +225,78 @@ export async function cloneRepository(
     const cloneUrl = `/api/repos/${state.npub}/${state.repo}/clone`;
     logger.debug({ url: cloneUrl }, '[Clone] POST request URL');
     
-    const data = await apiPost<{ alreadyExists?: boolean }>(cloneUrl, requestBody);
+    const data = await apiPost<{ alreadyExists?: boolean; success?: boolean; message?: string }>(cloneUrl, requestBody);
     
     logger.debug({ data }, '[Clone] Clone request successful');
+    
+    // Check if the response indicates success
+    if (data.success === false) {
+      const errorMsg = data.message || 'Failed to clone repository';
+      logger.error({ npub: state.npub, repo: state.repo, data }, '[Clone] Clone endpoint returned success: false');
+      alert(`Error: ${errorMsg}`);
+      throw new Error(errorMsg);
+    }
     
     if (data.alreadyExists) {
       alert('Repository already exists locally.');
       // Force refresh clone status
       await callbacks.checkCloneStatus(true);
     } else {
-      alert('Repository cloned successfully! The repository is now available on this server.');
-      // Force refresh clone status
-      await callbacks.checkCloneStatus(true);
-      // Reset API fallback status since repo is now cloned
-      state.clone.apiFallbackAvailable = false;
-      // Reload data to use the cloned repo instead of API
-      await Promise.all([
-        callbacks.loadBranches(),
-        callbacks.loadFiles(state.files.currentPath),
-        callbacks.loadReadme(),
-        callbacks.loadTags(),
-        callbacks.loadCommitHistory()
-      ]);
+      alert('Repository clone initiated. Waiting for clone to complete...');
+      
+      // Start polling for clone status with a delay
+      // Clone operation may take time, so we poll every 2 seconds
+      const pollInterval = 2000; // 2 seconds
+      const maxAttempts = 30; // Maximum 60 seconds (30 * 2s)
+      let attempts = 0;
+      let pollTimer: ReturnType<typeof setInterval> | null = null;
+      
+      const pollCloneStatus = async () => {
+        attempts++;
+        logger.debug({ attempts, maxAttempts }, '[Clone] Polling clone status');
+        
+        // Check clone status
+        await callbacks.checkCloneStatus(true);
+        
+        // If repo is now cloned, stop polling and reload data
+        if (state.clone.isCloned === true) {
+          if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+          }
+          
+          logger.info({ attempts }, '[Clone] Repository confirmed cloned, reloading data');
+          
+          // Reset API fallback status since repo is now cloned
+          state.clone.apiFallbackAvailable = false;
+          
+          // Reload data to use the cloned repo instead of API
+          await Promise.all([
+            callbacks.loadBranches(),
+            callbacks.loadFiles(state.files.currentPath),
+            callbacks.loadReadme(),
+            callbacks.loadTags(),
+            callbacks.loadCommitHistory()
+          ]);
+          
+          logger.info('[Clone] Repository data reloaded successfully');
+        } else if (attempts >= maxAttempts) {
+          // Stop polling after max attempts
+          if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+          }
+          
+          logger.warn({ attempts }, '[Clone] Polling timeout - clone may still be in progress');
+          alert('Clone operation is taking longer than expected. The repository may still be cloning in the background. Please refresh the page in a moment.');
+        }
+      };
+      
+      // Start polling after initial delay of 2 seconds
+      setTimeout(() => {
+        pollCloneStatus(); // First check immediately after delay
+        pollTimer = setInterval(pollCloneStatus, pollInterval);
+      }, pollInterval);
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Failed to clone repository';
@@ -254,9 +304,26 @@ export async function cloneRepository(
       error: err, 
       npub: state.npub, 
       repo: state.repo,
-      errorMessage 
+      errorMessage,
+      errorStack: err instanceof Error ? err.stack : undefined
     }, '[Clone] Clone request failed');
-    alert(`Error: ${errorMessage}`);
+    
+    // Extract more detailed error message if available
+    let userFriendlyMessage = errorMessage;
+    if (err instanceof Error) {
+      // Check if it's a network error
+      if (errorMessage.includes('fetch') || errorMessage.includes('network') || errorMessage.includes('Failed to fetch')) {
+        userFriendlyMessage = 'Network error: Unable to connect to the server. Please check your connection and try again.';
+      } else if (errorMessage.includes('403') || errorMessage.includes('Forbidden')) {
+        userFriendlyMessage = 'Access denied: You do not have permission to clone this repository. Please verify you have unlimited access.';
+      } else if (errorMessage.includes('404') || errorMessage.includes('Not found')) {
+        userFriendlyMessage = 'Repository not found: The repository announcement may not exist or the repository name may be incorrect.';
+      } else if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
+        userFriendlyMessage = 'Clone operation timed out. The repository may be too large or the remote server may be slow. Please try again.';
+      }
+    }
+    
+    alert(`Error cloning repository: ${userFriendlyMessage}`);
     console.error('Error cloning repository:', err);
   } finally {
     state.clone.cloning = false;
