@@ -26,6 +26,7 @@ services:
       - GIT_DOMAIN=${GIT_DOMAIN:-gitrepublic.imwald.eu}  # Set to your domain for production (without https://)
       - NOSTR_RELAYS=${NOSTR_RELAYS:-wss://theforest.nostr1.com}
       - NOSTRGIT_SECRET_KEY=${NOSTRGIT_SECRET_KEY:-}
+      - ADMIN_NPUB=${ADMIN_NPUB:-npub12umrfdjgvdxt45g0y3ghwcyfagssjrv5qlm3t6pu2aa5vydwdmwq8q0z04}
       - PORT=6543
     volumes:
       # Persist git repositories

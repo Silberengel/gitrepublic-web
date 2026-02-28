@@ -12,37 +12,13 @@ import { createRepoGetHandler } from '$lib/utils/api-handlers.js';
 import type { RepoRequestContext } from '$lib/utils/api-context.js';
 import { handleApiError, handleAuthorizationError } from '$lib/utils/error-handler.js';
 import { auditLogger } from '$lib/services/security/audit-logger.js';
-import { nip19 } from 'nostr-tools';
 import logger from '$lib/services/logger.js';
 import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
+import { isAdmin } from '$lib/utils/admin-check.js';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
   : '/repos';
-
-// Admin pubkeys (can be set via environment variable)
-const ADMIN_PUBKEYS = (typeof process !== 'undefined' && process.env?.ADMIN_PUBKEYS
-  ? process.env.ADMIN_PUBKEYS.split(',').map(p => p.trim()).filter(p => p.length > 0)
-  : []) as string[];
-
-/**
- * Check if user is admin
- */
-function isAdmin(userPubkeyHex: string | null): boolean {
-  if (!userPubkeyHex) return false;
-  return ADMIN_PUBKEYS.some(adminPubkey => {
-    // Support both hex and npub formats
-    try {
-      const decoded = nip19.decode(adminPubkey);
-      if (decoded.type === 'npub') {
-        return decoded.data === userPubkeyHex;
-      }
-    } catch {
-      // Not an npub, compare as hex
-    }
-    return adminPubkey.toLowerCase() === userPubkeyHex.toLowerCase();
-  });
-}
 
 /**
  * Check if user is repo owner

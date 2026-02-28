@@ -62,7 +62,13 @@ export async function apiRequest<T>(
           // Ignore parsing errors
         }
       }
-      logger.error({ url, status: response.status, error: errorMessage }, '[API] Request failed');
+      
+      // 404s are expected when repo isn't cloned - log as debug, not error
+      if (response.status === 404) {
+        logger.debug({ url, status: response.status, error: errorMessage }, '[API] Request failed (404 - expected for uncloned repos)');
+      } else {
+        logger.error({ url, status: response.status, error: errorMessage }, '[API] Request failed');
+      }
       throw new Error(errorMessage);
     }
 

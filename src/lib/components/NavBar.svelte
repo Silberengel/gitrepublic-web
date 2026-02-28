@@ -11,9 +11,11 @@
   import { determineUserLevel, decodePubkey } from '../services/nostr/user-level-service.js';
 
   let userPubkey = $state<string | null>(null);
+  let userPubkeyHex = $state<string | null>(null);
   let mobileMenuOpen = $state(false);
   let nip07Available = $state(false); // Track NIP-07 availability (client-side only)
   let isClient = $state(false); // Track if we're on the client
+  let isUserAdmin = $state(false);
   
   // Component mount tracking to prevent state updates after destruction
   let isMounted = $state(true);
@@ -35,13 +37,22 @@
           if (isMounted) {
             userStore.reset();
             userPubkey = null;
+            userPubkeyHex = null;
+            isUserAdmin = false;
           }
         } else if (isMounted) {
           userPubkey = currentUser.userPubkey;
+          userPubkeyHex = currentUser.userPubkeyHex;
+          // Check admin status asynchronously
+          if (currentUser.userPubkeyHex) {
+            checkAdminStatus(currentUser.userPubkeyHex);
+          }
           updateActivity();
         }
       } else if (isMounted) {
         userPubkey = null;
+        userPubkeyHex = null;
+        isUserAdmin = false;
       }
     } catch (err) {
       // Ignore errors during destruction
@@ -66,10 +77,17 @@
       if (currentState && currentState.userPubkey && currentState.userPubkeyHex && isMounted) {
         // User is logged in - restore state (already synced by $effect, but ensure it's set)
         userPubkey = currentState.userPubkey;
+        userPubkeyHex = currentState.userPubkeyHex;
+        // Check admin status asynchronously
+        if (currentState.userPubkeyHex) {
+          checkAdminStatus(currentState.userPubkeyHex);
+        }
         // Update activity to extend session
         updateActivity();
       } else if (isMounted) {
         // User not logged in - check auth
+        userPubkeyHex = null;
+        isUserAdmin = false;
         checkAuth();
       }
     } catch (err) {
@@ -172,19 +190,76 @@
       if (!currentState || !currentState.userPubkey) {
         if (isMounted) {
           userPubkey = null;
+          userPubkeyHex = null;
+          isUserAdmin = false;
         }
         return;
       }
       
       if (isNIP07Available() && isMounted) {
         userPubkey = await getPublicKeyWithNIP07();
+        // Convert to hex if needed
+        if (userPubkey) {
+          if (/^[0-9a-f]{64}$/i.test(userPubkey)) {
+            userPubkeyHex = userPubkey.toLowerCase();
+          } else {
+            try {
+              const decoded = nip19.decode(userPubkey);
+              if (decoded.type === 'npub') {
+                userPubkeyHex = decoded.data as string;
+              }
+            } catch {
+              userPubkeyHex = null;
+            }
+          }
+          if (userPubkeyHex && isMounted) {
+            checkAdminStatus(userPubkeyHex);
+          }
+        }
       } else if (isMounted) {
         userPubkey = null;
+        userPubkeyHex = null;
+        isUserAdmin = false;
       }
     } catch (err) {
       if (isMounted) {
         console.log('NIP-07 not available or user not connected');
         userPubkey = null;
+        userPubkeyHex = null;
+        isUserAdmin = false;
+      }
+    }
+  }
+
+  async function checkAdminStatus(pubkeyHex: string) {
+    if (!isMounted || typeof window === 'undefined' || !pubkeyHex) {
+      if (isMounted) {
+        isUserAdmin = false;
+      }
+      return;
+    }
+    
+    try {
+      console.log('[NavBar] Checking admin status for:', pubkeyHex.substring(0, 16) + '...');
+      const response = await fetch('/api/admin/check', {
+        headers: {
+          'X-User-Pubkey': pubkeyHex
+        }
+      });
+      
+      if (response.ok && isMounted) {
+        const data = await response.json();
+        console.log('[NavBar] Admin check result:', data);
+        isUserAdmin = data.isAdmin === true;
+        console.log('[NavBar] isUserAdmin set to:', isUserAdmin);
+      } else if (isMounted) {
+        console.warn('[NavBar] Admin check failed:', response.status, response.statusText);
+        isUserAdmin = false;
+      }
+    } catch (err) {
+      if (isMounted) {
+        console.warn('[NavBar] Failed to check admin status:', err);
+        isUserAdmin = false;
       }
     }
   }
@@ -256,6 +331,16 @@
         levelResult.error || null
       );
       
+      // Update local state
+      if (isMounted) {
+        userPubkey = levelResult.userPubkey;
+        userPubkeyHex = levelResult.userPubkeyHex;
+        // Check admin status after login
+        if (levelResult.userPubkeyHex) {
+          checkAdminStatus(levelResult.userPubkeyHex);
+        }
+      }
+      
       // Update activity tracking on successful login
       if (isMounted) {
         updateActivity();
@@ -309,6 +394,8 @@
     if (typeof window === 'undefined' || !isMounted) return;
     if (isMounted) {
       userPubkey = null;
+      userPubkeyHex = null;
+      isUserAdmin = false;
       // Reset user store
       userStore.reset();
       // Clear activity tracking
@@ -348,6 +435,9 @@
         <a href="/signup" class:active={isActive('/signup')} onclick={() => closeMobileMenu()}>Register</a>
         <a href="/docs" class:active={isActive('/docs')} onclick={() => closeMobileMenu()}>Docs</a>
         <a href="/api-docs" class:active={isActive('/api-docs')} onclick={() => closeMobileMenu()}>API Docs</a>
+        {#if isUserAdmin}
+          <a href="/admin/repos" class:active={isActive('/admin/repos')} onclick={() => closeMobileMenu()}>Admin</a>
+        {/if}
       </div>
     </nav>
     <div class="auth-section">

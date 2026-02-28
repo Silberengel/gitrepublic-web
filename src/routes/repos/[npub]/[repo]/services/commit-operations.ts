@@ -17,6 +17,15 @@ export async function loadCommitHistory(
   state: RepoState,
   callbacks: CommitOperationsCallbacks
 ): Promise<void> {
+  // Skip if repo is not cloned and no API fallback available
+  if (state.clone.isCloned === false && !state.clone.apiFallbackAvailable) {
+    state.loading.commits = false;
+    state.error = null;
+    state.git.commits = [];
+    console.log('[loadCommitHistory] Skipping - repo not cloned and no API fallback available');
+    return;
+  }
+  
   state.loading.commits = true;
   state.error = null;
   try {
@@ -74,7 +83,21 @@ export async function loadCommitHistory(
     }
   } catch (err) {
     console.error('[loadCommitHistory] Error loading commits:', err);
-    state.error = err instanceof Error ? err.message : 'Failed to load commit history';
+    const errorMessage = err instanceof Error ? err.message : 'Failed to load commit history';
+    
+    // Handle 404 gracefully - repo not cloned
+    if (errorMessage.includes('404') || errorMessage.includes('not found') || errorMessage.includes('Repository not found')) {
+      // If repo is not cloned, this is expected - don't set error
+      if (state.clone.isCloned === false) {
+        state.error = null;
+        state.git.commits = [];
+        console.log('[loadCommitHistory] Repo not cloned - commits unavailable');
+      } else {
+        state.error = errorMessage;
+      }
+    } else {
+      state.error = errorMessage;
+    }
   } finally {
     state.loading.commits = false;
   }
