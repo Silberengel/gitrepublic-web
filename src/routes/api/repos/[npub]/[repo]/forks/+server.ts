@@ -134,6 +134,7 @@ export const GET: RequestHandler = createRepoGetHandler(
 /**
  * POST: Create fork
  * Body: { userPubkey, forkName?, localOnly? }
+ * Note: Forking doesn't require maintainer status - anyone can fork a repo they can view
  */
 export const POST: RequestHandler = createRepoPostHandler(
   async (context: RepoRequestContext, event: RequestEvent) => {
@@ -453,5 +454,5 @@ export const POST: RequestHandler = createRepoPostHandler(
       return handleApiError(err, { operation: 'createFork', npub: context.npub, repo: context.repo }, 'Failed to fork repository');
     }
   },
-  { operation: 'createFork', requireRepoExists: false }
+  { operation: 'createFork', requireRepoExists: false, requireMaintainer: false }
 );
