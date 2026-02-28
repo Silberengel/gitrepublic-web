@@ -35,7 +35,7 @@ let cache: CacheEntry | null = null;
 
 // Track server startup time to invalidate cache on first request after startup
 let serverStartTime = Date.now();
-const STARTUP_GRACE_PERIOD = 10000; // 10 seconds - allow time for initial poll
+const STARTUP_GRACE_PERIOD = 1000; // 1 second - minimal grace period for cache
 
 /**
  * Invalidate cache (internal use only - not exported to avoid SvelteKit build errors)

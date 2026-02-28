@@ -1,22 +1,13 @@
 /**
  * Server-side hooks for gitrepublic-web
- * Initializes repo polling service and security middleware
+ * Initializes security middleware
  */
 
 import type { Handle } from '@sveltejs/kit';
 import { error } from '@sveltejs/kit';
-import { RepoPollingService } from './lib/services/nostr/repo-polling.js';
-import { GIT_DOMAIN, DEFAULT_NOSTR_RELAYS } from './lib/config.js';
-import { setRepoPollingService } from './lib/services/service-registry.js';
 import { rateLimiter } from './lib/services/security/rate-limiter.js';
 import { auditLogger } from './lib/services/security/audit-logger.js';
 import logger from './lib/services/logger.js';
-
-// Initialize polling service
-const repoRoot = process.env.GIT_REPO_ROOT || '/repos';
-const domain = GIT_DOMAIN;
-
-let pollingService: RepoPollingService | null = null;
 
 if (typeof process !== 'undefined') {
   // Handle unhandled promise rejections to prevent crashes from relay errors
@@ -29,29 +20,9 @@ if (typeof process !== 'undefined') {
     }
   });
 
-  pollingService = new RepoPollingService(DEFAULT_NOSTR_RELAYS, repoRoot, domain);
-  
-  // Register with service registry so it can be accessed from API endpoints
-  setRepoPollingService(pollingService);
-  
-  // Start polling - the initial poll will complete asynchronously
-  // The local repos endpoint will skip cache for the first 10 seconds after startup
-  pollingService.start().then(() => {
-    logger.info({ service: 'repo-polling', relays: DEFAULT_NOSTR_RELAYS.length }, 'Repo polling service ready (initial poll completed)');
-  }).catch((err) => {
-    logger.error({ error: err, service: 'repo-polling' }, 'Initial repo poll failed, but continuing');
-  });
-  
-  logger.info({ service: 'repo-polling', relays: DEFAULT_NOSTR_RELAYS.length }, 'Started repo polling service (initial poll in progress)');
-
   // Cleanup on server shutdown
   const cleanup = (signal: string) => {
     logger.info({ signal }, 'Received shutdown signal, cleaning up...');
-    if (pollingService) {
-      logger.info('Stopping repo polling service...');
-      pollingService.stop();
-      pollingService = null;
-    }
     // Give a moment for cleanup, then exit
     setTimeout(() => {
       process.exit(0);
@@ -68,25 +39,6 @@ if (typeof process !== 'undefined') {
       process.exit(0);
     }, 2000);
   });
-  
-  // Also cleanup on process exit (last resort)
-  process.on('exit', () => {
-    if (pollingService) {
-      pollingService.stop();
-    }
-  });
-
-  // Periodic zombie process cleanup check
-  // This helps catch any processes that weren't properly cleaned up
-  if (typeof setInterval !== 'undefined') {
-    setInterval(() => {
-      // Check for zombie processes by attempting to reap them
-      // Node.js handles this automatically via 'close' events, but this is a safety net
-      // We can't directly check for zombies, but we can ensure our cleanup is working
-      // The real cleanup happens in process handlers, this is just monitoring
-      logger.debug('Zombie cleanup check (process handlers should prevent zombies)');
-    }, 60000); // Check every minute
-  }
 }
 
 export const handle: Handle = async ({ event, resolve }) => {

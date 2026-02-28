@@ -116,7 +116,6 @@ View interactive documentation at `/api/openapi.json` or use any OpenAPI viewer.
 
 - `GET /api/config` - Get server configuration
 - `GET /api/tor/onion` - Get Tor .onion address
-- `POST /api/repos/poll` - Trigger repository polling (provisions new repos from Nostr)
 - `GET /api/transfers/pending` - Get pending ownership transfers
 
 #### Git HTTP Backend

@@ -286,49 +286,6 @@
         }
       }
     },
-    "/api/repos/poll": {
-      "post": {
-        "summary": "Trigger repository polling",
-        "description": "Manually trigger repository polling to provision new repos from Nostr announcements. This endpoint fetches NIP-34 repo announcements from relays and provisions repositories that list this server's domain in their clone URLs. The poll runs asynchronously and does not block the request.",
-        "tags": ["Infrastructure"],
-        "responses": {
-          "200": {
-            "description": "Poll triggered successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {"type": "boolean"},
-                    "message": {"type": "string"}
-                  }
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Polling service not available",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Error triggering poll",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/repos/{npub}/{repo}/files": {
       "get": {
         "summary": "Get file content, list files, or get raw file",

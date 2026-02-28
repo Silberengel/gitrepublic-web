@@ -15,7 +15,6 @@ import { ForkCountService } from './nostr/fork-count-service.js';
 import { PRsService } from './nostr/prs-service.js';
 import { HighlightsService } from './nostr/highlights-service.js';
 import { ReleasesService } from './nostr/releases-service.js';
-import { RepoPollingService } from './nostr/repo-polling.js';
 import { DEFAULT_NOSTR_RELAYS, DEFAULT_NOSTR_SEARCH_RELAYS, GIT_DOMAIN } from '../config.js';
 
 // Get repo root from environment or use default
@@ -36,7 +35,6 @@ let _forkCountService: ForkCountService | null = null;
 let _prsService: PRsService | null = null;
 let _highlightsService: HighlightsService | null = null;
 let _releasesService: ReleasesService | null = null;
-let _repoPollingService: RepoPollingService | null = null;
 
 /**
  * Get singleton FileManager instance
@@ -158,20 +156,6 @@ export function getReleasesService(): ReleasesService {
   return _releasesService;
 }
 
-/**
- * Get singleton RepoPollingService instance
- * Note: This should be initialized in hooks.server.ts on startup
- */
-export function getRepoPollingService(): RepoPollingService | null {
-  return _repoPollingService;
-}
-
-/**
- * Set the RepoPollingService instance (called from hooks.server.ts)
- */
-export function setRepoPollingService(service: RepoPollingService): void {
-  _repoPollingService = service;
-}
 
 // Convenience exports for direct access (common pattern)
 export const fileManager = getFileManager();

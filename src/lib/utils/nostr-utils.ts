@@ -12,7 +12,6 @@ import { KIND } from '../types/nostr.js';
  * This is a shared utility to avoid code duplication across:
  * - RepoManager (with URL normalization)
  * - Git API endpoint (for performance, without normalization)
- * - RepoPollingService
  * 
  * @param event - The Nostr repository announcement event
  * @param normalize - Whether to normalize URLs (add .git suffix if needed). Default: false

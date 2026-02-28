@@ -308,7 +308,7 @@
     }
   }
 
-  async function loadRepos(triggerPoll = false) {
+  async function loadRepos() {
     loading = true;
     error = null;
     
@@ -357,31 +357,6 @@
       loadForkCounts(registeredRepos.map(r => r.event)).catch(err => {
         console.warn('[RepoList] Failed to load some fork counts:', err);
       });
-      
-      // If triggerPoll is true, trigger a poll and then refresh the list
-      if (triggerPoll) {
-        try {
-          // Trigger poll (non-blocking)
-          const pollResponse = await fetch('/api/repos/poll', {
-            method: 'POST',
-            headers: userPubkeyHex ? {
-              'X-User-Pubkey': userPubkeyHex
-            } : {}
-          });
-          
-          if (pollResponse.ok) {
-            // Wait a bit for the poll to process (lazy - don't wait for full completion)
-            // Give it 2-3 seconds to provision repos
-            await new Promise(resolve => setTimeout(resolve, 2500));
-            
-            // Refresh the list after poll
-            await loadRepos(false);
-          }
-        } catch (pollErr) {
-          // Don't fail the whole operation if poll fails
-          console.warn('[RepoList] Failed to trigger poll:', pollErr);
-        }
-      }
     } catch (e) {
       error = String(e);
       console.error('[RepoList] Failed to load repos:', e);
@@ -802,7 +777,7 @@
 
     <div class="repos-header">
       <h2>Repositories on {$page.data.gitDomain || 'localhost:6543'}</h2>
-      <button onclick={() => loadRepos(true)} disabled={loading}>
+      <button onclick={() => loadRepos()} disabled={loading}>
         {loading ? 'Loading...' : 'Refresh'}
       </button>
     </div>

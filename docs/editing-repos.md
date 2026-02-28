@@ -2,18 +2,18 @@
 
 This page covers all aspects of editing repositories: branch management, file management, auto-provisioning, file-editing permissions, and event-creation permissions.
 
-## Auto-Provisioning
+## Adding Repositories
 
-When you create a repository announcement, GitRepublic automatically:
+Repositories must be explicitly added to the server using the clone endpoint. When you clone a repository:
 
-1. **Polls Nostr relays** for new announcements
+1. **Fetches the repository announcement** from Nostr relays
 2. **Creates a bare git repository** at `/repos/{npub}/{repo-name}.git`
-3. **Fetches self-transfer event** for ownership verification
+3. **Fetches self-transfer event** for ownership verification (if available)
 4. **Creates initial commit** with README.md (if provided)
 5. **Saves announcement and transfer events** to `nostr/repo-events.jsonl`
 6. **Syncs from other remotes** if clone URLs are configured
 
-The repository is ready to use immediately after announcement.
+The repository is ready to use immediately after cloning.
 
 ## Branch Management
 

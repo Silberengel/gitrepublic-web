@@ -182,11 +182,10 @@ export class RepoManager {
     } else {
       // For existing repos, check if announcement exists in repo
       // If not, try to fetch from relays and save it
-      // Note: We have the announcement from polling (event parameter), so we can use that
-      // Non-blocking: fire and forget - we have the announcement from relays, so this is just for offline papertrail
+      // Note: We have the announcement from the clone request (event parameter), so we can use that
       const hasAnnouncement = await this.announcementManager.hasAnnouncementInRepoFile(repoPath.fullPath);
       if (!hasAnnouncement) {
-        // We have the event from polling, so use it directly (no need to fetch from relays again)
+        // We have the event from the clone request, so use it directly (no need to fetch from relays again)
         // Save announcement to repo asynchronously
         this.announcementManager.ensureAnnouncementInRepo(repoPath.fullPath, event, selfTransferEvent)
           .catch((err) => {
