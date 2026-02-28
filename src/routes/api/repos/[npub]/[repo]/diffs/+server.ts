@@ -1,8 +1,16 @@
 /**
- * API endpoint for getting diffs
+ * RESTful Diffs Endpoint
+ * 
+ * GET /api/repos/{npub}/{repo}/diffs?from=...&to=...&path=...
+ * 
+ * Query parameters:
+ *   - from - Source ref (required)
+ *   - to - Target ref (default: HEAD)
+ *   - path - Optional file path to diff
  */
 
-import { json, error } from '@sveltejs/kit';
+import { json } from '@sveltejs/kit';
+// @ts-ignore - SvelteKit generates this type
 import type { RequestHandler } from './$types';
 import { fileManager, nostrClient } from '$lib/services/service-registry.js';
 import { createRepoGetHandler } from '$lib/utils/api-handlers.js';

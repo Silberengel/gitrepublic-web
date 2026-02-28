@@ -1,5 +1,9 @@
 /**
- * API endpoint for verifying commit signatures
+ * RESTful Commit Verification Endpoint
+ * 
+ * GET /api/repos/{npub}/{repo}/commits/{hash}/verification
+ * 
+ * Verifies the signature of a commit
  */
 
 import { json } from '@sveltejs/kit';

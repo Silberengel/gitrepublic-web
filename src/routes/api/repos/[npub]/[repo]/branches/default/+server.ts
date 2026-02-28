@@ -1,8 +1,13 @@
 /**
- * API endpoint for getting the default branch of a repository
+ * RESTful Default Branch Endpoint
+ * 
+ * GET /api/repos/{npub}/{repo}/branches/default
+ * 
+ * Returns the default branch of the repository
  */
 
 import { json } from '@sveltejs/kit';
+// @ts-ignore - SvelteKit generates this type
 import type { RequestHandler } from './$types';
 import { fileManager } from '$lib/services/service-registry.js';
 import { createRepoGetHandler } from '$lib/utils/api-handlers.js';

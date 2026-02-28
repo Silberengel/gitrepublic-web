@@ -1,5 +1,8 @@
 /**
- * API endpoint for Pull Requests (NIP-34 kind 1618)
+ * RESTful Pull Requests Collection Endpoint
+ * 
+ * GET    /api/repos/{npub}/{repo}/pull-requests        # List pull requests
+ * POST   /api/repos/{npub}/{repo}/pull-requests        # Create pull request
  */
 
 import { json } from '@sveltejs/kit';
@@ -21,7 +24,7 @@ export const GET: RequestHandler = createRepoGetHandler(
     const prs = await prsService.getPullRequests(context.repoOwnerPubkey, context.repo);
     return json(prs);
   },
-  { operation: 'getPRs', requireRepoExists: false, requireRepoAccess: false } // PRs are stored in Nostr, don't require local repo
+  { operation: 'getPullRequests', requireRepoExists: false, requireRepoAccess: false } // PRs are stored in Nostr, don't require local repo
 );
 
 export const POST: RequestHandler = withRepoValidation(
@@ -30,12 +33,12 @@ export const POST: RequestHandler = withRepoValidation(
     const { event: prEvent } = body;
 
     if (!prEvent) {
-      throw handleValidationError('Missing event in request body', { operation: 'createPR', npub: repoContext.npub, repo: repoContext.repo });
+      throw handleValidationError('Missing event in request body', { operation: 'createPullRequest', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Verify the event is properly signed
     if (!prEvent.sig || !prEvent.id) {
-      throw handleValidationError('Invalid event: missing signature or ID', { operation: 'createPR', npub: repoContext.npub, repo: repoContext.repo });
+      throw handleValidationError('Invalid event: missing signature or ID', { operation: 'createPullRequest', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Get repository announcement to determine visibility and relay publishing
@@ -51,7 +54,7 @@ export const POST: RequestHandler = withRepoValidation(
       : { success: [], failed: [] };
     
     if (result.failed.length > 0 && result.success.length === 0) {
-      throw handleApiError(new Error('Failed to publish pull request to all relays'), { operation: 'createPR', npub: repoContext.npub, repo: repoContext.repo }, 'Failed to publish pull request to all relays');
+      throw handleApiError(new Error('Failed to publish pull request to all relays'), { operation: 'createPullRequest', npub: repoContext.npub, repo: repoContext.repo }, 'Failed to publish pull request to all relays');
     }
 
     // Forward to messaging platforms if user has unlimited access and preferences configured
@@ -65,46 +68,5 @@ export const POST: RequestHandler = withRepoValidation(
 
     return json({ success: true, event: prEvent, published: result });
   },
-  { operation: 'createPR', requireRepoAccess: false } // PRs can be created by anyone with access
-);
-
-export const PATCH: RequestHandler = withRepoValidation(
-  async ({ repoContext, requestContext, event }) => {
-    const body = await event.request.json();
-    const { prId, prAuthor, status, mergeCommitId } = body;
-
-    if (!prId || !prAuthor || !status) {
-      throw handleValidationError('Missing required fields: prId, prAuthor, status', { operation: 'updatePRStatus', npub: repoContext.npub, repo: repoContext.repo });
-    }
-
-    // Check if user is maintainer
-    const { MaintainerService } = await import('$lib/services/nostr/maintainer-service.js');
-    const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
-    const isMaintainer = await maintainerService.isMaintainer(requestContext.userPubkeyHex || '', repoContext.repoOwnerPubkey, repoContext.repo);
-    
-    if (!isMaintainer && requestContext.userPubkeyHex !== repoContext.repoOwnerPubkey) {
-      throw handleApiError(new Error('Only repository owners and maintainers can update PR status'), { operation: 'updatePRStatus', npub: repoContext.npub, repo: repoContext.repo }, 'Unauthorized');
-    }
-
-    // Get repository announcement to determine visibility and relay publishing
-    const allEvents = await fetchRepoAnnouncementsWithCache(nostrClient, repoContext.repoOwnerPubkey, eventCache);
-    const announcement = findRepoAnnouncement(allEvents, repoContext.repo);
-    
-    // Determine which relays to publish to based on visibility
-    const relaysToPublish = announcement ? getRelaysForEventPublishing(announcement) : DEFAULT_NOSTR_RELAYS;
-    
-    // Update PR status with visibility-based relays
-    const statusEvent = await prsService.updatePRStatus(
-      prId,
-      prAuthor,
-      repoContext.repoOwnerPubkey,
-      repoContext.repo,
-      status,
-      mergeCommitId,
-      relaysToPublish
-    );
-
-    return json({ success: true, event: statusEvent });
-  },
-  { operation: 'updatePRStatus', requireRepoAccess: false }
+  { operation: 'createPullRequest', requireRepoAccess: false } // PRs can be created by anyone with access
 );

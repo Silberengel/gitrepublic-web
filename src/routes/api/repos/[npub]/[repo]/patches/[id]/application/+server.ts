@@ -1,9 +1,13 @@
 /**
- * API endpoint for applying patches
- * Only maintainers and owners can apply patches
+ * RESTful Patch Application Endpoint
+ * 
+ * POST /api/repos/{npub}/{repo}/patches/{id}/application
+ * 
+ * Applies a patch to the repository. Only maintainers and owners can apply patches.
  */
 
 import { json } from '@sveltejs/kit';
+// @ts-ignore - SvelteKit generates this type
 import type { RequestHandler } from './$types';
 import { fileManager, nostrClient } from '$lib/services/service-registry.js';
 import { withRepoValidation } from '$lib/utils/api-handlers.js';
@@ -19,7 +23,6 @@ import { writeFile, unlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join as pathJoin } from 'path';
 import { spawn } from 'child_process';
-import { promisify } from 'util';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
@@ -27,12 +30,12 @@ const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
 
 export const POST: RequestHandler = withRepoValidation(
   async ({ repoContext, requestContext, event }) => {
-    const { patchId } = event.params;
+    const id = (event.params as any).id;
     const body = await event.request.json();
     const { branch = 'main', commitMessage } = body;
 
-    if (!patchId) {
-      throw handleValidationError('Missing patchId', { operation: 'applyPatch', npub: repoContext.npub, repo: repoContext.repo });
+    if (!id) {
+      throw handleValidationError('Missing patch ID', { operation: 'applyPatch', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Check if user is maintainer or owner
@@ -54,7 +57,7 @@ export const POST: RequestHandler = withRepoValidation(
       const patchEvents = await nostrClient.fetchEvents([
         {
           kinds: [KIND.PATCH],
-          ids: [patchId],
+          ids: [id],
           limit: 1
         }
       ]);
@@ -71,7 +74,7 @@ export const POST: RequestHandler = withRepoValidation(
       }
 
       // Create temporary patch file
-      const tmpPatchFile = pathJoin(tmpdir(), `patch-${patchId}-${Date.now()}.patch`);
+      const tmpPatchFile = pathJoin(tmpdir(), `patch-${id}-${Date.now()}.patch`);
       await writeFile(tmpPatchFile, patchContent, 'utf-8');
 
       try {
@@ -132,7 +135,7 @@ export const POST: RequestHandler = withRepoValidation(
         await git.add('.');
 
         // Commit the changes
-        const finalCommitMessage = commitMessage || `Apply patch ${patchId.substring(0, 8)}`;
+        const finalCommitMessage = commitMessage || `Apply patch ${id.substring(0, 8)}`;
         await git.commit(finalCommitMessage);
 
         // Get the commit hash
@@ -152,7 +155,7 @@ export const POST: RequestHandler = withRepoValidation(
         }
       }
     } catch (err) {
-      logger.error({ error: err, npub: repoContext.npub, repo: repoContext.repo, patchId }, 'Error applying patch');
+      logger.error({ error: err, npub: repoContext.npub, repo: repoContext.repo, id }, 'Error applying patch');
       throw err;
     }
   },

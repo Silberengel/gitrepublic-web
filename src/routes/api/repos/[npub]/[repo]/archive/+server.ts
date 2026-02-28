@@ -1,9 +1,15 @@
 /**
- * API endpoint for downloading repository as ZIP or TAR.GZ
- * Refactored for better error handling and reliability
+ * RESTful Archive Endpoint
+ * 
+ * GET /api/repos/{npub}/{repo}/archive?format=zip|tar.gz&ref=...
+ * 
+ * Query parameters:
+ *   - format - Archive format: 'zip' or 'tar.gz' (default: 'zip')
+ *   - ref - Branch, tag, or commit hash (default: 'HEAD')
  */
 
 import { error } from '@sveltejs/kit';
+// @ts-ignore - SvelteKit generates this type
 import type { RequestHandler } from './$types';
 import { fileManager, nostrClient } from '$lib/services/service-registry.js';
 import { createRepoGetHandler } from '$lib/utils/api-handlers.js';
@@ -55,7 +61,7 @@ async function createTempClone(
       return null;
     }
 
-    logger.info({ npub: context.npub, repo: context.repo }, 'Creating temporary clone for download');
+    logger.info({ npub: context.npub, repo: context.repo }, 'Creating temporary clone for archive');
 
     // Setup temp clone directory
     const tempDir = resolve(join(repoRoot, '..', 'temp-clones'));
@@ -275,7 +281,7 @@ function createTarGzArchive(workDir: string, archivePath: string): Promise<void>
 }
 
 /**
- * Main download handler
+ * Main archive handler
  */
 export const GET: RequestHandler = createRepoGetHandler(
   async (context: RepoRequestContext, event: RequestEvent) => {
@@ -302,7 +308,7 @@ export const GET: RequestHandler = createRepoGetHandler(
           } else {
             throw handleNotFoundError(
               'Repository not found',
-              { operation: 'download', npub: context.npub, repo: context.repo }
+              { operation: 'archive', npub: context.npub, repo: context.repo }
             );
           }
         }
@@ -312,7 +318,7 @@ export const GET: RequestHandler = createRepoGetHandler(
       if (!existsSync(sourceRepoPath)) {
         throw handleNotFoundError(
           'Repository not found',
-          { operation: 'download', npub: context.npub, repo: context.repo }
+          { operation: 'archive', npub: context.npub, repo: context.repo }
         );
       }
 
@@ -441,7 +447,7 @@ export const GET: RequestHandler = createRepoGetHandler(
       }
 
       // Return archive
-      logger.info({ npub: context.npub, repo: context.repo, ref, format, size: archiveBuffer.length }, 'Download completed successfully');
+      logger.info({ npub: context.npub, repo: context.repo, ref, format, size: archiveBuffer.length }, 'Archive created successfully');
       
       return new Response(archiveBuffer, {
         headers: {
@@ -490,5 +496,5 @@ export const GET: RequestHandler = createRepoGetHandler(
       throw error(500, `Failed to create archive: ${err instanceof Error ? err.message : String(err)}`);
     }
   },
-  { operation: 'download', requireRepoExists: false, requireRepoAccess: true }
+  { operation: 'archive', requireRepoExists: false, requireRepoAccess: true }
 );

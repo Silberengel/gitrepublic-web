@@ -1,9 +1,13 @@
 /**
- * API endpoint for merging pull requests
- * Only maintainers and owners can merge PRs
+ * RESTful Pull Request Merge Endpoint
+ * 
+ * POST /api/repos/{npub}/{repo}/pull-requests/{id}/merge
+ * 
+ * Merges a pull request. Only maintainers and owners can merge PRs.
  */
 
 import { json } from '@sveltejs/kit';
+// @ts-ignore - SvelteKit generates this type
 import type { RequestHandler } from './$types';
 import { fileManager, nostrClient, prsService } from '$lib/services/service-registry.js';
 import { withRepoValidation } from '$lib/utils/api-handlers.js';
@@ -23,12 +27,12 @@ const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
 
 export const POST: RequestHandler = withRepoValidation(
   async ({ repoContext, requestContext, event }) => {
-    const { prId } = event.params;
+    const id = (event.params as any).id;
     const body = await event.request.json();
     const { targetBranch = 'main', mergeCommitMessage, mergeStrategy = 'merge' } = body;
 
-    if (!prId) {
-      throw handleValidationError('Missing prId', { operation: 'mergePR', npub: repoContext.npub, repo: repoContext.repo });
+    if (!id) {
+      throw handleValidationError('Missing pull request ID', { operation: 'mergePullRequest', npub: repoContext.npub, repo: repoContext.repo });
     }
 
     // Check if user is maintainer or owner
@@ -36,13 +40,13 @@ export const POST: RequestHandler = withRepoValidation(
     const isMaintainer = await maintainerService.isMaintainer(requestContext.userPubkeyHex || '', repoContext.repoOwnerPubkey, repoContext.repo);
     
     if (!isMaintainer && requestContext.userPubkeyHex !== repoContext.repoOwnerPubkey) {
-      throw handleApiError(new Error('Only repository owners and maintainers can merge pull requests'), { operation: 'mergePR', npub: repoContext.npub, repo: repoContext.repo }, 'Unauthorized');
+      throw handleApiError(new Error('Only repository owners and maintainers can merge pull requests'), { operation: 'mergePullRequest', npub: repoContext.npub, repo: repoContext.repo }, 'Unauthorized');
     }
 
     const repoPath = join(repoRoot, repoContext.npub, `${repoContext.repo}.git`);
     
     if (!existsSync(repoPath)) {
-      throw handleApiError(new Error('Repository not found locally'), { operation: 'mergePR', npub: repoContext.npub, repo: repoContext.repo }, 'Repository not found');
+      throw handleApiError(new Error('Repository not found locally'), { operation: 'mergePullRequest', npub: repoContext.npub, repo: repoContext.repo }, 'Repository not found');
     }
 
     try {
@@ -50,13 +54,13 @@ export const POST: RequestHandler = withRepoValidation(
       const prEvents = await nostrClient.fetchEvents([
         {
           kinds: [KIND.PULL_REQUEST],
-          ids: [prId],
+          ids: [id],
           limit: 1
         }
       ]);
 
       if (prEvents.length === 0) {
-        throw handleApiError(new Error('Pull request not found'), { operation: 'mergePR', npub: repoContext.npub, repo: repoContext.repo }, 'Pull request not found');
+        throw handleApiError(new Error('Pull request not found'), { operation: 'mergePullRequest', npub: repoContext.npub, repo: repoContext.repo }, 'Pull request not found');
       }
 
       const prEvent = prEvents[0];
@@ -64,14 +68,14 @@ export const POST: RequestHandler = withRepoValidation(
       // Get commit ID from PR
       const commitTag = prEvent.tags.find(t => t[0] === 'c');
       if (!commitTag || !commitTag[1]) {
-        throw handleApiError(new Error('Pull request does not have a commit ID'), { operation: 'mergePR', npub: repoContext.npub, repo: repoContext.repo }, 'Invalid pull request');
+        throw handleApiError(new Error('Pull request does not have a commit ID'), { operation: 'mergePullRequest', npub: repoContext.npub, repo: repoContext.repo }, 'Invalid pull request');
       }
 
       const commitId = commitTag[1];
       
       // Get branch name if available
       const branchTag = prEvent.tags.find(t => t[0] === 'branch-name');
-      const sourceBranch = branchTag?.[1] || `pr-${prId.substring(0, 8)}`;
+      const sourceBranch = branchTag?.[1] || `pr-${id.substring(0, 8)}`;
 
       const git = simpleGit(repoPath);
 
@@ -89,7 +93,7 @@ export const POST: RequestHandler = withRepoValidation(
       try {
         await git.show([commitId]);
       } catch (showErr) {
-        throw handleApiError(new Error(`Commit ${commitId} not found in repository`), { operation: 'mergePR', npub: repoContext.npub, repo: repoContext.repo }, 'Commit not found');
+        throw handleApiError(new Error(`Commit ${commitId} not found in repository`), { operation: 'mergePullRequest', npub: repoContext.npub, repo: repoContext.repo }, 'Commit not found');
       }
 
       let mergeCommitHash: string;
@@ -99,7 +103,7 @@ export const POST: RequestHandler = withRepoValidation(
         await git.raw(['merge', '--squash', commitId]);
         await git.add('.');
         
-        const finalMessage = mergeCommitMessage || `Merge PR ${prId.substring(0, 8)}\n\n${prEvent.content || ''}`;
+        const finalMessage = mergeCommitMessage || `Merge PR ${id.substring(0, 8)}\n\n${prEvent.content || ''}`;
         await git.commit(finalMessage);
         
         mergeCommitHash = (await git.revparse(['HEAD'])).trim();
@@ -126,7 +130,7 @@ export const POST: RequestHandler = withRepoValidation(
         }
       } else {
         // Regular merge
-        const finalMessage = mergeCommitMessage || `Merge PR ${prId.substring(0, 8)}`;
+        const finalMessage = mergeCommitMessage || `Merge PR ${id.substring(0, 8)}`;
         await git.merge([commitId, '-m', finalMessage]);
         mergeCommitHash = (await git.revparse(['HEAD'])).trim();
       }
@@ -134,7 +138,7 @@ export const POST: RequestHandler = withRepoValidation(
       // Update PR status to merged
       const prAuthor = prEvent.pubkey;
       await prsService.updatePRStatus(
-        prId,
+        id,
         prAuthor,
         repoContext.repoOwnerPubkey,
         repoContext.repo,
@@ -148,9 +152,9 @@ export const POST: RequestHandler = withRepoValidation(
         message: 'Pull request merged successfully'
       });
     } catch (err) {
-      logger.error({ error: err, npub: repoContext.npub, repo: repoContext.repo, prId }, 'Error merging pull request');
+      logger.error({ error: err, npub: repoContext.npub, repo: repoContext.repo, id }, 'Error merging pull request');
       throw err;
     }
   },
-  { operation: 'mergePR', requireRepoExists: true, requireRepoAccess: true }
+  { operation: 'mergePullRequest', requireRepoExists: true, requireRepoAccess: true }
 );
