@@ -85,6 +85,14 @@ export class RepoPollingService {
   }
 
   /**
+   * Trigger a manual poll (useful after user verification)
+   */
+  async triggerPoll(): Promise<void> {
+    logger.info('Manual poll triggered');
+    return this.poll();
+  }
+
+  /**
    * Poll for new repo announcements and provision repos
    */
   private async poll(): Promise<void> {
@@ -106,8 +114,22 @@ export class RepoPollingService {
         }
         
         const cloneUrls = this.extractCloneUrls(event);
-        return cloneUrls.some(url => url.includes(this.domain));
+        const listsDomain = cloneUrls.some(url => url.includes(this.domain));
+        if (listsDomain) {
+          logger.debug({ 
+            eventId: event.id, 
+            pubkey: event.pubkey.slice(0, 16) + '...',
+            cloneUrls: cloneUrls.slice(0, 3) // Log first 3 URLs
+          }, 'Found repo announcement that lists this domain');
+        }
+        return listsDomain;
       });
+
+      logger.info({ 
+        totalEvents: events.length, 
+        relevantEvents: relevantEvents.length,
+        domain: this.domain
+      }, 'Filtered repo announcements');
 
       // Provision each repo
       for (const event of relevantEvents) {
@@ -201,11 +223,22 @@ export class RepoPollingService {
           if (!isExistingRepo) {
             const userLevel = getCachedUserLevel(event.pubkey);
             const { hasUnlimitedAccess } = await import('../../utils/user-access.js');
-            if (!hasUnlimitedAccess(userLevel?.level)) {
+            const hasAccess = hasUnlimitedAccess(userLevel?.level);
+            
+            logger.debug({ 
+              eventId: event.id, 
+              pubkey: event.pubkey.slice(0, 16) + '...',
+              cachedLevel: userLevel?.level || 'none',
+              hasAccess,
+              isExistingRepo
+            }, 'Checking user access for repo provisioning');
+            
+            if (!hasAccess) {
               logger.warn({ 
                 eventId: event.id, 
                 pubkey: event.pubkey.slice(0, 16) + '...',
-                level: userLevel?.level || 'none'
+                level: userLevel?.level || 'none',
+                cacheExists: !!userLevel
               }, 'Skipping repo provisioning: user does not have unlimited access');
               continue;
             }

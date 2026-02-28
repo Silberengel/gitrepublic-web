@@ -7,6 +7,7 @@ import type { Handle } from '@sveltejs/kit';
 import { error } from '@sveltejs/kit';
 import { RepoPollingService } from './lib/services/nostr/repo-polling.js';
 import { GIT_DOMAIN, DEFAULT_NOSTR_RELAYS } from './lib/config.js';
+import { setRepoPollingService } from './lib/services/service-registry.js';
 import { rateLimiter } from './lib/services/security/rate-limiter.js';
 import { auditLogger } from './lib/services/security/audit-logger.js';
 import logger from './lib/services/logger.js';
@@ -29,6 +30,9 @@ if (typeof process !== 'undefined') {
   });
 
   pollingService = new RepoPollingService(DEFAULT_NOSTR_RELAYS, repoRoot, domain);
+  
+  // Register with service registry so it can be accessed from API endpoints
+  setRepoPollingService(pollingService);
   
   // Start polling - the initial poll will complete asynchronously
   // The local repos endpoint will skip cache for the first 10 seconds after startup

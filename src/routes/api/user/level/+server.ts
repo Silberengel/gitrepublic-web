@@ -17,6 +17,7 @@ import { extractRequestContext } from '$lib/utils/api-context.js';
 import { sanitizeError } from '$lib/utils/security.js';
 import { verifyEvent } from 'nostr-tools';
 import logger from '$lib/services/logger.js';
+import { triggerRepoPoll } from '$lib/utils/repo-poll-trigger.js';
 
 export const POST: RequestHandler = async (event) => {
   const requestContext = extractRequestContext(event);
@@ -142,6 +143,12 @@ export const POST: RequestHandler = async (event) => {
       // User has write access - unlimited level
       // Cache the successful verification
       cacheUserLevel(userPubkeyHex, 'unlimited');
+      
+      // Trigger a repo poll to provision repos now that user is verified
+      // This is non-blocking - we don't wait for it to complete
+      triggerRepoPoll('user-verification').catch((err) => {
+        logger.warn({ error: err, userPubkeyHex }, 'Failed to trigger poll after user verification (non-blocking)');
+      });
       
       auditLogger.logAuth(
         userPubkeyHex,
