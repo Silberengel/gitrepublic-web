@@ -158,9 +158,25 @@ export async function viewDiff(
     // Normalize commit hash (handle both 'hash' and 'sha' properties)
     const getCommitHash = (c: any) => c.hash || c.sha || '';
     const commitIndex = state.git.commits.findIndex(c => getCommitHash(c) === commitHash);
-    const parentHash = commitIndex >= 0
-      ? (state.git.commits[commitIndex + 1] ? getCommitHash(state.git.commits[commitIndex + 1]) : `${commitHash}^`)
-      : `${commitHash}^`;
+    
+    // Determine parent hash: if this is the last commit (initial commit), use empty tree
+    // Otherwise, use the next commit in the list or the parent commit
+    let parentHash: string;
+    if (commitIndex >= 0) {
+      // Check if this is the last commit (initial commit with no parent)
+      if (commitIndex === state.git.commits.length - 1) {
+        // This is the initial commit - use empty tree hash
+        // Git's empty tree hash: 4b825dc642cb6eb9a060e54bf8d69288fbee4904
+        parentHash = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+      } else {
+        // Use the next commit (which is the parent in reverse chronological order)
+        parentHash = getCommitHash(state.git.commits[commitIndex + 1]);
+      }
+    } else {
+      // Commit not found in list, try to use parent (but this might fail for initial commit)
+      // We'll let the API handle the error
+      parentHash = `${commitHash}^`;
+    }
     
     const diffData = await apiRequest<Array<{
       file: string;

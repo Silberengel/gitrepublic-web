@@ -121,7 +121,7 @@ export async function verifyRelayWriteProof(
           authors: [userPubkey],
           limit: 1
         }
-      ]);
+      ], true); // Pass true for isWriteVerification to use full timeout
       
       if (events.length > 0) {
         break; // Found the event, no need to retry

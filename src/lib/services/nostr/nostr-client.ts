@@ -188,7 +188,7 @@ export class NostrClient {
     }
   }
 
-  async fetchEvents(filters: NostrFilter[]): Promise<NostrEvent[]> {
+  async fetchEvents(filters: NostrFilter[], isWriteVerification: boolean = false): Promise<NostrEvent[]> {
     // Strategy: Check persistent cache first, return immediately if available
     // Then fetch from relays in background and merge results
     
@@ -206,7 +206,8 @@ export class NostrClient {
             logger.debug({ filters, cachedCount: memoryCached.length }, 'Returning cached events from memory');
             
             // Return cached events immediately, but also fetch from relays in background to update cache
-            this.fetchAndMergeFromRelays(filters, memoryCached).catch(err => {
+            // Background fetches are always normal (not write verification)
+            this.fetchAndMergeFromRelays(filters, memoryCached, false).catch(err => {
               logger.debug({ error: err, filters }, 'Background fetch failed, using cached events');
             });
             
@@ -219,7 +220,8 @@ export class NostrClient {
             logger.debug({ filters, cachedCount: cachedEvents.length }, 'Returning cached events from IndexedDB');
             
             // Return cached events immediately, but also fetch from relays in background to update cache
-            this.fetchAndMergeFromRelays(filters, cachedEvents).catch(err => {
+            // Background fetches are always normal (not write verification)
+            this.fetchAndMergeFromRelays(filters, cachedEvents, false).catch(err => {
               logger.debug({ error: err, filters }, 'Background fetch failed, using cached events');
             });
             
@@ -234,7 +236,7 @@ export class NostrClient {
     }
     
     // 3. No cache available (or search query), fetch from relays
-    return this.fetchAndMergeFromRelays(filters, []);
+    return this.fetchAndMergeFromRelays(filters, [], isWriteVerification);
   }
 
   /**
@@ -312,8 +314,11 @@ export class NostrClient {
    * Fetch events from relays and merge with existing events
    * Never deletes valid events, only appends/integrates new ones
    * Automatically falls back to fallback relays if primary relays fail
+   * @param filters - Filters to query
+   * @param existingEvents - Existing events to merge with
+   * @param isWriteVerification - If true, uses full timeout (8s). If false, uses dynamic timeout (2s after first response)
    */
-  private async fetchAndMergeFromRelays(filters: NostrFilter[], existingEvents: NostrEvent[]): Promise<NostrEvent[]> {
+  private async fetchAndMergeFromRelays(filters: NostrFilter[], existingEvents: NostrEvent[], isWriteVerification: boolean = false): Promise<NostrEvent[]> {
     const events: NostrEvent[] = [];
     
     // Sanitize all filters before sending to relays
@@ -322,53 +327,177 @@ export class NostrClient {
     // Use nostr-tools SimplePool to fetch from all relays in parallel
     // SimplePool handles connection management, retries, and error handling automatically
     try {
-      // querySync takes a single filter, so we query each filter and combine results
-      // Wrap each query individually to catch errors from individual relays
-      const queryPromises = sanitizedFilters.map(filter => 
-        this.pool.querySync(this.relays, filter, { maxWait: 8000 })
-          .catch(err => {
-            // Log individual relay errors but don't fail the entire request
-            logger.debug({ error: err, filter, relays: this.relays }, 'Primary relay query failed, trying fallback');
-            return []; // Return empty array for failed queries
-          })
-      );
-      const results = await Promise.allSettled(queryPromises);
-      
-      let hasResults = false;
-      for (const result of results) {
-        if (result.status === 'fulfilled' && result.value.length > 0) {
-          events.push(...result.value);
-          hasResults = true;
-        } else if (result.status === 'rejected') {
-          // Log rejected promises (shouldn't happen since we catch above, but just in case)
-          logger.debug({ error: result.reason }, 'Query promise rejected');
+      // For write verification, use full timeout. For normal fetches, use dynamic timeout
+      if (isWriteVerification) {
+        // Write verification: use full 8 second timeout
+        const queryPromises = sanitizedFilters.map(filter => 
+          this.pool.querySync(this.relays, filter, { maxWait: 8000 })
+            .catch(err => {
+              logger.debug({ error: err, filter, relays: this.relays }, 'Primary relay query failed, trying fallback');
+              return []; // Return empty array for failed queries
+            })
+        );
+        const results = await Promise.allSettled(queryPromises);
+        
+        let hasResults = false;
+        for (const result of results) {
+          if (result.status === 'fulfilled' && result.value.length > 0) {
+            events.push(...result.value);
+            hasResults = true;
+          } else if (result.status === 'rejected') {
+            logger.debug({ error: result.reason }, 'Query promise rejected');
+          }
         }
-      }
-      
-      // If no results from primary relays and we have fallback relays, try them
-      if (!hasResults && events.length === 0 && FALLBACK_NOSTR_RELAYS.length > 0) {
-        logger.debug({ primaryRelays: this.relays, fallbackRelays: FALLBACK_NOSTR_RELAYS }, 'No results from primary relays, trying fallback relays');
-        try {
-          const fallbackPromises = sanitizedFilters.map(filter => 
-            this.pool.querySync(FALLBACK_NOSTR_RELAYS, filter, { maxWait: 8000 })
-              .catch(err => {
-                logger.debug({ error: err, filter }, 'Fallback relay query failed');
-                return [];
-              })
-          );
-          const fallbackResults = await Promise.allSettled(fallbackPromises);
-          
-          for (const result of fallbackResults) {
-            if (result.status === 'fulfilled') {
-              events.push(...result.value);
+        
+        // If no results from primary relays and we have fallback relays, try them
+        if (!hasResults && events.length === 0 && FALLBACK_NOSTR_RELAYS.length > 0) {
+          logger.debug({ primaryRelays: this.relays, fallbackRelays: FALLBACK_NOSTR_RELAYS }, 'No results from primary relays, trying fallback relays');
+          try {
+            const fallbackPromises = sanitizedFilters.map(filter => 
+              this.pool.querySync(FALLBACK_NOSTR_RELAYS, filter, { maxWait: 8000 })
+                .catch(err => {
+                  logger.debug({ error: err, filter }, 'Fallback relay query failed');
+                  return [];
+                })
+            );
+            const fallbackResults = await Promise.allSettled(fallbackPromises);
+            
+            for (const result of fallbackResults) {
+              if (result.status === 'fulfilled') {
+                events.push(...result.value);
+              }
             }
+            
+            if (events.length > 0) {
+              logger.info({ fallbackRelays: FALLBACK_NOSTR_RELAYS, eventCount: events.length }, 'Successfully fetched events from fallback relays');
+            }
+          } catch (fallbackErr) {
+            logger.debug({ error: fallbackErr }, 'Fallback relay query failed completely');
           }
-          
-          if (events.length > 0) {
-            logger.info({ fallbackRelays: FALLBACK_NOSTR_RELAYS, eventCount: events.length }, 'Successfully fetched events from fallback relays');
+        }
+      } else {
+        // Normal fetches: dynamic timeout - 2 seconds after first relay responds
+        let firstResponseTime: number | null = null;
+        const DYNAMIC_TIMEOUT_MS = 2000; // 2 seconds after first response
+        
+        // Create queries for all filters
+        const baseQueryPromises = sanitizedFilters.map(filter => 
+          this.pool.querySync(this.relays, filter, { maxWait: 8000 })
+            .catch(err => {
+              logger.debug({ error: err, filter, relays: this.relays }, 'Primary relay query failed');
+              return []; // Return empty array for failed queries
+            })
+        );
+        
+        // Wrap each query to track first response and apply dynamic timeout
+        const queryPromises = baseQueryPromises.map((queryPromise, index) => {
+          return Promise.race([
+            queryPromise.then((results) => {
+              // Track when first response arrives (across all queries)
+              const now = Date.now();
+              if (firstResponseTime === null) {
+                firstResponseTime = now;
+                logger.debug({ filterIndex: index, firstResponseTime: now }, 'First relay responded, starting 2s timeout for other relays');
+              }
+              return results;
+            }),
+            // Dynamic timeout: if first response has arrived, timeout after 2 seconds from that point
+            new Promise<NostrEvent[]>((resolve) => {
+              const checkTimeout = () => {
+                if (firstResponseTime !== null) {
+                  const elapsed = Date.now() - firstResponseTime;
+                  if (elapsed >= DYNAMIC_TIMEOUT_MS) {
+                    // Timeout reached - return empty array (query from faster relay already got results)
+                    resolve([]);
+                  } else {
+                    // Check again after remaining time
+                    setTimeout(checkTimeout, DYNAMIC_TIMEOUT_MS - elapsed);
+                  }
+                } else {
+                  // First response hasn't arrived yet, check again in 100ms
+                  setTimeout(checkTimeout, 100);
+                }
+              };
+              checkTimeout();
+              
+              // Maximum timeout of 8 seconds to prevent hanging forever
+              setTimeout(() => resolve([]), 8000);
+            })
+          ]);
+        });
+        
+        const results = await Promise.allSettled(queryPromises);
+        
+        let hasResults = false;
+        for (const result of results) {
+          if (result.status === 'fulfilled' && result.value.length > 0) {
+            events.push(...result.value);
+            hasResults = true;
+          } else if (result.status === 'rejected') {
+            logger.debug({ error: result.reason }, 'Query promise rejected');
           }
-        } catch (fallbackErr) {
-          logger.debug({ error: fallbackErr }, 'Fallback relay query failed completely');
+        }
+        
+        // If no results from primary relays and we have fallback relays, try them (with dynamic timeout too)
+        if (!hasResults && events.length === 0 && FALLBACK_NOSTR_RELAYS.length > 0) {
+          logger.debug({ primaryRelays: this.relays, fallbackRelays: FALLBACK_NOSTR_RELAYS }, 'No results from primary relays, trying fallback relays');
+          try {
+            // Reset first response time for fallback relays
+            firstResponseTime = null;
+            
+            // Create queries for all filters on fallback relays
+            const fallbackBaseQueryPromises = sanitizedFilters.map(filter => 
+              this.pool.querySync(FALLBACK_NOSTR_RELAYS, filter, { maxWait: 8000 })
+                .catch(err => {
+                  logger.debug({ error: err, filter }, 'Fallback relay query failed');
+                  return [];
+                })
+            );
+            
+            // Wrap each query to track first response and apply dynamic timeout
+            const fallbackQueryPromises = fallbackBaseQueryPromises.map((queryPromise, index) => {
+              return Promise.race([
+                queryPromise.then((results) => {
+                  const now = Date.now();
+                  if (firstResponseTime === null) {
+                    firstResponseTime = now;
+                    logger.debug({ filterIndex: index, firstResponseTime: now }, 'First fallback relay responded, starting 2s timeout');
+                  }
+                  return results;
+                }),
+                new Promise<NostrEvent[]>((resolve) => {
+                  const checkTimeout = () => {
+                    if (firstResponseTime !== null) {
+                      const elapsed = Date.now() - firstResponseTime;
+                      if (elapsed >= DYNAMIC_TIMEOUT_MS) {
+                        resolve([]);
+                      } else {
+                        setTimeout(checkTimeout, DYNAMIC_TIMEOUT_MS - elapsed);
+                      }
+                    } else {
+                      setTimeout(checkTimeout, 100);
+                    }
+                  };
+                  checkTimeout();
+                  setTimeout(() => resolve([]), 8000);
+                })
+              ]);
+            });
+            
+            const fallbackResults = await Promise.allSettled(fallbackQueryPromises);
+            
+            for (const result of fallbackResults) {
+              if (result.status === 'fulfilled') {
+                events.push(...result.value);
+              }
+            }
+            
+            if (events.length > 0) {
+              logger.info({ fallbackRelays: FALLBACK_NOSTR_RELAYS, eventCount: events.length }, 'Successfully fetched events from fallback relays');
+            }
+          } catch (fallbackErr) {
+            logger.debug({ error: fallbackErr }, 'Fallback relay query failed completely');
+          }
         }
       }
     } catch (err) {
