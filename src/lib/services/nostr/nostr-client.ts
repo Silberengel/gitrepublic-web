@@ -9,6 +9,7 @@ import { isNIP07Available, getPublicKeyWithNIP07, signEventWithNIP07 } from './n
 import { SimplePool, type Filter } from 'nostr-tools';
 import { KIND } from '../../types/nostr.js';
 import { isParameterizedReplaceable } from '../../utils/nostr-event-utils.js';
+import { FALLBACK_NOSTR_RELAYS } from '../../config.js';
 
 // Replaceable event kinds (only latest per pubkey matters)
 const REPLACEABLE_KINDS = [0, 3, 10002]; // Profile, Contacts, Relay List
@@ -237,33 +238,137 @@ export class NostrClient {
   }
 
   /**
+   * Sanitize a filter to ensure all values are valid
+   * Removes invalid authors (non-strings, null, undefined, non-hex)
+   * Ensures all array fields contain only valid strings
+   */
+  private sanitizeFilter(filter: NostrFilter): Filter {
+    const sanitized: Filter = {};
+    
+    // Sanitize authors - must be array of valid hex pubkeys (64 chars)
+    if (filter.authors) {
+      const validAuthors = filter.authors
+        .filter((author): author is string => 
+          typeof author === 'string' && 
+          author.length === 64 && 
+          /^[0-9a-f]{64}$/i.test(author)
+        );
+      if (validAuthors.length > 0) {
+        sanitized.authors = validAuthors;
+      }
+    }
+    
+    // Sanitize ids - must be array of valid hex strings (64 chars)
+    if (filter.ids) {
+      const validIds = filter.ids
+        .filter((id): id is string => 
+          typeof id === 'string' && 
+          id.length === 64 && 
+          /^[0-9a-f]{64}$/i.test(id)
+        );
+      if (validIds.length > 0) {
+        sanitized.ids = validIds;
+      }
+    }
+    
+    // Sanitize kinds - must be array of numbers
+    if (filter.kinds) {
+      const validKinds = filter.kinds.filter((kind): kind is number => typeof kind === 'number');
+      if (validKinds.length > 0) {
+        sanitized.kinds = validKinds;
+      }
+    }
+    
+    // Sanitize tag filters - must be arrays of strings
+    const tagFields = ['#e', '#p', '#d', '#a', '#E', '#K', '#P', '#A', '#I'] as const;
+    for (const tagField of tagFields) {
+      const value = filter[tagField];
+      if (value) {
+        const validValues = value.filter((v): v is string => typeof v === 'string' && v.length > 0);
+        if (validValues.length > 0) {
+          sanitized[tagField] = validValues;
+        }
+      }
+    }
+    
+    // Copy other valid fields
+    if (filter.since !== undefined && typeof filter.since === 'number') {
+      sanitized.since = filter.since;
+    }
+    if (filter.until !== undefined && typeof filter.until === 'number') {
+      sanitized.until = filter.until;
+    }
+    if (filter.limit !== undefined && typeof filter.limit === 'number' && filter.limit > 0) {
+      sanitized.limit = filter.limit;
+    }
+    if (filter.search && typeof filter.search === 'string') {
+      sanitized.search = filter.search;
+    }
+    
+    return sanitized;
+  }
+
+  /**
    * Fetch events from relays and merge with existing events
    * Never deletes valid events, only appends/integrates new ones
+   * Automatically falls back to fallback relays if primary relays fail
    */
   private async fetchAndMergeFromRelays(filters: NostrFilter[], existingEvents: NostrEvent[]): Promise<NostrEvent[]> {
     const events: NostrEvent[] = [];
+    
+    // Sanitize all filters before sending to relays
+    const sanitizedFilters = filters.map(f => this.sanitizeFilter(f));
     
     // Use nostr-tools SimplePool to fetch from all relays in parallel
     // SimplePool handles connection management, retries, and error handling automatically
     try {
       // querySync takes a single filter, so we query each filter and combine results
       // Wrap each query individually to catch errors from individual relays
-      const queryPromises = filters.map(filter => 
-        this.pool.querySync(this.relays, filter as Filter, { maxWait: 8000 })
+      const queryPromises = sanitizedFilters.map(filter => 
+        this.pool.querySync(this.relays, filter, { maxWait: 8000 })
           .catch(err => {
             // Log individual relay errors but don't fail the entire request
-            logger.debug({ error: err, filter }, 'Individual relay query failed');
+            logger.debug({ error: err, filter, relays: this.relays }, 'Primary relay query failed, trying fallback');
             return []; // Return empty array for failed queries
           })
       );
       const results = await Promise.allSettled(queryPromises);
       
+      let hasResults = false;
       for (const result of results) {
-        if (result.status === 'fulfilled') {
+        if (result.status === 'fulfilled' && result.value.length > 0) {
           events.push(...result.value);
-        } else {
+          hasResults = true;
+        } else if (result.status === 'rejected') {
           // Log rejected promises (shouldn't happen since we catch above, but just in case)
           logger.debug({ error: result.reason }, 'Query promise rejected');
+        }
+      }
+      
+      // If no results from primary relays and we have fallback relays, try them
+      if (!hasResults && events.length === 0 && FALLBACK_NOSTR_RELAYS.length > 0) {
+        logger.debug({ primaryRelays: this.relays, fallbackRelays: FALLBACK_NOSTR_RELAYS }, 'No results from primary relays, trying fallback relays');
+        try {
+          const fallbackPromises = sanitizedFilters.map(filter => 
+            this.pool.querySync(FALLBACK_NOSTR_RELAYS, filter, { maxWait: 8000 })
+              .catch(err => {
+                logger.debug({ error: err, filter }, 'Fallback relay query failed');
+                return [];
+              })
+          );
+          const fallbackResults = await Promise.allSettled(fallbackPromises);
+          
+          for (const result of fallbackResults) {
+            if (result.status === 'fulfilled') {
+              events.push(...result.value);
+            }
+          }
+          
+          if (events.length > 0) {
+            logger.info({ fallbackRelays: FALLBACK_NOSTR_RELAYS, eventCount: events.length }, 'Successfully fetched events from fallback relays');
+          }
+        } catch (fallbackErr) {
+          logger.debug({ error: fallbackErr }, 'Fallback relay query failed completely');
         }
       }
     } catch (err) {
@@ -509,10 +614,90 @@ export class NostrClient {
           }
         });
       } else {
-        // If publish failed or timed out, mark all as failed
-        targetRelays.forEach(relay => {
-          failed.push({ relay, error: 'Publish failed or timed out' });
-        });
+        // If publish failed or timed out to primary relays, try fallback relays
+        if (FALLBACK_NOSTR_RELAYS.length > 0) {
+          logger.debug({ primaryRelays: targetRelays, fallbackRelays: FALLBACK_NOSTR_RELAYS, eventId: event.id }, 'Primary relay publish failed, trying fallback relays');
+          
+          try {
+            const fallbackPublishPromise = new Promise<string[]>((resolve, reject) => {
+              const timeout = setTimeout(() => {
+                reject(new Error('Fallback publish timeout after 30 seconds'));
+              }, 30000);
+              
+              try {
+                const fallbackPublishPromises = this.pool.publish(FALLBACK_NOSTR_RELAYS, event);
+                Promise.all(fallbackPublishPromises)
+                  .then((results) => {
+                    clearTimeout(timeout);
+                    resolve(results);
+                  })
+                  .catch((error: unknown) => {
+                    clearTimeout(timeout);
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    if (errorMessage.includes('restricted') || 
+                        errorMessage.includes('Pay on') ||
+                        errorMessage.includes('payment required') ||
+                        errorMessage.includes('rate limit')) {
+                      logger.debug({ error: errorMessage, eventId: event.id }, 'Fallback relay restriction encountered');
+                      resolve([]);
+                    } else {
+                      reject(error);
+                    }
+                  });
+              } catch (syncError) {
+                clearTimeout(timeout);
+                reject(syncError);
+              }
+            });
+            
+            const fallbackPublishedRelays: string[] = await Promise.race([
+              fallbackPublishPromise,
+              new Promise<string[]>((_, reject) => 
+                setTimeout(() => reject(new Error('Fallback publish timeout')), 30000)
+              )
+            ]).catch((error: unknown): string[] => {
+              logger.debug({ error: error instanceof Error ? error.message : String(error), eventId: event.id }, 'Error publishing to fallback relays');
+              return [];
+            });
+            
+            if (fallbackPublishedRelays && fallbackPublishedRelays.length > 0) {
+              success.push(...fallbackPublishedRelays);
+              logger.info({ fallbackRelays: FALLBACK_NOSTR_RELAYS, publishedCount: fallbackPublishedRelays.length, eventId: event.id }, 'Successfully published to fallback relays');
+              // Mark primary relays as failed
+              targetRelays.forEach(relay => {
+                failed.push({ relay, error: 'Primary relay failed, used fallback' });
+              });
+              // Mark fallback relays not in success as failed
+              FALLBACK_NOSTR_RELAYS.forEach(relay => {
+                if (!fallbackPublishedRelays.includes(relay)) {
+                  failed.push({ relay, error: 'Fallback relay did not accept event' });
+                }
+              });
+            } else {
+              // Both primary and fallback failed
+              targetRelays.forEach(relay => {
+                failed.push({ relay, error: 'Publish failed or timed out' });
+              });
+              FALLBACK_NOSTR_RELAYS.forEach(relay => {
+                failed.push({ relay, error: 'Fallback relay publish failed or timed out' });
+              });
+            }
+          } catch (fallbackError) {
+            logger.debug({ error: fallbackError, eventId: event.id }, 'Fallback relay publish failed completely');
+            // Mark all relays as failed
+            targetRelays.forEach(relay => {
+              failed.push({ relay, error: 'Publish failed or timed out' });
+            });
+            FALLBACK_NOSTR_RELAYS.forEach(relay => {
+              failed.push({ relay, error: 'Fallback relay publish failed' });
+            });
+          }
+        } else {
+          // No fallback relays available, mark all primary relays as failed
+          targetRelays.forEach(relay => {
+            failed.push({ relay, error: 'Publish failed or timed out' });
+          });
+        }
       }
     } catch (error) {
       // Catch any synchronous errors

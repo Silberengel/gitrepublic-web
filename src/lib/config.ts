@@ -26,6 +26,20 @@ export const DEFAULT_NOSTR_RELAYS =
       ];
 
 /**
+ * Fallback Nostr relays to use when primary relays fail
+ * Can be overridden by NOSTR_FALLBACK_RELAYS env var (comma-separated list)
+ * These relays are automatically used when primary relays are unavailable
+ */
+export const FALLBACK_NOSTR_RELAYS = 
+  typeof process !== 'undefined' && process.env?.NOSTR_FALLBACK_RELAYS
+    ? process.env.NOSTR_FALLBACK_RELAYS.split(',').map(r => r.trim()).filter(r => r.length > 0)
+    : [
+        'wss://orly-relay.imwald.eu',
+        'wss://nostr.sovbit.host',
+        'wss://nostr21.com',
+      ];
+
+/**
  * Nostr relays to use for searching for repositories, profiles, or other events
  * Can be overridden by NOSTR_SEARCH_RELAYS env var (comma-separated list)
  * 

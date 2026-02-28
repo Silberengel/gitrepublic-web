@@ -2,7 +2,7 @@
   import '../app.css';
   import { onMount, onDestroy, setContext } from 'svelte';
   import { page } from '$app/stores';
-  import { goto } from '$app/navigation';
+  import { goto, beforeNavigate } from '$app/navigation';
   import Footer from '$lib/components/Footer.svelte';
   import NavBar from '$lib/components/NavBar.svelte';
   import TransferNotification from '$lib/components/TransferNotification.svelte';
@@ -443,6 +443,26 @@
       // Ignore errors during destruction
       if (isMounted) {
         console.warn('Transfer check effect error:', err);
+      }
+    }
+  });
+
+  // Intercept navigation to .md files and redirect to /docs/ route
+  beforeNavigate((navigation) => {
+    if (!navigation.to || typeof window === 'undefined') return;
+    
+    // NavigationTarget can be a URL or a route object, get the pathname
+    const toUrl = navigation.to instanceof URL ? navigation.to : new URL(navigation.to.url, 'http://localhost');
+    const path = toUrl.pathname;
+    
+    // Check if path ends with .md and doesn't already start with /docs/
+    if (path.endsWith('.md') && !path.startsWith('/docs/')) {
+      // Extract filename without .md extension
+      const filename = path.replace(/\.md$/, '').replace(/^\//, '');
+      // Security: Only allow alphanumeric, hyphens, underscores
+      if (/^[a-zA-Z0-9_-]+$/.test(filename)) {
+        navigation.cancel();
+        goto(`/docs/${filename}`, { replaceState: true });
       }
     }
   });

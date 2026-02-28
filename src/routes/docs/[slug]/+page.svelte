@@ -45,9 +45,29 @@
         });
         
         // Convert relative markdown links to docs routes
-        rendered = rendered.replace(/<a href="\.\/([^"]+\.md)"/g, (match, file) => {
-          const slug = file.replace('.md', '');
-          return `<a href="/docs/${slug}"`;
+        // Handle various link formats:
+        // - ./file.md -> /docs/file
+        // - file.md -> /docs/file
+        // - /file.md -> /docs/file (though this shouldn't happen in markdown)
+        rendered = rendered.replace(/<a href="([^"]*\.md)"/g, (match, file) => {
+          // Remove leading ./ or / if present
+          const cleanFile = file.replace(/^\.\//, '').replace(/^\//, '');
+          const slug = cleanFile.replace(/\.md$/, '');
+          // Only process if it's a relative link (not already starting with /docs or http)
+          if (!slug.startsWith('docs/') && !slug.startsWith('http')) {
+            return `<a href="/docs/${slug}"`;
+          }
+          return match; // Return original if already processed or external
+        });
+        
+        // Also handle links with anchors: ./file.md#section -> /docs/file#section
+        rendered = rendered.replace(/<a href="([^"]*\.md)(#[^"]*)"/g, (match, file, anchor) => {
+          const cleanFile = file.replace(/^\.\//, '').replace(/^\//, '');
+          const slug = cleanFile.replace(/\.md$/, '');
+          if (!slug.startsWith('docs/') && !slug.startsWith('http')) {
+            return `<a href="/docs/${slug}${anchor}"`;
+          }
+          return match;
         });
         
         content = rendered;
@@ -66,15 +86,31 @@
           if (markdownContent) {
             markdownContent.addEventListener('click', (e) => {
               const target = e.target as HTMLElement;
-              if (target.tagName === 'A' && target.getAttribute('href')?.startsWith('#')) {
-                const id = target.getAttribute('href')?.substring(1);
-                if (id) {
+              if (target.tagName === 'A') {
+                const href = target.getAttribute('href');
+                if (!href) return;
+                
+                // Handle anchor links
+                if (href.startsWith('#')) {
+                  const id = href.substring(1);
                   const element = document.getElementById(id);
                   if (element) {
                     e.preventDefault();
                     element.scrollIntoView({ behavior: 'smooth', block: 'start' });
                     window.history.pushState(null, '', `#${id}`);
                   }
+                  return;
+                }
+                
+                // Handle .md file links that weren't converted properly
+                if (href.endsWith('.md') && !href.startsWith('/docs/') && !href.startsWith('http')) {
+                  e.preventDefault();
+                  // Remove leading ./ or / if present, then remove .md extension
+                  const cleanHref = href.replace(/^\.\//, '').replace(/^\//, '');
+                  const slug = cleanHref.replace(/\.md$/, '');
+                  // Navigate to docs route
+                  window.location.href = `/docs/${slug}`;
+                  return;
                 }
               }
             });

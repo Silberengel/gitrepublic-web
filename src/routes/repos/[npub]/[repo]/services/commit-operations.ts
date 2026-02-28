@@ -25,16 +25,33 @@ export async function loadCommitHistory(
     const url = `/api/repos/${state.npub}/${state.repo}/commits?branch=${encodeURIComponent(branch)}&limit=50`;
     console.log('[loadCommitHistory] Fetching commits:', { url, branch, currentBranch: state.git.currentBranch, defaultBranch: state.git.defaultBranch });
     
-    const data = await apiRequest<Array<{
+    const response = await apiRequest<Array<{
       hash?: string;
       sha?: string;
       message?: string;
       author?: string;
       date?: string;
       files?: string[];
-    }>>(url);
+    }> | { commitCount?: number; data?: Array<any> }>(url);
     
-    console.log('[loadCommitHistory] Received data:', { commitCount: data?.length || 0, data });
+    // Handle both array and object response formats
+    // API should return array, but handle object wrappers like { data: [] } or { commits: [] }
+    let data: Array<any>;
+    if (Array.isArray(response)) {
+      data = response;
+    } else if (response && typeof response === 'object') {
+      // Try common wrapper formats
+      data = (response as any).data || (response as any).commits || [];
+    } else {
+      data = [];
+    }
+    
+    console.log('[loadCommitHistory] Received response:', { 
+      responseType: Array.isArray(response) ? 'array' : typeof response,
+      responseKeys: typeof response === 'object' && response !== null ? Object.keys(response) : [],
+      commitCount: data?.length || 0,
+      data 
+    });
     
     // Normalize commits: API-based commits use 'sha', local commits use 'hash'
     state.git.commits = data.map((commit: any) => ({
