@@ -350,9 +350,38 @@ export async function forkRepository(
     const truncatedNpub = state.npub.length > 16 ? `${state.npub.slice(0, 12)}...` : state.npub;
     console.log(`[Fork UI] Starting ${localOnly ? 'local-only ' : ''}fork of ${truncatedNpub}/${state.repo}...`);
     
+    // Create a proof event to verify write access if needed
+    let proofEvent: any = null;
+    try {
+      const { createProofEvent } = await import('$lib/services/nostr/relay-write-proof.js');
+      const { signEventWithNIP07 } = await import('$lib/services/nostr/nip07-signer.js');
+      const { DEFAULT_NOSTR_RELAYS } = await import('$lib/config.js');
+      const { NostrClient } = await import('$lib/services/nostr/nostr-client.js');
+      
+      if (state.user.pubkeyHex) {
+        const proofEventTemplate = createProofEvent(
+          state.user.pubkeyHex,
+          `gitrepublic-fork-proof-${Date.now()}`
+        );
+        
+        proofEvent = await signEventWithNIP07(proofEventTemplate);
+        
+        // Publish the event to relays so server can verify it
+        const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
+        await nostrClient.publishEvent(proofEvent, DEFAULT_NOSTR_RELAYS);
+        
+        // Wait a moment for the event to propagate
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    } catch (proofErr) {
+      console.warn('[Fork] Failed to create proof event, continuing without it:', proofErr);
+      // Continue without proof event - server will check cache or return helpful error
+    }
+    
     const data = await apiPost<{
       success?: boolean;
       message?: string;
+      redirect?: string;
       fork?: {
         npub: string;
         repo: string;
@@ -366,23 +395,31 @@ export async function forkRepository(
       eventName?: string;
     }>(`/api/repos/${state.npub}/${state.repo}/forks`, { 
       userPubkey: state.user.pubkey,
-      localOnly 
+      localOnly,
+      proofEvent 
     });
     
-    if (data.success !== false && data.fork) {
-      const message = data.message || (data.fork.localOnly 
-        ? 'Local-only fork created successfully! This fork is private and only exists on this server.'
-        : `Repository forked successfully! Published to ${data.fork.publishedTo?.announcement || 0} relay(s).`);
-      console.log(`[Fork UI] ✓ ${message}`);
-      // Security: Truncate npub in logs
-      const truncatedForkNpub = data.fork.npub.length > 16 ? `${data.fork.npub.slice(0, 12)}...` : data.fork.npub;
-      console.log(`[Fork UI]   - Fork location: /repos/${truncatedForkNpub}/${data.fork.repo}`);
-      console.log(`[Fork UI]   - Local-only: ${data.fork.localOnly || false}`);
-      console.log(`[Fork UI]   - Announcement ID: ${data.fork.announcementId}`);
-      console.log(`[Fork UI]   - Ownership Transfer ID: ${data.fork.ownershipTransferId}`);
-      
-      alert(`${message}\n\nRedirecting to your fork...`);
-      goto(`/repos/${data.fork.npub}/${data.fork.repo}`);
+    if (data.success !== false) {
+      if (data.redirect) {
+        // Redirect to signup page to publish the fork announcement
+        console.log(`[Fork UI] ✓ Fork repository created! Redirecting to signup page to publish announcement...`);
+        goto(data.redirect);
+      } else if (data.fork) {
+        // Legacy: Fork was fully created and published (shouldn't happen with new flow)
+        const message = data.message || (data.fork.localOnly 
+          ? 'Local-only fork created successfully! This fork is private and only exists on this server.'
+          : `Repository forked successfully! Published to ${data.fork.publishedTo?.announcement || 0} relay(s).`);
+        console.log(`[Fork UI] ✓ ${message}`);
+        // Security: Truncate npub in logs
+        const truncatedForkNpub = data.fork.npub.length > 16 ? `${data.fork.npub.slice(0, 12)}...` : data.fork.npub;
+        console.log(`[Fork UI]   - Fork location: /repos/${truncatedForkNpub}/${data.fork.repo}`);
+        console.log(`[Fork UI]   - Local-only: ${data.fork.localOnly || false}`);
+        console.log(`[Fork UI]   - Announcement ID: ${data.fork.announcementId}`);
+        console.log(`[Fork UI]   - Ownership Transfer ID: ${data.fork.ownershipTransferId}`);
+        
+        alert(`${message}\n\nRedirecting to your fork...`);
+        goto(`/repos/${data.fork.npub}/${data.fork.repo}`);
+      }
     } else {
       const errorMessage = data.error || 'Failed to fork repository';
       const errorDetails = data.details ? `\n\nDetails: ${data.details}` : '';

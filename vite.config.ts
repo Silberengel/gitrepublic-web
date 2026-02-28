@@ -54,6 +54,8 @@ export default defineConfig({
     noExternal: [],
     external: [
       'simple-git',
+      '@kwsites/file-exists',
+      '@kwsites/promise-deferred',
       'child_process',
       'fs',
       'fs/promises',

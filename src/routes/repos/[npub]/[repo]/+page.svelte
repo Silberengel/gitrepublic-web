@@ -1387,7 +1387,30 @@
   {/if}
 
   <main class="repo-view">
-    {#if state.clone.isCloned === false && (canUseApiFallback || state.clone.apiFallbackAvailable === null)}
+    {#if state.repoNotFound}
+      <div class="repo-not-found">
+        <div class="not-found-content">
+          <img src="/icons/alert-circle.svg" alt="Not Found" class="not-found-icon" />
+          <h2>Repository Not Found</h2>
+          <p>The repository announcement for <strong>{state.repo}</strong> could not be found.</p>
+          <p>This could mean:</p>
+          <ul>
+            <li>The repository has not been announced on Nostr relays</li>
+            <li>The repository name is incorrect</li>
+            <li>The repository was deleted or removed</li>
+            <li>The Nostr relays are temporarily unavailable</li>
+          </ul>
+          <div class="not-found-actions">
+            <button onclick={() => goto('/repos')} class="button-primary">
+              Browse Repositories
+            </button>
+            <button onclick={() => goto('/search')} class="button-secondary">
+              Search Repositories
+            </button>
+          </div>
+        </div>
+      </div>
+    {:else if state.clone.isCloned === false && (canUseApiFallback || state.clone.apiFallbackAvailable === null)}
       <div class="read-only-banner">
         <div class="banner-content">
           <img src="/icons/alert-circle.svg" alt="Info" class="banner-icon" />
@@ -1412,7 +1435,7 @@
     {/if}
 
     <!-- Tabs - only show if we have repo data (header/clone section would be visible) -->
-    {#if repoOwnerPubkeyDerived}
+    {#if !state.repoNotFound && repoOwnerPubkeyDerived && repoAnnouncement}
       <div class="repo-layout">
       <!-- Files Tab -->
       {#if state.ui.activeTab === 'files'}

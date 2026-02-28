@@ -20,10 +20,21 @@ export function usePageDataEffect(state: RepoState, getPageData: () => any): () 
       const data = getPageData();
       if (data && state.isMounted) {
         state.pageData = data || {};
+        // Set repoNotFound flag if announcement is missing or repoNotFound is explicitly set
+        if (data.repoNotFound === true || (data.announcement === null || data.announcement === undefined)) {
+          state.repoNotFound = true;
+          state.loading.main = false;
+        } else if (data.announcement) {
+          // Clear repoNotFound if we have a valid announcement
+          state.repoNotFound = false;
+        }
       }
     } catch (err) {
       if (state.isMounted) {
         console.warn('Failed to update pageData:', err);
+        // On error, mark as not found to prevent blank page
+        state.repoNotFound = true;
+        state.loading.main = false;
       }
     }
   };

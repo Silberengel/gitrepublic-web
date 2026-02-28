@@ -578,28 +578,40 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         const hasCommits = !isNaN(commitCount) && commitCount > 0;
         
         if (hasCommits) {
-          // Repo has commits, check if it has an announcement
+          // If an announcement was explicitly provided (e.g., private fork), always save it
+          // even if the repo already has an announcement (the provided one might be different/updated)
+          if (announcementEvent) {
+            try {
+              await this.announcementManager.ensureAnnouncementInRepo(repoPath, announcementEvent);
+              logger.info({ repoPath, eventId: announcementEvent.id }, 'Saved provided announcement to existing repo');
+              return { success: true, announcement: announcementEvent };
+            } catch (err) {
+              logger.error({ error: err, repoPath, eventId: announcementEvent?.id }, 
+                'Failed to save provided announcement to repo');
+              // Don't fail the request - repo exists and can be accessed
+              return { success: true, announcement: announcementEvent };
+            }
+          }
+          
+          // No announcement provided - check if repo has an announcement
           const hasAnnouncement = await this.announcementManager.hasAnnouncementInRepoFile(repoPath);
           if (hasAnnouncement) {
             return { success: true };
           }
           
-          // Repo has commits but no announcement - use provided announcement or try to fetch from relays
-          let announcementToUse: NostrEvent | null | undefined = announcementEvent;
-          if (!announcementToUse) {
-            const { requireNpubHex: requireNpubHexUtil } = await import('../../utils/npub-utils.js');
-            const repoOwnerPubkey = requireNpubHexUtil(npub);
-            announcementToUse = await this.announcementManager.fetchAnnouncementFromRelays(repoOwnerPubkey, repoName);
-          }
+          // Repo has commits but no announcement - try to fetch from relays
+          const { requireNpubHex: requireNpubHexUtil } = await import('../../utils/npub-utils.js');
+          const repoOwnerPubkey = requireNpubHexUtil(npub);
+          const fetchedAnnouncement = await this.announcementManager.fetchAnnouncementFromRelays(repoOwnerPubkey, repoName);
           
-          if (announcementToUse) {
-            // Save announcement to repo asynchronously (non-blocking)
-            this.announcementManager.ensureAnnouncementInRepo(repoPath, announcementToUse)
+          if (fetchedAnnouncement) {
+            // Fetched from relays - save asynchronously (non-blocking)
+            this.announcementManager.ensureAnnouncementInRepo(repoPath, fetchedAnnouncement)
               .catch((err) => {
-                logger.warn({ error: err, repoPath, eventId: announcementToUse?.id }, 
+                logger.warn({ error: err, repoPath, eventId: fetchedAnnouncement?.id }, 
                   'Failed to save announcement to repo (non-blocking, announcement available from relays)');
               });
-            return { success: true, announcement: announcementToUse };
+            return { success: true, announcement: fetchedAnnouncement };
           }
           
           // Repo has commits but no announcement found - needs announcement

@@ -15,6 +15,9 @@ import { auditLogger } from '$lib/services/security/audit-logger.js';
 import logger from '$lib/services/logger.js';
 import { repoCache, RepoCache } from '$lib/services/git/repo-cache.js';
 import { isAdmin } from '$lib/utils/admin-check.js';
+import { eventCache } from '$lib/services/nostr/event-cache.js';
+import { KIND } from '$lib/types/nostr.js';
+import type { NostrFilter } from '$lib/types/nostr.js';
 
 const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
@@ -92,10 +95,28 @@ export const DELETE: RequestHandler = createRepoGetHandler(
     }
     
     try {
+      // Invalidate event cache for this repository announcement
+      // We invalidate by filter and pubkey to ensure all cache entries are cleared
+      // This prevents deleted repos from appearing in search results
+      
+      // Invalidate by filter to catch any cache entries that might contain this repo
+      const repoFilter: NostrFilter = {
+        kinds: [KIND.REPO_ANNOUNCEMENT],
+        authors: [repoOwnerPubkey],
+        '#d': [repo]
+      };
+      eventCache.invalidate([repoFilter]);
+      logger.debug({ npub, repo, pubkey: repoOwnerPubkey.substring(0, 16) + '...' }, 'Invalidated event cache by filter');
+      
+      // Also invalidate all events for this pubkey to be thorough
+      // (in case the repo name doesn't match exactly due to case sensitivity)
+      eventCache.invalidatePubkey(repoOwnerPubkey);
+      logger.debug({ npub, repo, pubkey: repoOwnerPubkey.substring(0, 16) + '...' }, 'Invalidated event cache for pubkey');
+      
       // Delete the repository directory
       await rm(repoPath, { recursive: true, force: true });
       
-      // Clear cache
+      // Clear repo cache
       repoCache.delete(RepoCache.repoExistsKey(npub, repo));
       
       // Log successful deletion

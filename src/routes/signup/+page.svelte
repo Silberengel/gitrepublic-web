@@ -10,6 +10,7 @@
   import { nip19 } from 'nostr-tools';
   import { userStore } from '../../lib/stores/user-store.js';
   import { hasUnlimitedAccess, isLoggedIn } from '../../lib/utils/user-access.js';
+  import { sanitizeRepoNameForFilesystem } from '../../lib/utils/input-validation.js';
 
   let nip07Available = $state(false);
   let loading = $state(false);
@@ -67,6 +68,15 @@
     const repoParam = urlParams.get('repo');
     const repoTagParam = urlParams.get('repoTag');
     const npubParam = urlParams.get('npub') || originalOwnerParam;
+    const forkParam = urlParams.get('fork');
+    const forkOriginalRepoParam = urlParams.get('forkOriginalRepo');
+    const forkNameParam = urlParams.get('forkName');
+    const forkDescriptionParam = urlParams.get('forkDescription');
+    const localOnlyParam = urlParams.get('localOnly');
+    const cloneUrlsParam = urlParams.get('cloneUrls');
+    const visibilityParam = urlParams.get('visibility');
+    const projectRelaysParam = urlParams.get('projectRelays');
+    const earliestCommitParam = urlParams.get('earliestCommit');
     
     // Handle transfer flow (step 4)
     if (transferParam === 'true' && originalOwnerParam && repoParam && repoTagParam) {
@@ -321,12 +331,54 @@
       // Pre-fill repo name
       repoName = repoParam;
       
-      // Try to fetch existing announcement to pre-fill other fields
-      try {
-        const decoded = nip19.decode(npubParam);
-        if (decoded.type === 'npub') {
-          const pubkey = decoded.data as string;
-          const events = await nostrClient.fetchEvents([
+      // Handle fork parameters (from fork creation flow)
+      if (forkParam === 'true' && forkOriginalRepoParam) {
+        isFork = true;
+        forkOriginalRepo = forkOriginalRepoParam;
+        
+        // Pre-fill fork name and description from URL params
+        if (forkNameParam) {
+          repoName = forkNameParam;
+        }
+        if (forkDescriptionParam) {
+          description = forkDescriptionParam;
+        }
+        
+        // Pre-fill clone URLs from URL params
+        if (cloneUrlsParam) {
+          cloneUrls = cloneUrlsParam.split(',').filter(url => url.trim()).length > 0 
+            ? cloneUrlsParam.split(',').filter(url => url.trim())
+            : [''];
+        }
+        
+        // Pre-fill visibility
+        if (visibilityParam && ['public', 'unlisted', 'restricted', 'private'].includes(visibilityParam)) {
+          visibility = visibilityParam as typeof visibility;
+        }
+        
+        // Pre-fill project relays
+        if (projectRelaysParam) {
+          projectRelays = projectRelaysParam.split(',').filter(r => r.trim()).length > 0
+            ? projectRelaysParam.split(',').filter(r => r.trim())
+            : [''];
+        }
+        
+        // Pre-fill earliest commit
+        if (earliestCommitParam) {
+          earliestCommit = earliestCommitParam;
+        }
+        
+        // If localOnly is set, ensure visibility is private
+        if (localOnlyParam === 'true') {
+          visibility = 'private';
+        }
+      } else {
+        // Try to fetch existing announcement to pre-fill other fields (not a fork)
+        try {
+          const decoded = nip19.decode(npubParam);
+          if (decoded.type === 'npub') {
+            const pubkey = decoded.data as string;
+            const events = await nostrClient.fetchEvents([
             {
               kinds: [KIND.REPO_ANNOUNCEMENT],
               authors: [pubkey],
@@ -549,18 +601,19 @@
               cloneUrls = [''];
             }
           }
-        }
-      } catch (err) {
-        console.warn('Failed to pre-fill form from query params:', err);
-        // Still set basic info
-        const gitDomain = $page.data.gitDomain || 'localhost:6543';
-        const isLocalhost = gitDomain.startsWith('localhost') || gitDomain.startsWith('127.0.0.1');
-        
-        // Only add clone URL if not localhost
-        if (!isLocalhost) {
-          cloneUrls = [`https://${gitDomain}/${npubParam}/${repoParam}.git`];
-        } else {
-          cloneUrls = [''];
+          }
+        } catch (err) {
+          console.warn('Failed to pre-fill form from query params:', err);
+          // Still set basic info
+          const gitDomain = $page.data.gitDomain || 'localhost:6543';
+          const isLocalhost = gitDomain.startsWith('localhost') || gitDomain.startsWith('127.0.0.1');
+          
+          // Only add clone URL if not localhost
+          if (!isLocalhost) {
+            cloneUrls = [`https://${gitDomain}/${npubParam}/${repoParam}.git`];
+          } else {
+            cloneUrls = [''];
+          }
         }
       }
     }
@@ -1631,14 +1684,15 @@
       const pubkey = await getPublicKeyWithNIP07();
       const npub = nip19.npubEncode(pubkey);
 
-      // Normalize repo name to d-tag format
-      const dTag = repoName
-        .toLowerCase()
-        .trim()
-        .replace(/[^\w\s-]/g, '')
-        .replace(/\s+/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-+|-+$/g, '');
+      // Normalize repo name to d-tag format (filesystem-safe)
+      // The d-tag is used as the repository identifier and must be filesystem-safe
+      const dTag = sanitizeRepoNameForFilesystem(repoName);
+      
+      if (!dTag || dTag.length === 0) {
+        error = 'Invalid repository name. Please use only alphanumeric characters, hyphens, and dots.';
+        loading = false;
+        return;
+      }
 
       // Get git domain from layout data
       const gitDomain = $page.data.gitDomain || 'localhost:6543';
@@ -2198,6 +2252,65 @@
       console.log('Final relay set for publishing:', userRelays);
       
       console.log('Using relays for publishing:', userRelays);
+
+      // For private visibility, skip publishing to relays - just save to repo
+      // For forks, the repo already exists, so we need to trigger provisioning to save the announcement
+      if (visibility === 'private') {
+        console.log('Private visibility detected - skipping relay publishing. Triggering provisioning to save announcement to repository.');
+        
+        // For forks, the repository already exists, so we need to trigger provisioning
+        // to save the announcement file to the repo
+        // Do this asynchronously (fire-and-forget) to avoid blocking the redirect
+        if (isFork) {
+          const userNpub = nip19.npubEncode(pubkey);
+          console.log(`Triggering provisioning for fork: ${userNpub}/${dTag}`);
+          
+          // Call the clone endpoint to trigger provisioning (it will save the announcement to the existing repo)
+          // Pass the announcement event directly since it's private and not on relays
+          // Do this asynchronously without awaiting to avoid blocking redirect
+          fetch(`/api/repos/${userNpub}/${dTag}/clone`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              announcementEvent: signedEvent // Pass the signed announcement event directly
+            })
+          })
+          .then(cloneResponse => {
+            if (cloneResponse.ok) {
+              console.log('Fork provisioning completed successfully - announcement saved to repository');
+            } else {
+              return cloneResponse.json().catch(() => ({ error: 'Unknown error' })).then(errorData => {
+                console.warn('Fork provisioning had issues (repo may still work):', errorData);
+              });
+            }
+          })
+          .catch(provisionErr => {
+            console.warn('Failed to trigger fork provisioning (repo may still work):', provisionErr);
+            // Continue anyway - the repo exists and can be accessed
+          });
+        }
+        
+        success = true;
+        // Redirect to the newly created repository page
+        const userNpub = nip19.npubEncode(pubkey);
+        
+        // Check if this is a transfer completion (from query params)
+        const urlParams = $page.url.searchParams;
+        const isTransfer = urlParams.get('transfer') === 'true';
+        
+        setTimeout(() => {
+          // Invalidate all caches and redirect
+          if (isTransfer) {
+            // After transfer, redirect to repos page to see updated state
+            goto('/repos', { invalidateAll: true, replaceState: false });
+          } else {
+            goto(`/repos/${userNpub}/${dTag}`, { invalidateAll: true, replaceState: false });
+          }
+        }, 1000);
+        return;
+      }
 
       // Publish announcement file event first (so it's available when server provisions)
       console.log('Publishing announcement file event...');
@@ -3047,3 +3160,30 @@
   </main>
 </div>
 
+<style>
+  /* Ensure the signup page can scroll to the bottom */
+  :global(body) {
+    overflow-y: auto !important;
+    height: auto !important;
+    min-height: 100vh;
+  }
+  
+  :global(html) {
+    overflow-y: auto !important;
+    height: auto !important;
+  }
+  
+  .container {
+    min-height: auto;
+    height: auto;
+    overflow: visible;
+    padding-bottom: 3rem; /* Extra padding at bottom to ensure content is accessible */
+  }
+  
+  .container main {
+    min-height: auto;
+    height: auto;
+    overflow: visible;
+    padding-bottom: 2rem;
+  }
+</style>

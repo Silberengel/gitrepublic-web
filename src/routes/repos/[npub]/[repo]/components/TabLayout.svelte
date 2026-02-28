@@ -72,7 +72,6 @@
   .tab-layout-wrapper {
     display: flex;
     flex-direction: column;
-    height: 100%;
     width: 100%;
     max-width: 100%;
     min-width: 0;
@@ -102,12 +101,12 @@
   .tab-layout {
     display: flex;
     flex: 1;
-    min-height: 0;
     min-width: 0;
     width: 100%;
     max-width: 100%;
     gap: 1rem;
     box-sizing: border-box;
+    min-height: 600px; /* Ensure minimum height so content isn't cut off */
   }
   
   .left-pane {
@@ -116,6 +115,7 @@
     max-width: 400px;
     border-right: 1px solid var(--border-color);
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 1rem;
     box-sizing: border-box;
     background: var(--bg-primary);

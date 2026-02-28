@@ -102,8 +102,19 @@ export class MaintainerService {
       // Ownership is determined by what's checked into the git repository, not Nostr events
       const { nip19 } = await import('nostr-tools');
       const npub = nip19.npubEncode(announcement.pubkey);
-      const { fileManager } = await import('../../services/service-registry.js');
-      const currentOwner = await fileManager.getCurrentOwnerFromRepo(npub, repoId) || announcement.pubkey;
+      let currentOwner = announcement.pubkey; // Default to announcement pubkey
+      try {
+        const { fileManager } = await import('../../services/service-registry.js');
+        const ownerFromRepo = await fileManager.getCurrentOwnerFromRepo(npub, repoId);
+        if (ownerFromRepo) {
+          currentOwner = ownerFromRepo;
+        }
+      } catch (err) {
+        // If repo doesn't exist or can't read owner, use announcement pubkey
+        // This is expected for repos that haven't been cloned yet
+        const logger = await getLogger();
+        logger.debug({ error: err, npub, repoId }, 'Could not get current owner from repo, using announcement pubkey');
+      }
       
       const maintainers: string[] = [currentOwner]; // Current owner is always a maintainer
       const contributors: string[] = []; // Contributors can view but not modify

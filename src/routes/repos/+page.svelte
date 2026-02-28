@@ -217,7 +217,7 @@
 
     loadingMyRepos = true;
     try {
-      // Fetch all repos where user is current owner
+      // Fetch all repos where user is current owner from Nostr
       const ownerRepos = await nostrClient.fetchEvents([
         {
           kinds: [KIND.REPO_ANNOUNCEMENT],
@@ -227,8 +227,9 @@
       ]);
 
       const repos: Array<{ event: NostrEvent; npub: string; repoName: string; transferred?: boolean; currentOwner?: string }> = [];
+      const processedRepos = new Set<string>(); // Track processed repos to avoid duplicates
       
-      // Add repos where user is current owner
+      // Add repos where user is current owner from Nostr
       for (const event of ownerRepos) {
         const dTag = event.tags.find(t => t[0] === 'd')?.[1];
         if (!dTag) continue;
@@ -241,9 +242,43 @@
             repoName: dTag,
             transferred: false
           });
+          processedRepos.add(`${npub}/${dTag}`);
         } catch (err) {
           console.warn('Failed to encode npub for repo:', err);
         }
+      }
+      
+      // Also check filesystem for private repos that weren't published to Nostr
+      try {
+        const gitDomain = $page.data.gitDomain || 'localhost:6543';
+        const localReposResponse = await fetch(`/api/repos/local?domain=${encodeURIComponent(gitDomain)}`, {
+          headers: userPubkeyHex ? {
+            'X-User-Pubkey': userPubkeyHex
+          } : {}
+        });
+        
+        if (localReposResponse.ok) {
+          const localReposData = await localReposResponse.json();
+          const userNpub = nip19.npubEncode(userPubkeyHex);
+          
+          // Filter for repos owned by the user
+          for (const localRepo of localReposData) {
+            if (localRepo.npub === userNpub && localRepo.announcement) {
+              const repoKey = `${localRepo.npub}/${localRepo.repoName}`;
+              if (!processedRepos.has(repoKey)) {
+                repos.push({
+                  event: localRepo.announcement,
+                  npub: localRepo.npub,
+                  repoName: localRepo.repoName,
+                  transferred: false
+                });
+                processedRepos.add(repoKey);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load local repos for my repos:', err);
       }
 
       // Fetch repos that were transferred FROM this user (where they were original owner)

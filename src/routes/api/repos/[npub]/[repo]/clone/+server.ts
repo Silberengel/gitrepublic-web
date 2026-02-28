@@ -51,8 +51,9 @@ export const POST: RequestHandler = async (event) => {
     hasUnlimitedAccess: userLevel ? hasUnlimitedAccess(userLevel.level) : false
   }, 'Checking user access level for clone operation');
   
-  // Extract defaultBranch from request body if present (before body is consumed)
+  // Extract defaultBranch and announcementEvent from request body if present (before body is consumed)
   let preferredDefaultBranch: string | undefined;
+  let providedAnnouncementEvent: NostrEvent | undefined;
   const contentType = event.request.headers.get('content-type') || '';
   if (contentType.includes('application/json')) {
     try {
@@ -66,8 +67,13 @@ export const POST: RequestHandler = async (event) => {
             preferredDefaultBranch = body.defaultBranch;
             logger.debug({ preferredDefaultBranch }, 'Extracted defaultBranch from request body');
           }
+          // Allow passing announcement event directly (useful for private repos not on relays)
+          if (body.announcementEvent && typeof body.announcementEvent === 'object') {
+            providedAnnouncementEvent = body.announcementEvent as NostrEvent;
+            logger.debug({ eventId: providedAnnouncementEvent.id }, 'Extracted announcementEvent from request body');
+          }
         } catch {
-          // Not valid JSON or missing defaultBranch - continue
+          // Not valid JSON or missing fields - continue
         }
       }
     } catch {
@@ -214,8 +220,13 @@ export const POST: RequestHandler = async (event) => {
         isEmpty = true;
       }
       
-      // If repo is empty, we should still try to commit the announcement
-      if (!isEmpty) {
+      // If repo is not empty and we have a provided announcement event (e.g., private fork),
+      // we should still save the announcement to the repo
+      if (!isEmpty && providedAnnouncementEvent) {
+        logger.info({ npub, repo }, 'Repository exists but announcement provided - will save announcement to existing repo');
+        // Continue to save the announcement (don't return early)
+      } else if (!isEmpty && !providedAnnouncementEvent) {
+        // Repo exists and is not empty, and no announcement provided - return early
         return json({ 
           success: true, 
           message: 'Repository already exists locally',
@@ -223,63 +234,80 @@ export const POST: RequestHandler = async (event) => {
         });
       }
       // If empty, continue to fetch announcement and commit it
-      logger.info({ npub, repo }, 'Repository exists but is empty, will commit announcement');
+      if (isEmpty) {
+        logger.info({ npub, repo }, 'Repository exists but is empty, will commit announcement');
+      }
     }
 
-    // Fetch repository announcement (case-insensitive)
-    // Note: Nostr d-tag filters are case-sensitive, so we fetch all announcements by the author
-    // and filter case-insensitively in JavaScript
-    logger.debug({ npub, repo, repoOwnerPubkey: repoOwnerPubkey.slice(0, 16) + '...' }, 'Fetching repository announcement from Nostr (case-insensitive)');
+    // Use provided announcement event if available (e.g., for private repos not on relays)
+    // Otherwise, fetch from Nostr relays
+    let announcementEvent: NostrEvent | null = null;
     
-    let authorAnnouncements: NostrEvent[];
-    try {
-      authorAnnouncements = await fetchRepoAnnouncementsWithCache(nostrClient, repoOwnerPubkey, eventCache);
-      
-      logger.debug({ 
-        npub, 
-        repo, 
-        authorAnnouncementCount: authorAnnouncements.length,
-        eventIds: authorAnnouncements.map(e => e.id)
-      }, 'Fetched repository announcements by author');
-    } catch (err) {
-      logger.error({ 
-        error: err, 
-        npub, 
-        repo, 
-        repoOwnerPubkey: repoOwnerPubkey.slice(0, 16) + '...' 
-      }, 'Error fetching repository announcement from Nostr');
-      throw handleApiError(
-        err instanceof Error ? err : new Error(String(err)),
-        { operation: 'cloneRepo', npub, repo },
-        'Failed to fetch repository announcement from Nostr relays. Please check that the repository exists and the relays are accessible.'
-      );
+    if (providedAnnouncementEvent) {
+      // Validate the provided announcement event
+      const dTag = providedAnnouncementEvent.tags.find(t => t[0] === 'd')?.[1];
+      if (dTag && dTag.toLowerCase() === repo.toLowerCase() && providedAnnouncementEvent.pubkey === repoOwnerPubkey) {
+        announcementEvent = providedAnnouncementEvent;
+        logger.info({ npub, repo, eventId: announcementEvent.id }, 'Using provided announcement event (likely private repo)');
+      } else {
+        logger.warn({ npub, repo, dTag, pubkey: providedAnnouncementEvent.pubkey, expectedPubkey: repoOwnerPubkey }, 'Provided announcement event does not match repo, will fetch from relays');
+      }
     }
-
-    // Find the matching repo announcement (case-insensitive)
-    const announcementEvent = findRepoAnnouncement(authorAnnouncements, repo);
-
+    
+    // If no valid announcement provided, fetch from Nostr relays
     if (!announcementEvent) {
-      const dTags = authorAnnouncements
-        .map(e => e.tags.find(t => t[0] === 'd')?.[1])
-        .filter(Boolean);
+      logger.debug({ npub, repo, repoOwnerPubkey: repoOwnerPubkey.slice(0, 16) + '...' }, 'Fetching repository announcement from Nostr (case-insensitive)');
       
-      logger.warn({ 
-        npub, 
-        repo, 
-        repoOwnerPubkey: repoOwnerPubkey.slice(0, 16) + '...',
-        authorAnnouncementCount: authorAnnouncements.length,
-        authorRepos: dTags,
-        searchedRepo: repo
-      }, 'Repository announcement not found in Nostr (case-insensitive search)');
-      
-      const errorMessage = authorAnnouncements.length > 0
-        ? `Repository announcement not found in Nostr for ${npub}/${repo}. Found ${authorAnnouncements.length} other repository announcement(s) by this author. Please verify the repository name is correct.`
-        : `Repository announcement not found in Nostr for ${npub}/${repo}. Please verify that the repository exists and has been announced on Nostr relays.`;
-      
-      throw handleValidationError(
-        errorMessage,
-        { operation: 'cloneRepo', npub, repo }
-      );
+      let authorAnnouncements: NostrEvent[];
+      try {
+        authorAnnouncements = await fetchRepoAnnouncementsWithCache(nostrClient, repoOwnerPubkey, eventCache);
+        
+        logger.debug({ 
+          npub, 
+          repo, 
+          authorAnnouncementCount: authorAnnouncements.length,
+          eventIds: authorAnnouncements.map(e => e.id)
+        }, 'Fetched repository announcements by author');
+      } catch (err) {
+        logger.error({ 
+          error: err, 
+          npub, 
+          repo, 
+          repoOwnerPubkey: repoOwnerPubkey.slice(0, 16) + '...' 
+        }, 'Error fetching repository announcement from Nostr');
+        throw handleApiError(
+          err instanceof Error ? err : new Error(String(err)),
+          { operation: 'cloneRepo', npub, repo },
+          'Failed to fetch repository announcement from Nostr relays. Please check that the repository exists and the relays are accessible.'
+        );
+      }
+
+      // Find the matching repo announcement (case-insensitive)
+      announcementEvent = findRepoAnnouncement(authorAnnouncements, repo);
+
+      if (!announcementEvent) {
+        const dTags = authorAnnouncements
+          .map(e => e.tags.find(t => t[0] === 'd')?.[1])
+          .filter(Boolean);
+        
+        logger.warn({ 
+          npub, 
+          repo, 
+          repoOwnerPubkey: repoOwnerPubkey.slice(0, 16) + '...',
+          authorAnnouncementCount: authorAnnouncements.length,
+          authorRepos: dTags,
+          searchedRepo: repo
+        }, 'Repository announcement not found in Nostr (case-insensitive search)');
+        
+        const errorMessage = authorAnnouncements.length > 0
+          ? `Repository announcement not found in Nostr for ${npub}/${repo}. Found ${authorAnnouncements.length} other repository announcement(s) by this author. Please verify the repository name is correct.`
+          : `Repository announcement not found in Nostr for ${npub}/${repo}. Please verify that the repository exists and has been announced on Nostr relays.`;
+        
+        throw handleValidationError(
+          errorMessage,
+          { operation: 'cloneRepo', npub, repo }
+        );
+      }
     }
     
     // Extract and log clone URLs for debugging

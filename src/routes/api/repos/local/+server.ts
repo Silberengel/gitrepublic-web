@@ -6,7 +6,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { readdir, stat } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { existsSync } from 'fs';
 import { NostrClient } from '$lib/services/nostr/nostr-client.js';
 import { MaintainerService } from '$lib/services/nostr/maintainer-service.js';
@@ -23,6 +23,94 @@ import { fetchRepoAnnouncementsWithCache, findRepoAnnouncement } from '$lib/util
 
 const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 const maintainerService = new MaintainerService(DEFAULT_NOSTR_RELAYS);
+
+/**
+ * Read announcement from filesystem (nostr/repo-events.jsonl)
+ * Returns null if not found or on error
+ */
+async function readAnnouncementFromFilesystem(npub: string, repoName: string): Promise<NostrEvent | null> {
+  // Guard against client-side execution
+  if (typeof process === 'undefined' || typeof process.env === 'undefined') {
+    return null;
+  }
+  
+  try {
+    const repoPath = join(repoRoot, npub, `${repoName}.git`);
+    if (!existsSync(repoPath)) {
+      return null;
+    }
+    
+    const { simpleGit } = await import('simple-git');
+    const git = simpleGit(repoPath);
+    
+    // Get the most recent commit that modified repo-events.jsonl
+    const logOutput = await git.raw(['log', '--all', '--format=%H', '--reverse', '--', 'nostr/repo-events.jsonl']).catch(() => '');
+    const commitHashes = logOutput.trim().split('\n').filter(Boolean);
+    
+    if (commitHashes.length === 0) {
+      return null;
+    }
+    
+    const mostRecentCommit = commitHashes[commitHashes.length - 1];
+    
+    // Read the file content from git
+    const fileContent = await git.show([`${mostRecentCommit}:nostr/repo-events.jsonl`]).catch(() => null);
+    
+    if (!fileContent) {
+      return null;
+    }
+    
+    // Parse repo-events.jsonl to find the most recent announcement
+    let announcementEvent: NostrEvent | null = null;
+    let latestTimestamp = 0;
+    
+    try {
+      const lines = fileContent.trim().split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === 'announcement' && entry.event && entry.timestamp) {
+            if (entry.timestamp > latestTimestamp) {
+              latestTimestamp = entry.timestamp;
+              announcementEvent = entry.event;
+            }
+          }
+        } catch {
+          continue;
+        }
+      }
+    } catch (parseError) {
+      logger.debug({ error: parseError, npub, repoName }, 'Failed to parse repo-events.jsonl');
+      return null;
+    }
+    
+    if (!announcementEvent) {
+      return null;
+    }
+    
+    // Validate the announcement (case-insensitive repo name matching)
+    const dTag = announcementEvent.tags.find(t => t[0] === 'd')?.[1];
+    
+    // Check if d-tag matches repo name (case-insensitive)
+    if (!dTag || dTag.toLowerCase() !== repoName.toLowerCase()) {
+      logger.debug({ npub, repoName, dTag }, 'Announcement d-tag does not match repo name (case-insensitive)');
+      return null;
+    }
+    
+    const { validateAnnouncementEvent } = await import('$lib/services/nostr/repo-verification.js');
+    const validation = validateAnnouncementEvent(announcementEvent, repoName);
+    
+    if (!validation.valid) {
+      logger.debug({ error: validation.error, npub, repoName }, 'Announcement validation failed');
+      return null;
+    }
+    
+    return announcementEvent;
+  } catch (error) {
+    logger.debug({ error, npub, repoName }, 'Error reading announcement from filesystem');
+    return null;
+  }
+}
 
 // Cache for local repo list (5 minute TTL)
 interface CacheEntry {
@@ -54,9 +142,11 @@ interface LocalRepoItem {
   isRegistered: boolean; // Has this domain in clone URLs
 }
 
-const repoRoot = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
+// Resolve GIT_REPO_ROOT to absolute path (handles both relative and absolute paths)
+const repoRootEnv = typeof process !== 'undefined' && process.env?.GIT_REPO_ROOT
   ? process.env.GIT_REPO_ROOT
   : '/repos';
+const repoRoot = resolve(repoRootEnv);
 
 /**
  * Scan filesystem for local repositories
@@ -197,9 +287,55 @@ async function enrichLocalRepos(
               });
             }
           } else {
-            // No announcement found - only show if user is owner (for security)
-            // For now, skip repos without announcements
-            // In the future, we could allow owners to see their own repos
+            // No announcement found in relays - try reading from filesystem
+            // This is important for private forks that weren't published to relays
+            try {
+              const { fileManager } = await import('$lib/services/service-registry.js');
+              // Read announcement from repo-events.jsonl file
+              const announcementFromRepo = await readAnnouncementFromFilesystem(repo.npub, repo.repoName);
+              
+              if (announcementFromRepo) {
+                // Check if registered (has domain in clone URLs)
+                const cloneUrls = announcementFromRepo.tags
+                  .filter(t => t[0] === 'clone')
+                  .flatMap(t => t.slice(1))
+                  .filter(url => url && typeof url === 'string');
+                
+                const hasDomain = cloneUrls.some(url => url.includes(gitDomain));
+                
+                // Check privacy
+                const isPrivate = announcementFromRepo.tags.some(t => 
+                  (t[0] === 'private' && t[1] === 'true') || 
+                  (t[0] === 't' && t[1] === 'private')
+                );
+                
+                // Check if user can view
+                let canView = false;
+                if (!isPrivate) {
+                  canView = true;
+                } else if (userPubkey) {
+                  try {
+                    canView = await maintainerService.canView(userPubkey, pubkey, repo.repoName);
+                  } catch (err) {
+                    logger.warn({ error: err, pubkey, repo: repo.repoName }, 'Failed to check repo access for filesystem announcement');
+                    canView = false;
+                  }
+                }
+                
+                // Only include repos user can view
+                if (canView) {
+                  enriched.push({
+                    ...repo,
+                    announcement: announcementFromRepo,
+                    isRegistered: hasDomain
+                  });
+                  logger.debug({ npub: repo.npub, repo: repo.repoName }, 'Found announcement in filesystem for local repo');
+                }
+              }
+            } catch (err) {
+              logger.debug({ error: err, npub: repo.npub, repo: repo.repoName }, 'Failed to read announcement from filesystem');
+              // Continue - repo won't be included if no announcement found
+            }
           }
         } catch {
           // Skip invalid repos
@@ -234,10 +370,24 @@ export const GET: RequestHandler = async (event) => {
     }
     
     // Scan filesystem
-    const localRepos = await scanLocalRepos();
+    let localRepos: LocalRepoItem[] = [];
+    try {
+      localRepos = await scanLocalRepos();
+    } catch (scanError) {
+      logger.error({ error: scanError }, 'Failed to scan local repos, returning empty list');
+      // Return empty list instead of failing
+      return json([]);
+    }
     
     // Enrich with announcements and filter by privacy
-    const enriched = await enrichLocalRepos(localRepos, userPubkey, gitDomain);
+    let enriched: LocalRepoItem[] = [];
+    try {
+      enriched = await enrichLocalRepos(localRepos, userPubkey, gitDomain);
+    } catch (enrichError) {
+      logger.error({ error: enrichError }, 'Failed to enrich local repos, returning scanned repos without announcements');
+      // Return repos without announcements rather than failing completely
+      enriched = localRepos;
+    }
     
     // Filter out registered repos (they're in the main list)
     const unregistered = enriched.filter(r => !r.isRegistered);

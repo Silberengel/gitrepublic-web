@@ -2118,3 +2118,40 @@ html[data-theme="light"] .swagger-ui .responses-wrapper pre.microlight {
   background: #0f172a !important; /* Darker slate background for light mode (slate-900) */
   color: #e2e8f0 !important; /* Light text for dark background */
 }
+
+/* Fix scrolling issue on signup page - ensure page can scroll to bottom */
+/* Override any height constraints that might prevent scrolling */
+/* Apply to all screen sizes, not just mobile */
+html {
+  overflow-y: auto !important;
+  height: auto !important;
+  min-height: 100%;
+}
+
+body {
+  overflow-y: auto !important;
+  height: auto !important;
+  min-height: 100vh;
+  position: relative;
+}
+
+/* Ensure container allows full scrolling on all pages */
+.container,
+.container-narrow,
+.container-wide {
+  min-height: auto !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  padding-bottom: 3rem; /* Extra padding at bottom to ensure content is accessible */
+}
+
+.container main,
+.container-narrow main,
+.container-wide main {
+  min-height: auto !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  padding-bottom: 2rem;
+}

@@ -102,10 +102,22 @@
     switch (language) {
       case 'markdown':
         // markdown() already includes syntax highlighting - don't add defaultHighlightStyle
-        return [markdown()];
+        // Wrap in try-catch to handle parser errors gracefully
+        try {
+          return [markdown()];
+        } catch (err) {
+          console.warn('Error initializing markdown parser, falling back to plain text:', err);
+          // Fall back to plain text if markdown parser fails
+          return [];
+        }
       case 'asciidoc':
         // StreamLanguage includes its own highlighting - don't use defaultHighlightStyle with it
-        return [StreamLanguage.define(asciidoc)];
+        try {
+          return [StreamLanguage.define(asciidoc)];
+        } catch (err) {
+          console.warn('Error initializing asciidoc parser, falling back to plain text:', err);
+          return [];
+        }
       default:
         // Plain text - no syntax highlighting needed
         return [];
@@ -156,15 +168,95 @@
   }
 
   onMount(() => {
-    const state = EditorState.create({
-      doc: content,
-      extensions: createExtensions()
-    });
+    // Ensure content is always a string
+    const safeContent = typeof content === 'string' ? content : '';
+    
+    // Create extensions without language first to avoid parser errors during initialization
+    const baseExtensions: Extension[] = [
+      history(),
+      closeBrackets(),
+      autocompletion(),
+      highlightSelectionMatches(),
+      highlightField,
+      EditorView.lineWrapping,
+      keymap.of([
+        ...closeBracketsKeymap,
+        ...defaultKeymap,
+        ...searchKeymap,
+        ...historyKeymap,
+        ...completionKeymap
+      ]),
+      editableCompartment.of(EditorView.editable.of(!readOnly)),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          const newContent = update.state.doc.toString();
+          onChange(newContent);
+        }
+        
+        if (update.selectionSet) {
+          const selection = update.state.selection.main;
+          if (!selection.empty) {
+            const selectedText = update.state.doc.sliceString(selection.from, selection.to);
+            const startLine = update.state.doc.lineAt(selection.from);
+            const endLine = update.state.doc.lineAt(selection.to);
+            
+            onSelection(
+              selectedText,
+              startLine.number,
+              endLine.number,
+              selection.from,
+              selection.to
+            );
+          }
+        }
+      })
+    ];
+    
+    try {
+      // Initialize with base extensions first (no language parser)
+      const state = EditorState.create({
+        doc: safeContent,
+        extensions: baseExtensions
+      });
 
-    editorView = new EditorView({
-      state,
-      parent: editorElement
-    });
+      editorView = new EditorView({
+        state,
+        parent: editorElement
+      });
+      
+      // Now try to add language extension after editor is created
+      // This way if the parser fails, the editor still works
+      try {
+        const langExtensions = getLanguageExtension();
+        if (langExtensions.length > 0) {
+          editorView.dispatch({
+            effects: languageCompartment.reconfigure(langExtensions)
+          });
+        }
+      } catch (langErr) {
+        console.warn('Error adding language extension, using plain text:', langErr);
+        // Editor still works without syntax highlighting
+      }
+    } catch (err) {
+      console.error('Error initializing CodeMirror editor:', err);
+      // Try to initialize with minimal extensions if everything fails
+      try {
+        const state = EditorState.create({
+          doc: safeContent,
+          extensions: [
+            EditorView.lineWrapping,
+            EditorView.editable.of(!readOnly)
+          ]
+        });
+
+        editorView = new EditorView({
+          state,
+          parent: editorElement
+        });
+      } catch (fallbackErr) {
+        console.error('Error initializing CodeMirror editor (fallback):', fallbackErr);
+      }
+    }
 
     return () => {
       editorView?.destroy();
@@ -179,15 +271,21 @@
   $effect(() => {
     if (!editorView) return;
     
-    const currentContent = editorView.state.doc.toString();
-    if (content !== currentContent) {
-      editorView.dispatch({
-        changes: {
-          from: 0,
-          to: editorView.state.doc.length,
-          insert: content
-        }
-      });
+    try {
+      const currentContent = editorView.state.doc.toString();
+      const safeContent = typeof content === 'string' ? content : '';
+      
+      if (safeContent !== currentContent) {
+        editorView.dispatch({
+          changes: {
+            from: 0,
+            to: editorView.state.doc.length,
+            insert: safeContent
+          }
+        });
+      }
+    } catch (err) {
+      console.error('Error updating editor content:', err);
     }
   });
 
@@ -195,9 +293,21 @@
   $effect(() => {
     if (!editorView) return;
     
-    editorView.dispatch({
-      effects: languageCompartment.reconfigure(getLanguageExtension())
-    });
+    try {
+      editorView.dispatch({
+        effects: languageCompartment.reconfigure(getLanguageExtension())
+      });
+    } catch (err) {
+      console.error('Error updating language extension:', err);
+      // Fall back to plain text if language extension fails
+      try {
+        editorView.dispatch({
+          effects: languageCompartment.reconfigure([])
+        });
+      } catch (fallbackErr) {
+        console.error('Error falling back to plain text:', fallbackErr);
+      }
+    }
   });
 
   // Update editable state when readOnly prop changes

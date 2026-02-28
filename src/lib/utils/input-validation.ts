@@ -4,6 +4,54 @@
  */
 
 /**
+ * Sanitize repository name for filesystem use
+ * Converts to lowercase, removes illegal characters, and normalizes
+ */
+export function sanitizeRepoNameForFilesystem(name: string): string {
+  if (!name || typeof name !== 'string') {
+    return '';
+  }
+
+  // Remove leading/trailing whitespace
+  let sanitized = name.trim();
+
+  // Convert to lowercase for filesystem compatibility
+  sanitized = sanitized.toLowerCase();
+
+  // Replace spaces and other illegal characters with hyphens
+  sanitized = sanitized.replace(/[\s_]+/g, '-');
+
+  // Remove any characters that aren't alphanumeric, hyphens, or dots
+  sanitized = sanitized.replace(/[^a-z0-9.-]/g, '');
+
+  // Remove consecutive dots and hyphens
+  sanitized = sanitized.replace(/\.{2,}/g, '.');
+  sanitized = sanitized.replace(/-{2,}/g, '-');
+
+  // Remove leading/trailing dots and hyphens
+  sanitized = sanitized.replace(/^[.-]+|[.-]+$/g, '');
+
+  // Ensure it doesn't start with a number (git convention)
+  if (/^[0-9]/.test(sanitized)) {
+    sanitized = 'repo-' + sanitized;
+  }
+
+  // Ensure minimum length
+  if (sanitized.length === 0) {
+    sanitized = 'repository';
+  }
+
+  // Truncate to max length
+  if (sanitized.length > 100) {
+    sanitized = sanitized.substring(0, 100);
+    // Remove trailing dots/hyphens after truncation
+    sanitized = sanitized.replace(/[.-]+$/, '');
+  }
+
+  return sanitized;
+}
+
+/**
  * Validate and sanitize repository name
  * Repository names should be alphanumeric with hyphens and underscores
  */

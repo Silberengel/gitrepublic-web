@@ -69,13 +69,45 @@ export const load: PageLoad = async ({ params, url, parent }) => {
       });
 
       if (matchingEvents.length === 0) {
-        return {
-          title: `${repo} - Repository Not Found`,
-          description: 'Repository announcement not found'
-        };
+        // Not found in Nostr relays - try reading from filesystem (server-side only)
+        // This is important for private forks that weren't published to relays
+        // Only attempt on server-side using SvelteKit's SSR flag
+        if (import.meta.env.SSR) {
+          try {
+            // Dynamic import to prevent client-side bundling
+            const fsModule = await import('./read-announcement-from-fs.js');
+            const announcementFromRepo = await fsModule.readAnnouncementFromFilesystem(npub, repo, repoOwnerPubkey);
+            if (announcementFromRepo) {
+              announcement = announcementFromRepo;
+            }
+          } catch (err) {
+            // If filesystem read fails, log on server-side but continue
+            // This is expected on client-side, so we silently continue
+            console.debug('Failed to read announcement from filesystem:', err);
+          }
+        }
+        
+        if (!announcement) {
+          return {
+            title: `${repo} - Repository Not Found`,
+            description: 'Repository announcement not found',
+            announcement: null, // Explicitly set to null so component knows it's missing
+            repoNotFound: true // Flag to indicate repo not found
+          };
+        }
+      } else {
+        announcement = matchingEvents[0];
       }
-
-      announcement = matchingEvents[0];
+    }
+    
+    // Ensure announcement exists before proceeding
+    if (!announcement) {
+      return {
+        title: `${repo} - Repository Not Found`,
+        description: 'Repository announcement not found',
+        announcement: null,
+        repoNotFound: true
+      };
     }
     
     // Check privacy - for private repos, we'll let the API endpoints handle access control
@@ -116,7 +148,10 @@ export const load: PageLoad = async ({ params, url, parent }) => {
     console.error('Error loading repository metadata:', error);
     return {
       title: `${repo} - Repository`,
-      description: 'Repository'
+      description: 'Repository',
+      announcement: null, // Explicitly set to null on error
+      repoNotFound: true, // Flag to indicate error
+      error: error instanceof Error ? error.message : 'Unknown error'
     };
   }
 };
