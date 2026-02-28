@@ -171,8 +171,18 @@ export const GET: RequestHandler = async (event) => {
       const relayResult = await relayFetchPromise;
       relayResults = relayResult.filtered;
       allRelayRepos = relayResult.allRepos;
+      logger.debug({ 
+        filteredCount: relayResults.length, 
+        allReposCount: allRelayRepos.length,
+        query: queryTrimmed.substring(0, 50)
+      }, 'Relay fetch completed successfully');
     } catch (err) {
-      logger.debug({ error: err }, 'Failed to get relay results');
+      logger.warn({ 
+        error: err instanceof Error ? err.message : String(err),
+        errorStack: err instanceof Error ? err.stack : undefined,
+        query: queryTrimmed.substring(0, 50),
+        cachedCount: cachedResults.length
+      }, 'Failed to get relay results - will return cached results if available');
     }
     
     // Step 4 & 5: Deduplicate results (cached + relay) using deduplication keys
@@ -250,6 +260,54 @@ export const GET: RequestHandler = async (event) => {
         filteredCount: relayResults.length,
         finalCacheCount: repoMap.size
       }, 'Cache updated with filtered relay results (no unfiltered repos available)');
+    }
+    
+    // If we have no results and cache was empty, try a simple fetch to populate cache
+    if (allResults.size === 0 && cachedRepos.length === 0 && allRelayRepos.length === 0) {
+      logger.info({ query: queryTrimmed.substring(0, 50) }, 'No results found and cache is empty - attempting simple relay fetch to populate cache');
+      try {
+        // Try a simple fetch of recent repo announcements to populate cache
+        const simpleFetch = nostrClient.fetchEvents([{
+          kinds: [KIND.REPO_ANNOUNCEMENT],
+          limit: 100
+        }]).catch(err => {
+          logger.debug({ error: err }, 'Simple cache population fetch failed');
+          return [] as NostrEvent[];
+        });
+        
+        const simpleResults = await Promise.race([
+          simpleFetch,
+          new Promise<NostrEvent[]>((resolve) => {
+            setTimeout(() => {
+              logger.debug({ query: queryTrimmed.substring(0, 50) }, 'Simple cache population fetch timeout (5s)');
+              resolve([]);
+            }, 5000);
+          })
+        ]);
+        
+        if (simpleResults.length > 0) {
+          // Update cache with fetched repos
+          eventCache.set(cacheKey, simpleResults);
+          logger.info({ 
+            fetchedCount: simpleResults.length,
+            query: queryTrimmed.substring(0, 50)
+          }, 'Cache populated with simple fetch - filtering results');
+          
+          // Filter the newly fetched repos
+          const newFiltered = filterRepos(simpleResults, queryTrimmed, queryLower, resolvedPubkey, decodedAddress);
+          
+          // Add to allResults map
+          newFiltered.forEach(r => {
+            const key = getDeduplicationKey(r);
+            const existing = allResults.get(key);
+            if (!existing || r.created_at > existing.created_at) {
+              allResults.set(key, r);
+            }
+          });
+        }
+      } catch (err) {
+        logger.debug({ error: err, query: queryTrimmed.substring(0, 50) }, 'Simple cache population failed');
+      }
     }
     
     const mergedResults = Array.from(allResults.values());
@@ -367,7 +425,11 @@ export const GET: RequestHandler = async (event) => {
       query: queryTrimmed.substring(0, 50),
       resultCount: limitedResults.length,
       totalMatches: mergedResults.length,
-      fromCache
+      cachedCount: cachedResults.length,
+      relayCount: relayResults.length,
+      fromCache,
+      hasCachedRepos: cachedRepos.length > 0,
+      hasRelayRepos: allRelayRepos.length > 0
     }, 'Search completed');
     
     return json({

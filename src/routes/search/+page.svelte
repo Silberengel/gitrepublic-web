@@ -101,26 +101,53 @@
     error = null;
     results = null; // Reset results
 
+    const searchQuery = query.trim();
+    const searchUrl = `/api/search?q=${encodeURIComponent(searchQuery)}`;
+    
+    console.log('[Search] Starting search:', { query: searchQuery, url: searchUrl, hasUserPubkey: !!userPubkeyHex });
+
     try {
       const headers: Record<string, string> = {};
       if (userPubkeyHex) {
         headers['X-User-Pubkey'] = userPubkeyHex;
       }
       
-      const response = await fetch(`/api/search?q=${encodeURIComponent(query.trim())}`, {
+      console.log('[Search] Fetching:', { url: searchUrl, headers });
+      
+      const response = await fetch(searchUrl, {
         headers,
         signal: currentAbortController.signal
       });
       
+      console.log('[Search] Response received:', { 
+        status: response.status, 
+        statusText: response.statusText,
+        ok: response.ok,
+        headers: Object.fromEntries(response.headers.entries())
+      });
+      
       // Check if request was aborted
       if (currentAbortController.signal.aborted) {
+        console.log('[Search] Request was aborted');
         return;
       }
       
       if (response.ok) {
         const data = await response.json();
+        console.log('[Search] Response data:', { 
+          query: data.query,
+          total: data.total,
+          reposCount: data.results?.repos?.length || 0,
+          fromCache: data.fromCache,
+          fullData: data
+        });
+        
         // Verify the response matches our current query (in case of race conditions)
-        if (data.query !== query.trim()) {
+        if (data.query !== searchQuery) {
+          console.warn('[Search] Response query mismatch:', { 
+            expected: searchQuery, 
+            received: data.query 
+          });
           // Response is for a different query, ignore it
           return;
         }
@@ -132,22 +159,50 @@
           repos: Array.isArray(apiResults.repos) ? apiResults.repos : [],
           total: typeof data.total === 'number' ? data.total : (apiResults.repos?.length || 0)
         };
+        
+        console.log('[Search] Search completed successfully:', { 
+          resultCount: results.repos.length,
+          total: results.total
+        });
       } else {
-        const data = await response.json();
-        error = data.error || 'Search failed';
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch {
+          errorData = { error: `HTTP ${response.status}: ${response.statusText}` };
+        }
+        
+        console.error('[Search] Search failed:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorData.error || errorData,
+          fullError: errorData
+        });
+        
+        error = errorData.error || 'Search failed';
         results = null; // Clear results on error
       }
     } catch (err) {
       // Ignore abort errors
       if (err instanceof Error && err.name === 'AbortError') {
+        console.log('[Search] Request was aborted');
         return;
       }
+      
+      console.error('[Search] Search error:', {
+        error: err,
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+        query: searchQuery
+      });
+      
       error = err instanceof Error ? err.message : 'Search failed';
       results = null; // Clear results on error
     } finally {
       // Only update loading state if this is still the current search
       if (currentAbortController === searchAbortController) {
         loading = false;
+        console.log('[Search] Loading state set to false');
       }
     }
   }
