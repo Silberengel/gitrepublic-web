@@ -381,11 +381,18 @@ export function getReferencedEventFromDiscussion(
   event: NostrEvent,
   eventCache: Map<string, NostrEvent>
 ): NostrEvent | undefined {
+  return getReferencedEventWithTagType(event, eventCache)?.event;
+}
+
+export function getReferencedEventWithTagType(
+  event: NostrEvent,
+  eventCache: Map<string, NostrEvent>
+): { event: NostrEvent; tagType: 'e' | 'a' | 'q' } | undefined {
   // Check e-tag
   const eTag = event.tags.find(t => t[0] === 'e' && t[1])?.[1];
   if (eTag) {
     const referenced = eventCache.get(eTag);
-    if (referenced) return referenced;
+    if (referenced) return { event: referenced, tagType: 'e' };
   }
   
   // Check a-tag
@@ -396,18 +403,20 @@ export function getReferencedEventFromDiscussion(
       const kind = parseInt(parts[0]);
       const pubkey = parts[1];
       const dTag = parts[2];
-      return Array.from(eventCache.values()).find(e => 
+      const referenced = Array.from(eventCache.values()).find(e => 
         e.kind === kind && 
         e.pubkey === pubkey && 
         e.tags.find(t => t[0] === 'd' && t[1] === dTag)
       );
+      if (referenced) return { event: referenced, tagType: 'a' };
     }
   }
   
   // Check q-tag
   const qTag = event.tags.find(t => t[0] === 'q' && t[1])?.[1];
   if (qTag) {
-    return eventCache.get(qTag);
+    const referenced = eventCache.get(qTag);
+    if (referenced) return { event: referenced, tagType: 'q' };
   }
   
   return undefined;

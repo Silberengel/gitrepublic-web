@@ -15,6 +15,7 @@
   import { combineRelays } from '$lib/config.js';
   import { KIND, isEphemeralKind, isReplaceableKind } from '$lib/types/nostr.js';
   import { hasUnlimitedAccess } from '$lib/utils/user-access.js';
+  import { eventCache } from '$lib/services/nostr/event-cache.js';
 
   const npub = ($page.params as { npub?: string }).npub || '';
 
@@ -59,6 +60,48 @@
   const getQuotedEvent = (eventId: string): NostrEvent | undefined => {
     return quotedEvents.find(e => e.id === eventId);
   };
+
+  // Helper to get author name from pubkey
+  function getAuthorName(pubkey: string): string {
+    // Try to find profile event in nostrLinkEvents cache
+    // Check both by profile key and by iterating values
+    const profileByKey = nostrLinkEvents.get(`profile:${pubkey}`);
+    let profileEvent = profileByKey || Array.from(nostrLinkEvents.values()).find(
+      e => e.kind === 0 && e.pubkey === pubkey
+    );
+    
+    // If not found in nostrLinkEvents, try global eventCache
+    if (!profileEvent) {
+      try {
+        const cachedProfile = eventCache.getProfile(pubkey);
+        if (cachedProfile) {
+          profileEvent = cachedProfile;
+        }
+      } catch {
+        // eventCache not available, continue
+      }
+    }
+    
+    if (profileEvent) {
+      try {
+        const profile = JSON.parse(profileEvent.content);
+        const name = profile.display_name || profile.name;
+        if (name && name.trim()) return name.trim();
+      } catch {
+        // Try tags if JSON parse fails
+        const nameTag = profileEvent.tags.find(t => t[0] === 'name' || t[0] === 'display_name')?.[1];
+        if (nameTag && nameTag.trim()) return nameTag.trim();
+      }
+    }
+    
+    // Fallback to shortened pubkey
+    try {
+      const npub = nip19.npubEncode(pubkey);
+      return npub.slice(0, 12) + '...';
+    } catch {
+      return pubkey.slice(0, 8) + '...';
+    }
+  }
 
   // Referenced events cache for activity (a-tags and e-tags) - use array for better reactivity
   let referencedEvents = $state<NostrEvent[]>([]);
@@ -163,6 +206,7 @@
     }
 
     // Fetch events
+    const loadedEvents: NostrEvent[] = [];
     if (eventIds.length > 0) {
       try {
         const events = await Promise.race([
@@ -172,6 +216,7 @@
         
         for (const event of events) {
           nostrLinkEvents.set(event.id, event);
+          loadedEvents.push(event);
         }
       } catch {
         // Ignore fetch errors
@@ -194,10 +239,43 @@
             
             if (events.length > 0) {
               nostrLinkEvents.set(events[0].id, events[0]);
+              loadedEvents.push(events[0]);
             }
           } catch {
             // Ignore fetch errors
           }
+        }
+      }
+    }
+
+    // Load profiles for authors of loaded events
+    if (loadedEvents.length > 0) {
+      const authorPubkeys = new Set<string>();
+      for (const event of loadedEvents) {
+        if (event.pubkey) {
+          authorPubkeys.add(event.pubkey);
+        }
+      }
+
+      // Fetch profiles for all authors
+      if (authorPubkeys.size > 0) {
+        try {
+          const profiles = await Promise.race([
+            nostrClient.fetchEvents([{ kinds: [0], authors: Array.from(authorPubkeys), limit: authorPubkeys.size }]),
+            new Promise<NostrEvent[]>((resolve) => setTimeout(() => resolve([]), 10000))
+          ]);
+
+          // Store profiles in cache (use a special key format: `profile:${pubkey}`)
+          for (const profile of profiles) {
+            // Store with a key that includes the pubkey so we can find it
+            nostrLinkEvents.set(`profile:${profile.pubkey}`, profile);
+            // Also store by ID if it has one
+            if (profile.id) {
+              nostrLinkEvents.set(profile.id, profile);
+            }
+          }
+        } catch {
+          // Ignore profile fetch errors
         }
       }
     }
@@ -1925,7 +2003,8 @@ i   *
                       {#if quotedEvent}
                         <div class="quoted-event">
                           <div class="quoted-event-header">
-                            <UserBadge pubkey={quotedEvent.pubkey} disableLink={true} />
+                            <span class="quoted-event-label">Quoting:</span>
+                            <UserBadge pubkey={quotedEvent.pubkey} disableLink={true} inline={true} />
                             <span class="quoted-event-time">{formatMessageTime(quotedEvent.created_at)}</span>
                           </div>
                           <div class="quoted-event-content">{quotedEvent.content || '(No content)'}</div>
@@ -1984,7 +2063,7 @@ i   *
                       {:else if part.type === 'event' && part.event}
                         <div class="nostr-link-event">
                           <div class="nostr-link-event-header">
-                            <UserBadge pubkey={part.event.pubkey} disableLink={true} />
+                            <span class="nostr-link-event-author">{getAuthorName(part.event.pubkey)}</span>
                             <span class="nostr-link-event-time">{formatMessageTime(part.event.created_at)}</span>
                           </div>
                           <div class="nostr-link-event-content">{part.event.content || getEventContext(part.event)}</div>
@@ -2039,13 +2118,22 @@ i   *
                           <div class="zap-amount">{zapData.amount}</div>
                           <div class="zap-details">
                             {#if zapData.senderPubkey}
-                              <span>From <UserBadge pubkey={zapData.senderPubkey} disableLink={true} /></span>
+                              <span class="zap-detail-item">
+                                <span class="zap-detail-label">From</span>
+                                <span class="zap-detail-value">{getAuthorName(zapData.senderPubkey)}</span>
+                              </span>
                             {/if}
                             {#if zapData.recipientPubkey && zapData.recipientPubkey !== profileOwnerPubkeyHex}
-                              <span>To <UserBadge pubkey={zapData.recipientPubkey} disableLink={true} /></span>
+                              <span class="zap-detail-item">
+                                <span class="zap-detail-label">To</span>
+                                <span class="zap-detail-value">{getAuthorName(zapData.recipientPubkey)}</span>
+                              </span>
                             {/if}
                             {#if zapData.eventId}
-                              <span>on event {zapData.eventId.slice(0, 8)}...</span>
+                              <span class="zap-detail-item">
+                                <span class="zap-detail-label">on event</span>
+                                <span class="zap-detail-value">{zapData.eventId.slice(0, 8)}...</span>
+                              </span>
                             {/if}
                             {#if zapData.comment}
                               <div class="zap-comment">{zapData.comment}</div>
@@ -2078,7 +2166,7 @@ i   *
                             {:else if part.type === 'event' && part.event}
                               <div class="nostr-link-event">
                                 <div class="nostr-link-event-header">
-                                  <UserBadge pubkey={part.event.pubkey} disableLink={true} />
+                                  <span class="nostr-link-event-author">{getAuthorName(part.event.pubkey)}</span>
                                   <span class="nostr-link-event-time">{formatMessageTime(part.event.created_at)}</span>
                                 </div>
                                 <div class="nostr-link-event-content">{part.event.content || getEventContext(part.event)}</div>
@@ -2153,7 +2241,7 @@ i   *
                             {:else if part.type === 'event' && part.event}
                               <div class="nostr-link-event">
                                 <div class="nostr-link-event-header">
-                                  <UserBadge pubkey={part.event.pubkey} disableLink={true} />
+                                  <span class="nostr-link-event-author">{getAuthorName(part.event.pubkey)}</span>
                                   <span class="nostr-link-event-time">{formatMessageTime(part.event.created_at)}</span>
                                 </div>
                                 <div class="nostr-link-event-content">{part.event.content || getEventContext(part.event)}</div>
@@ -3038,17 +3126,33 @@ i   *
   .message-icon {
     width: 1.25rem;
     height: 1.25rem;
-    filter: var(--icon-filter, none);
+    filter: var(--icon-filter, brightness(0) saturate(100%) invert(1));
+    opacity: 0.8;
+  }
+
+  :global([data-theme="light"]) .message-icon {
+    filter: brightness(0) saturate(100%);
+    opacity: 0.7;
+  }
+
+  :global([data-theme="dark"]) .message-icon,
+  :global([data-theme="black"]) .message-icon {
+    filter: brightness(0) saturate(100%) invert(1);
+    opacity: 0.8;
+  }
+
+  .message-action-button:hover .message-icon {
+    opacity: 1;
   }
 
   .quoted-event {
-    margin-bottom: 1rem;
-    padding: 0.75rem;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-left: 3px solid var(--accent, #007bff);
-    border-radius: 0.375rem;
-    font-size: 0.875rem;
+    margin-bottom: 0.75rem;
+    padding: 0.5rem;
+    background: var(--bg-secondary, var(--bg-primary));
+    color: var(--text-muted, var(--text-secondary));
+    border-radius: 4px;
+    border-left: 2px solid var(--border-light, var(--border-color));
+    opacity: 0.8;
   }
 
   :global([data-theme="light"]) .quoted-event {
@@ -3069,50 +3173,35 @@ i   *
   .quoted-event-header {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.5rem;
-    flex-wrap: wrap;
+    gap: 0.375rem;
+    margin-bottom: 0.25rem;
+    font-size: 0.75rem;
+    color: var(--text-muted, var(--text-secondary));
+  }
+
+  .quoted-event-label {
+    font-weight: 500;
+    color: var(--text-muted, var(--text-secondary));
   }
 
   .quoted-event-time {
-    font-size: 0.75rem;
-    color: var(--text-muted);
+    color: var(--text-muted, var(--text-secondary));
+    font-size: 0.7rem;
     margin-left: auto;
   }
 
   .quoted-event-content {
-    color: var(--text-secondary);
+    font-size: 0.8rem;
+    color: var(--text-muted, var(--text-secondary));
+    line-height: 1.4;
     white-space: pre-wrap;
     word-wrap: break-word;
     overflow-wrap: break-word;
-    line-height: 1.5;
     max-height: 8rem;
     overflow: hidden;
     position: relative;
   }
 
-  .quoted-event-content::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 2rem;
-    background: linear-gradient(to bottom, transparent, var(--bg-secondary));
-    pointer-events: none;
-  }
-
-  :global([data-theme="light"]) .quoted-event-content::after {
-    background: linear-gradient(to bottom, transparent, #f5f5f5);
-  }
-
-  :global([data-theme="dark"]) .quoted-event-content::after {
-    background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.05));
-  }
-
-  :global([data-theme="black"]) .quoted-event-content::after {
-    background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.03));
-  }
 
   .quoted-event-loading {
     opacity: 0.6;
@@ -3331,27 +3420,39 @@ i   *
 
   .zap-details {
     display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.875rem;
-    color: var(--text-primary);
-    line-height: 1.5;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    font-size: 0.7rem;
+    color: var(--text-muted, var(--text-secondary));
+    line-height: 1.4;
+    margin-top: 0.25rem;
   }
 
-  .zap-details span {
-    display: flex;
+  .zap-detail-item {
+    display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.25rem;
+  }
+
+  .zap-detail-label {
+    color: var(--text-muted, var(--text-secondary));
+    font-weight: 500;
+  }
+
+  .zap-detail-value {
+    color: var(--text-muted, var(--text-secondary));
   }
 
   .zap-comment {
-    margin-top: 0.5rem;
-    padding: 0.75rem;
-    background: var(--bg-secondary);
-    border-radius: 0.5rem;
-    border-left: 2px solid var(--accent);
+    margin-top: 0.375rem;
+    padding: 0.375rem 0.5rem;
+    background: var(--bg-secondary, var(--bg-primary));
+    border-radius: 4px;
+    border-left: 2px solid var(--border-light, var(--border-color));
     font-style: italic;
-    color: var(--text-secondary);
+    font-size: 0.75rem;
+    color: var(--text-muted, var(--text-secondary));
+    opacity: 0.8;
   }
 
   .zap-receipt {
@@ -3509,11 +3610,20 @@ i   *
     align-items: center;
     gap: 0.5rem;
     margin-bottom: 0.5rem;
+    line-height: 1;
+    font-size: 0.75rem;
+    color: var(--text-muted, var(--text-secondary));
+  }
+
+  .nostr-link-event-author {
+    font-weight: 500;
+    color: var(--text-muted, var(--text-secondary));
   }
 
   .nostr-link-event-time {
-    font-size: 0.75rem;
-    color: var(--text-muted);
+    font-size: 0.7rem;
+    color: var(--text-muted, var(--text-secondary));
+    margin-left: auto;
   }
 
   .nostr-link-event-content {

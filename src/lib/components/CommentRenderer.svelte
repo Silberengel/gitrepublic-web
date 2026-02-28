@@ -15,7 +15,7 @@
   import EventCopyButton from '$lib/components/EventCopyButton.svelte';
   import {
     processContentWithNostrLinks,
-    getReferencedEventFromDiscussion,
+    getReferencedEventWithTagType,
     formatDiscussionTime,
     type ProcessedContentPart
   } from '$lib/utils/nostr-links.js';
@@ -42,9 +42,16 @@
     nested = false
   }: Props = $props();
 
-  const referencedEvent = $derived(commentEvent
-    ? getReferencedEventFromDiscussion(commentEvent, eventCache)
+  const referencedEventWithTag = $derived(commentEvent
+    ? getReferencedEventWithTagType(commentEvent, eventCache)
     : undefined);
+  
+  const referencedEvent = $derived(referencedEventWithTag?.event);
+  const referencedTagType = $derived(referencedEventWithTag?.tagType);
+  
+  const referencedLabel = $derived(
+    referencedTagType === 'q' ? 'Quoting:' : 'Reply-To:'
+  );
 
   const contentParts = $derived(processContentWithNostrLinks(comment.content, eventCache, profileCache));
 </script>
@@ -68,7 +75,7 @@
     {#if referencedEvent}
       <div class="referenced-event">
         <div class="referenced-event-header">
-          <span class="referenced-event-label">Replying to:</span>
+          <span class="referenced-event-label">{referencedLabel}</span>
           <UserBadge pubkey={referencedEvent.pubkey} disableLink={true} inline={true} />
           <span class="referenced-event-time">{formatDiscussionTime(referencedEvent.created_at)}</span>
         </div>

@@ -39,6 +39,100 @@
         }
         // Other unhandled rejections will still be logged by the browser
       });
+      
+      // Suppress WebSocket connection errors for nostr relays
+      // These errors occur when relays are down or unreachable, which is expected behavior
+      // SimplePool from nostr-tools will retry connections, causing repeated console errors
+      (function() {
+        // List of known nostr relay URLs to suppress errors for
+        const nostrRelayPatterns = [
+          'wss://orly-relay.imwald.eu',
+          'wss://nostr.sovbit.host',
+          'wss://nostr21.com',
+          'wss://theforest.nostr1.com',
+          'wss://nostr.land',
+          'wss://relay.damus.io',
+          'wss://thecitadel.nostr1.com',
+          'wss://freelay.sovbit.host',
+          'wss://bevos.nostr1.com',
+          'wss://relay.primal.net',
+          'wss://nostr.mom',
+          'wss://relay.snort.social',
+          'wss://aggr.nostr.land'
+        ];
+        
+        // Helper function to check if an error message is a nostr relay connection error
+        function isNostrRelayConnectionError(message) {
+          if (typeof message !== 'string') return false;
+          
+          return nostrRelayPatterns.some(pattern => 
+            message.includes(pattern) && (
+              message.includes('Verbindung') || // German: "connection"
+              message.includes('connection') ||
+              message.includes('kann keine Verbindung') || // German: "cannot establish connection"
+              message.includes('cannot establish') ||
+              message.includes('WebSocket') ||
+              message.includes('wss://') ||
+              message.includes('aufbauen') // German: "establish"
+            )
+          );
+        }
+        
+        // Store original console methods
+        const originalConsoleError = console.error;
+        const originalConsoleWarn = console.warn;
+        
+        // Override console.error to filter out WebSocket connection errors for nostr relays
+        console.error = function(...args) {
+          const message = args.join(' ');
+          
+          // Suppress nostr relay connection errors (they're expected when relays are down)
+          if (isNostrRelayConnectionError(message)) {
+            // Optionally log at debug level instead of error level
+            if (typeof console.debug === 'function') {
+              console.debug('[Nostr Relay] Connection failed (expected):', ...args);
+            }
+            return; // Don't log the error
+          }
+          
+          // For all other errors, use the original console.error
+          originalConsoleError.apply(console, args);
+        };
+        
+        // Also override console.warn for consistency
+        console.warn = function(...args) {
+          const message = args.join(' ');
+          
+          // Suppress nostr relay connection warnings too
+          if (isNostrRelayConnectionError(message)) {
+            if (typeof console.debug === 'function') {
+              console.debug('[Nostr Relay] Connection warning (expected):', ...args);
+            }
+            return;
+          }
+          
+          originalConsoleWarn.apply(console, args);
+        };
+        
+        // Handle window.onerror for global error catching
+        const originalOnError = window.onerror;
+        window.onerror = function(message, source, lineno, colno, error) {
+          const errorMessage = String(message || '');
+          
+          // Suppress nostr relay connection errors
+          if (isNostrRelayConnectionError(errorMessage)) {
+            // Return true to prevent default error handling
+            return true;
+          }
+          
+          // For other errors, call original handler if it exists
+          if (originalOnError) {
+            return originalOnError.call(this, message, source, lineno, colno, error);
+          }
+          
+          return false;
+        };
+      })();
     </script>
     %sveltekit.head%
   </head>
