@@ -51,6 +51,30 @@ export const POST: RequestHandler = async (event) => {
     hasUnlimitedAccess: userLevel ? hasUnlimitedAccess(userLevel.level) : false
   }, 'Checking user access level for clone operation');
   
+  // Extract defaultBranch from request body if present (before body is consumed)
+  let preferredDefaultBranch: string | undefined;
+  const contentType = event.request.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    try {
+      // Clone the request to read body without consuming it
+      const clonedRequest = event.request.clone();
+      const bodyText = await clonedRequest.text().catch(() => '');
+      if (bodyText) {
+        try {
+          const body = JSON.parse(bodyText);
+          if (body.defaultBranch && typeof body.defaultBranch === 'string') {
+            preferredDefaultBranch = body.defaultBranch;
+            logger.debug({ preferredDefaultBranch }, 'Extracted defaultBranch from request body');
+          }
+        } catch {
+          // Not valid JSON or missing defaultBranch - continue
+        }
+      }
+    } catch {
+      // Body reading failed - continue
+    }
+  }
+
   // If cache is empty, try to verify from NIP-98 auth header first (doesn't consume body), then proof event in body
   if (!userLevel || !hasUnlimitedAccess(userLevel.level)) {
     let verification: { valid: boolean; error?: string; relay?: string; relayDown?: boolean } | null = null;
@@ -66,7 +90,6 @@ export const POST: RequestHandler = async (event) => {
     // If auth header didn't work, try to get proof event from request body (if content-type is JSON)
     // Note: This consumes the body, but only if auth header is not present
     if (!verification) {
-      const contentType = event.request.headers.get('content-type') || '';
       if (contentType.includes('application/json')) {
         try {
           // Read body only if auth header verification failed
@@ -84,6 +107,10 @@ export const POST: RequestHandler = async (event) => {
                 } else {
                   logger.warn({ userPubkeyHex: userPubkeyHex.slice(0, 16) + '...' }, 'Invalid proof event in request body');
                 }
+              }
+              // Also extract defaultBranch if not already extracted
+              if (!preferredDefaultBranch && body.defaultBranch && typeof body.defaultBranch === 'string') {
+                preferredDefaultBranch = body.defaultBranch;
               }
             } catch (parseErr) {
               // Not valid JSON or missing proofEvent - continue
@@ -276,7 +303,7 @@ export const POST: RequestHandler = async (event) => {
     }, 'Repository announcement clone URLs');
 
     // Attempt to clone the repository
-    const result = await repoManager.fetchRepoOnDemand(npub, repo, announcementEvent);
+    const result = await repoManager.fetchRepoOnDemand(npub, repo, announcementEvent, preferredDefaultBranch);
 
     if (!result.success) {
       if (result.needsAnnouncement) {

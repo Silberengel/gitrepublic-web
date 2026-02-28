@@ -193,10 +193,26 @@ export async function cloneRepository(
       logger.debug({ error: proofErr }, '[Clone] Failed to create proof event, will rely on cache');
     }
 
-    // Send clone request with proof event in body (if available)
-    const requestBody: { proofEvent?: NostrEvent } = {};
+    // Get user's default branch preference from settings
+    let defaultBranch: string | undefined;
+    try {
+      const { settingsStore } = await import('$lib/services/settings-store.js');
+      const settings = await settingsStore.getSettings();
+      if (settings.defaultBranch) {
+        defaultBranch = settings.defaultBranch;
+        logger.debug({ defaultBranch }, '[Clone] Using default branch from user settings');
+      }
+    } catch (settingsErr) {
+      logger.debug({ error: settingsErr }, '[Clone] Failed to get default branch from settings');
+    }
+
+    // Send clone request with proof event and defaultBranch in body (if available)
+    const requestBody: { proofEvent?: NostrEvent; defaultBranch?: string } = {};
     if (proofEvent) {
       requestBody.proofEvent = proofEvent;
+    }
+    if (defaultBranch) {
+      requestBody.defaultBranch = defaultBranch;
     }
     
     const data = await apiPost<{ alreadyExists?: boolean }>(`/api/repos/${state.npub}/${state.repo}/clone`, requestBody);

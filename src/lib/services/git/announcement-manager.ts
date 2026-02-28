@@ -190,7 +190,7 @@ export class AnnouncementManager {
    * Ensure announcement event is saved to nostr/repo-events.jsonl in the repository
    * Only saves if not already present (avoids redundant entries)
    */
-  async ensureAnnouncementInRepo(repoPath: string, event: NostrEvent, selfTransferEvent?: NostrEvent): Promise<void> {
+  async ensureAnnouncementInRepo(repoPath: string, event: NostrEvent, selfTransferEvent?: NostrEvent, preferredDefaultBranch?: string): Promise<void> {
     let isEmpty = false;
     try {
       // Create a temporary working directory
@@ -218,8 +218,8 @@ export class AnnouncementManager {
       
       if (isEmpty) {
         // Repo is empty - initialize worktree and create initial branch
-        // Use default branch from environment or try 'main' first, then 'master'
-        const defaultBranch = process.env.DEFAULT_BRANCH || 'main';
+        // Use preferred branch, then environment, then try 'main' first, then 'master'
+        const defaultBranch = preferredDefaultBranch || process.env.DEFAULT_BRANCH || 'main';
         
         // Initialize git in workdir
         workGit = simpleGit(workDir);
@@ -233,6 +233,45 @@ export class AnnouncementManager {
         await git.clone(repoPath, workDir);
         // Create workGit instance after clone
         workGit = simpleGit(workDir);
+        
+        // Determine the correct default branch to commit to
+        let targetBranch = preferredDefaultBranch || process.env.DEFAULT_BRANCH || 'main';
+        
+        // Check if the preferred branch exists, if not try to find the actual default branch
+        try {
+          const branches = await workGit.branch(['-a']);
+          const branchList = branches.all
+            .map(b => b.replace(/^remotes\/origin\//, '').replace(/^remotes\//, '').replace(/^refs\/heads\//, ''))
+            .filter(b => b && !b.includes('HEAD'));
+          
+          // If preferred branch exists, use it; otherwise try main/master, then first branch
+          if (preferredDefaultBranch && branchList.includes(preferredDefaultBranch)) {
+            targetBranch = preferredDefaultBranch;
+          } else if (branchList.includes('main')) {
+            targetBranch = 'main';
+          } else if (branchList.includes('master')) {
+            targetBranch = 'master';
+          } else if (branchList.length > 0) {
+            targetBranch = branchList[0];
+          }
+          
+          // Checkout the target branch
+          try {
+            await workGit.checkout(targetBranch);
+            logger.debug({ repoPath, targetBranch }, 'Checked out target branch for announcement commit');
+          } catch (checkoutErr) {
+            // If checkout fails, try to create the branch
+            logger.debug({ repoPath, targetBranch, error: checkoutErr }, 'Failed to checkout branch, will try to create it');
+            try {
+              await workGit.checkout(['-b', targetBranch]);
+              logger.debug({ repoPath, targetBranch }, 'Created and checked out new branch for announcement commit');
+            } catch (createErr) {
+              logger.warn({ repoPath, targetBranch, error: createErr }, 'Failed to create branch, will commit to current branch');
+            }
+          }
+        } catch (branchErr) {
+          logger.warn({ repoPath, error: branchErr }, 'Failed to determine or checkout branch, will commit to current branch');
+        }
       }
 
       // Check if announcement already exists in nostr/repo-events.jsonl
@@ -316,8 +355,8 @@ export class AnnouncementManager {
         logger.info({ repoPath, commitHash, objectCount: objectEntries.length }, 'Objects verified after commit');
 
         // Push back to bare repo
-        // Use default branch from environment or try 'main' first, then 'master'
-        const defaultBranch = process.env.DEFAULT_BRANCH || 'main';
+        // Use preferred branch, then environment, then try 'main' first, then 'master'
+        const defaultBranch = preferredDefaultBranch || process.env.DEFAULT_BRANCH || 'main';
         
         if (isEmpty) {
           // For empty repos, directly copy objects and update refs (more reliable than push)

@@ -71,8 +71,9 @@ export class RepoManager {
    * @param selfTransferEvent - Optional self-transfer event to include in initial commit
    * @param isExistingRepo - Whether this is an existing repo being added to the server
    * @param allowMissingDomainUrl - In development, allow provisioning even if domain URL isn't in announcement
+   * @param preferredDefaultBranch - Preferred default branch name (e.g., from user settings)
    */
-  async provisionRepo(event: NostrEvent, selfTransferEvent?: NostrEvent, isExistingRepo: boolean = false, allowMissingDomainUrl: boolean = false): Promise<void> {
+  async provisionRepo(event: NostrEvent, selfTransferEvent?: NostrEvent, isExistingRepo: boolean = false, allowMissingDomainUrl: boolean = false, preferredDefaultBranch?: string): Promise<void> {
     const cloneUrls = this.urlParser.extractCloneUrls(event);
     let domainUrl = cloneUrls.find(url => url.includes(this.domain));
     
@@ -161,16 +162,22 @@ export class RepoManager {
       
       if (!hasBranches) {
         // No branches exist - create initial branch and README (which includes announcement)
-        await this.createInitialBranchAndReadme(repoPath.fullPath, repoPath.npub, repoPath.repoName, event);
+        await this.createInitialBranchAndReadme(repoPath.fullPath, repoPath.npub, repoPath.repoName, event, preferredDefaultBranch);
       } else {
-        // Branches exist (from sync) - ensure announcement is committed to the default branch
+        // Branches exist (from sync) - ensure README exists and announcement is committed to the default branch
+        // Check if README exists, and create it if missing
+        await this.ensureReadmeExists(repoPath.fullPath, repoPath.npub, repoPath.repoName, event, preferredDefaultBranch);
+        
+        // Ensure announcement is committed to the default branch
         // This must happen after syncing so we can commit it to the existing default branch
-        // Non-blocking: fire and forget - we have the announcement from relays, so this is just for offline papertrail
-        this.announcementManager.ensureAnnouncementInRepo(repoPath.fullPath, event, selfTransferEvent)
-          .catch((err) => {
-            logger.warn({ error: err, repoPath: repoPath.fullPath, eventId: event.id }, 
-              'Failed to save announcement to repo (non-blocking, announcement available from relays)');
-          });
+        // Make it blocking so the commit is complete before returning
+        try {
+          await this.announcementManager.ensureAnnouncementInRepo(repoPath.fullPath, event, selfTransferEvent, preferredDefaultBranch);
+          logger.info({ repoPath: repoPath.fullPath, eventId: event.id }, 'Announcement committed to repository');
+        } catch (err) {
+          logger.warn({ error: err, repoPath: repoPath.fullPath, eventId: event.id }, 
+            'Failed to save announcement to repo (announcement available from relays)');
+        }
       }
     } else {
       // For existing repos, check if announcement exists in repo
@@ -204,12 +211,13 @@ export class RepoManager {
     repoPath: string,
     npub: string,
     repoName: string,
-    announcementEvent: NostrEvent
+    announcementEvent: NostrEvent,
+    preferredDefaultBranch?: string
   ): Promise<void> {
     try {
-      // Get default branch from git config, environment, or use 'master'
-      // Check git's init.defaultBranch config first (respects user's git settings)
-      let defaultBranch = process.env.DEFAULT_BRANCH || 'master';
+      // Get default branch from preferred branch, git config, environment, or use 'master'
+      // Check preferred branch first (from user settings), then git's init.defaultBranch config
+      let defaultBranch = preferredDefaultBranch || process.env.DEFAULT_BRANCH || 'master';
       
       try {
         const git = simpleGit();
@@ -233,17 +241,24 @@ export class RepoManager {
         
         // If branches exist, check if one matches our default branch preference
         if (existingBranches.length > 0) {
-          // Prefer existing branches that match common defaults
-          const preferredBranches = [defaultBranch, 'main', 'master', 'dev'];
-          for (const preferred of preferredBranches) {
-            if (existingBranches.includes(preferred)) {
-              defaultBranch = preferred;
-              break;
+          // If we have a preferred branch and it exists, use it
+          if (preferredDefaultBranch && existingBranches.includes(preferredDefaultBranch)) {
+            defaultBranch = preferredDefaultBranch;
+          } else {
+            // Prefer existing branches that match common defaults, prioritizing preferred branch
+            const preferredBranches = preferredDefaultBranch 
+              ? [preferredDefaultBranch, defaultBranch, 'main', 'master', 'dev']
+              : [defaultBranch, 'main', 'master', 'dev'];
+            for (const preferred of preferredBranches) {
+              if (existingBranches.includes(preferred)) {
+                defaultBranch = preferred;
+                break;
+              }
             }
-          }
-          // If no match, use the first existing branch
-          if (!existingBranches.includes(defaultBranch)) {
-            defaultBranch = existingBranches[0];
+            // If no match, use the first existing branch
+            if (!existingBranches.includes(defaultBranch)) {
+              defaultBranch = existingBranches[0];
+            }
           }
         }
       } catch {
@@ -338,6 +353,130 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
   }
 
   /**
+   * Ensure README.md exists in the repository, creating it if missing
+   * This is called when branches exist from sync but README might be missing
+   */
+  private async ensureReadmeExists(
+    repoPath: string,
+    npub: string,
+    repoName: string,
+    announcementEvent: NostrEvent,
+    preferredDefaultBranch?: string
+  ): Promise<void> {
+    try {
+      // Get default branch
+      const { FileManager } = await import('./file-manager.js');
+      const fileManager = new FileManager(this.repoRoot);
+      let defaultBranch = preferredDefaultBranch;
+      
+      if (!defaultBranch) {
+        try {
+          defaultBranch = await fileManager.getDefaultBranch(npub, repoName);
+        } catch {
+          // If getDefaultBranch fails, try to determine from git
+          const repoGit = simpleGit(repoPath);
+          try {
+            const branches = await repoGit.branch(['-a']);
+            const branchList = branches.all
+              .map(b => b.replace(/^remotes\/origin\//, '').replace(/^remotes\//, '').replace(/^refs\/heads\//, ''))
+              .filter(b => b && !b.includes('HEAD'));
+            if (branchList.length > 0) {
+              // Prefer preferred branch, then main, then master, then first branch
+              if (preferredDefaultBranch && branchList.includes(preferredDefaultBranch)) {
+                defaultBranch = preferredDefaultBranch;
+              } else if (branchList.includes('main')) {
+                defaultBranch = 'main';
+              } else if (branchList.includes('master')) {
+                defaultBranch = 'master';
+              } else {
+                defaultBranch = branchList[0];
+              }
+            }
+          } catch {
+            defaultBranch = preferredDefaultBranch || process.env.DEFAULT_BRANCH || 'master';
+          }
+        }
+      }
+
+      if (!defaultBranch) {
+        defaultBranch = preferredDefaultBranch || process.env.DEFAULT_BRANCH || 'master';
+      }
+
+      // Check if README.md already exists
+      const workDir = await fileManager.getWorktree(repoPath, defaultBranch, npub, repoName);
+      const { readFile: readFileFs, writeFile: writeFileFs } = await import('fs/promises');
+      const { join } = await import('path');
+      const readmePath = join(workDir, 'README.md');
+      
+      try {
+        await readFileFs(readmePath, 'utf-8');
+        // README exists, nothing to do
+        await fileManager.removeWorktree(repoPath, workDir);
+        logger.debug({ npub, repoName, branch: defaultBranch }, 'README.md already exists');
+        return;
+      } catch {
+        // README doesn't exist, create it
+      }
+
+      // Get repo name from d-tag or use repoName from path
+      const dTag = announcementEvent.tags.find(t => t[0] === 'd')?.[1] || repoName;
+      
+      // Get name tag for README title, fallback to d-tag
+      const nameTag = announcementEvent.tags.find(t => t[0] === 'name')?.[1] || dTag;
+      
+      // Get author info from user profile (fetch from relays)
+      const { fetchUserProfile, extractProfileData, getUserName, getUserEmail } = await import('../../utils/user-profile.js');
+      const { nip19 } = await import('nostr-tools');
+      const { DEFAULT_NOSTR_RELAYS } = await import('../../config.js');
+      const userNpub = nip19.npubEncode(announcementEvent.pubkey);
+      
+      const profileEvent = await fetchUserProfile(announcementEvent.pubkey, DEFAULT_NOSTR_RELAYS);
+      const profile = extractProfileData(profileEvent);
+      const authorName = getUserName(profile, announcementEvent.pubkey, userNpub);
+      const authorEmail = getUserEmail(profile, announcementEvent.pubkey, userNpub);
+      
+      // Create README.md content
+      const readmeContent = `# ${nameTag}
+
+Welcome to your new GitRepublic repo.
+
+You can use this read-me file to explain the purpose of this repo to everyone who looks at it. You can also make a ReadMe.adoc file and delete this one, if you prefer. GitRepublic supports both markups.
+
+Your commits will all be signed by your Nostr keys and saved to the event files in the ./nostr folder.
+`;
+      
+      // Write README.md
+      await writeFileFs(readmePath, readmeContent, 'utf-8');
+      
+      // Stage and commit README.md
+      const workGit = simpleGit(workDir);
+      await workGit.add('README.md');
+      
+      // Configure git user.name and user.email for this repository
+      try {
+        await workGit.addConfig('user.name', 'GitRepublic', false, 'local');
+        await workGit.addConfig('user.email', 'gitrepublic@gitrepublic.web', false, 'local');
+      } catch (configError) {
+        logger.warn({ repoPath, npub, repoName, error: configError }, 'Failed to set git config');
+      }
+      
+      // Commit README.md
+      await workGit.commit('Add README.md', ['README.md'], {
+        '--author': `${authorName} <${authorEmail}>`
+      });
+      
+      // Clean up worktree
+      await fileManager.removeWorktree(repoPath, workDir);
+      
+      logger.info({ npub, repoName, branch: defaultBranch }, 'Created README.md in existing repository');
+    } catch (err) {
+      // Log but don't fail - README creation is nice-to-have
+      const sanitizedErr = sanitizeError(err);
+      logger.warn({ error: sanitizedErr, repoPath, npub, repoName }, 'Failed to ensure README exists, continuing anyway');
+    }
+  }
+
+  /**
    * Sync repository from multiple remote URLs (parallelized for efficiency)
    */
   async syncFromRemotes(repoPath: string, remoteUrls: string[]): Promise<void> {
@@ -370,7 +509,8 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
   async fetchRepoOnDemand(
     npub: string,
     repoName: string,
-    announcementEvent?: NostrEvent
+    announcementEvent?: NostrEvent,
+    preferredDefaultBranch?: string
   ): Promise<{ success: boolean; needsAnnouncement?: boolean; announcement?: NostrEvent; error?: string; cloneUrls?: string[]; remoteUrls?: string[] }> {
     const repoPath = join(this.repoRoot, npub, `${repoName}.git`);
     
@@ -518,7 +658,7 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         // No remote URLs - this is an empty repo, provision it instead
         logger.info({ npub, repoName, cloneUrls, announcementEventId: announcementEvent.id }, 'No remote clone URLs found - provisioning empty repository');
         try {
-          await this.provisionRepo(announcementEvent, undefined, false);
+          await this.provisionRepo(announcementEvent, undefined, false, false, preferredDefaultBranch);
           logger.info({ npub, repoName }, 'Empty repository provisioned successfully');
           return { success: true, cloneUrls, remoteUrls: [] };
         } catch (err) {
@@ -539,7 +679,7 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
           logger.info({ npub, repoName, url: remoteUrls[0] }, 'Localhost URL specified but repo does not exist locally - provisioning instead');
           try {
             // In development, allow provisioning even if domain URL isn't in announcement
-            await this.provisionRepo(announcementEvent, undefined, false, true);
+            await this.provisionRepo(announcementEvent, undefined, false, true, preferredDefaultBranch);
             logger.info({ npub, repoName }, 'Repository provisioned successfully on localhost');
             return { success: true, cloneUrls, remoteUrls: [] };
           } catch (err) {
