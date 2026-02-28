@@ -68,7 +68,8 @@
     {#if referencedEvent}
       <div class="referenced-event">
         <div class="referenced-event-header">
-          <UserBadge pubkey={referencedEvent.pubkey} disableLink={true} />
+          <span class="referenced-event-label">Replying to:</span>
+          <UserBadge pubkey={referencedEvent.pubkey} disableLink={true} inline={true} />
           <span class="referenced-event-time">{formatDiscussionTime(referencedEvent.created_at)}</span>
         </div>
         <div class="referenced-event-content">{referencedEvent.content || '(No content)'}</div>
@@ -169,26 +170,35 @@
     margin-bottom: 0.75rem;
     padding: 0.5rem;
     background: var(--bg-secondary, var(--bg-primary));
-    color: var(--text-primary);
+    color: var(--text-muted, var(--text-secondary));
     border-radius: 4px;
-    border-left: 2px solid var(--border-color);
+    border-left: 2px solid var(--border-light, var(--border-color));
+    opacity: 0.8;
   }
 
   .referenced-event-header {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.375rem;
     margin-bottom: 0.25rem;
-    font-size: 0.875rem;
+    font-size: 0.75rem;
+    color: var(--text-muted, var(--text-secondary));
+  }
+
+  .referenced-event-label {
+    font-weight: 500;
+    color: var(--text-muted, var(--text-secondary));
   }
 
   .referenced-event-time {
-    color: var(--text-secondary);
+    color: var(--text-muted, var(--text-secondary));
+    font-size: 0.7rem;
   }
 
   .referenced-event-content {
-    font-size: 0.9rem;
-    color: var(--text-primary);
+    font-size: 0.8rem;
+    color: var(--text-muted, var(--text-secondary));
+    line-height: 1.4;
   }
 
   .nostr-link-event {
