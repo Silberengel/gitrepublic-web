@@ -10,7 +10,7 @@
  */
 
 import { existsSync, mkdirSync, accessSync, constants } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { spawn } from 'child_process';
 import type { NostrEvent } from '../../types/nostr.js';
 import { GIT_DOMAIN } from '../../config.js';
@@ -213,6 +213,11 @@ export class RepoManager {
     announcementEvent: NostrEvent,
     preferredDefaultBranch?: string
   ): Promise<void> {
+    // Declare variables outside try block so they're accessible in finally
+    const { FileManager } = await import('./file-manager.js');
+    const fileManager = new FileManager(this.repoRoot);
+    let workDir: string | undefined;
+    
     try {
       // Get default branch from preferred branch, git config, environment, or use 'master'
       // Check preferred branch first (from user settings), then git's init.defaultBranch config
@@ -291,22 +296,56 @@ You can use this read-me file to explain the purpose of this repo to everyone wh
 Your commits will all be signed by your Nostr keys and saved to the event files in the ./nostr folder.
 `;
       
-      // Use FileManager to create the initial branch and files
-      const { FileManager } = await import('./file-manager.js');
-      const fileManager = new FileManager(this.repoRoot);
-      
-      // If no branches exist, create an orphan branch
-      // We already checked for existing branches above, so if existingBranches is empty, create one
-      if (existingBranches.length === 0) {
-        // Create orphan branch first (pass undefined for fromBranch to create orphan)
-        await fileManager.createBranch(npub, repoName, defaultBranch, undefined);
-      }
-      
-      // Create both README.md and announcement in the initial commit
+      // Create both README.md and announcement in a single initial commit
       // We'll use a worktree to write both files and commit them together
-      const workDir = await fileManager.getWorktree(repoPath, defaultBranch, npub, repoName);
-      const { writeFile: writeFileFs } = await import('fs/promises');
+      // If no branches exist, we'll create an orphan branch directly in the worktree
+      logger.info({ npub, repoName, defaultBranch }, 'Creating worktree for initial commit');
+      
+      const { writeFile: writeFileFs, mkdir: mkdirFs } = await import('fs/promises');
       const { join } = await import('path');
+      const { spawn } = await import('child_process');
+      
+      if (existingBranches.length === 0) {
+        // No branches exist - create worktree with orphan branch
+        // We need to create the worktree manually with --orphan flag
+        logger.info({ npub, repoName, defaultBranch }, 'No branches exist, creating orphan branch in worktree');
+        
+        // Create a temporary worktree directory
+        // Use absolute path to ensure git worktree can find it
+        const worktreeBase = resolve(this.repoRoot, 'worktrees', npub, repoName);
+        await mkdirFs(worktreeBase, { recursive: true });
+        workDir = resolve(worktreeBase, `worktree-${Date.now()}`);
+        
+        // Create worktree with orphan branch
+        // Note: --orphan requires -b flag to specify the branch name
+        // git worktree add requires an absolute path
+        await new Promise<void>((resolvePromise, reject) => {
+          const proc = spawn('git', ['worktree', 'add', '--orphan', '-b', defaultBranch, workDir!], {
+            cwd: repoPath,
+            stdio: ['ignore', 'pipe', 'pipe']
+          });
+          
+          let stdout = '';
+          let stderr = '';
+          proc.stdout?.on('data', (data: Buffer) => { stdout += data.toString(); });
+          proc.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
+          
+          proc.on('close', (code: number | null) => {
+            if (code === 0) {
+              resolvePromise();
+            } else {
+              reject(new Error(`git worktree add --orphan failed with code ${code}: ${stderr || stdout}`));
+            }
+          });
+          proc.on('error', reject);
+        });
+        
+        logger.info({ npub, repoName, defaultBranch, workDir }, 'Orphan branch worktree created successfully');
+      } else {
+        // Branch exists - use normal worktree
+        workDir = await fileManager.getWorktree(repoPath, defaultBranch, npub, repoName);
+        logger.info({ npub, repoName, defaultBranch, workDir }, 'Worktree created successfully');
+      }
       
       // Write README.md
       const readmePath = join(workDir, 'README.md');
@@ -335,19 +374,35 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         logger.warn({ repoPath, npub, repoName, error: configError }, 'Failed to set git config, commit may fail');
       }
       
-      // Commit files together
-      await workGit.commit('Initial commit', filesToAdd, {
+      // Commit files together with "Initial commit to GitRepublic" message
+      // This will be the first and only commit on the branch
+      await workGit.commit('Initial commit to GitRepublic', filesToAdd, {
         '--author': `${authorName} <${authorEmail}>`
       });
       
-      // Clean up worktree
-      await fileManager.removeWorktree(repoPath, workDir);
-      
       logger.info({ npub, repoName, branch: defaultBranch }, 'Created initial branch and README.md');
     } catch (err) {
-      // Log but don't fail - initial README creation is nice-to-have
+      // This is a critical error - we need the initial branch and commit for the repo to be usable
       const sanitizedErr = sanitizeError(err);
-      logger.warn({ error: sanitizedErr, repoPath, npub, repoName }, 'Failed to create initial branch and README, continuing anyway');
+      logger.error({ 
+        error: sanitizedErr, 
+        repoPath, 
+        npub, 
+        repoName,
+        errorMessage: err instanceof Error ? err.message : String(err),
+        errorStack: err instanceof Error ? err.stack : undefined
+      }, 'CRITICAL: Failed to create initial branch and README - repository will be empty');
+      // Re-throw so caller can handle it appropriately
+      throw err;
+    } finally {
+      // Clean up worktree (always, even on error)
+      if (workDir) {
+        try {
+          await fileManager.removeWorktree(repoPath, workDir);
+        } catch (cleanupErr) {
+          logger.warn({ error: cleanupErr, workDir, repoPath }, 'Failed to clean up worktree (non-critical)');
+        }
+      }
     }
   }
 
@@ -513,34 +568,70 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
   ): Promise<{ success: boolean; needsAnnouncement?: boolean; announcement?: NostrEvent; error?: string; cloneUrls?: string[]; remoteUrls?: string[] }> {
     const repoPath = join(this.repoRoot, npub, `${repoName}.git`);
     
-    // If repo already exists, check if it has an announcement
+    // If repo already exists, check if it has commits (not just the directory)
     if (existsSync(repoPath)) {
-      const hasAnnouncement = await this.announcementManager.hasAnnouncementInRepoFile(repoPath);
-      if (hasAnnouncement) {
-        return { success: true };
+      try {
+        const git = simpleGit(repoPath);
+        // Check if repo has any commits
+        const commitCountStr = await git.raw(['rev-list', '--count', '--all']).catch(() => '0');
+        const commitCount = parseInt(commitCountStr.trim(), 10);
+        const hasCommits = !isNaN(commitCount) && commitCount > 0;
+        
+        if (hasCommits) {
+          // Repo has commits, check if it has an announcement
+          const hasAnnouncement = await this.announcementManager.hasAnnouncementInRepoFile(repoPath);
+          if (hasAnnouncement) {
+            return { success: true };
+          }
+          
+          // Repo has commits but no announcement - use provided announcement or try to fetch from relays
+          let announcementToUse: NostrEvent | null | undefined = announcementEvent;
+          if (!announcementToUse) {
+            const { requireNpubHex: requireNpubHexUtil } = await import('../../utils/npub-utils.js');
+            const repoOwnerPubkey = requireNpubHexUtil(npub);
+            announcementToUse = await this.announcementManager.fetchAnnouncementFromRelays(repoOwnerPubkey, repoName);
+          }
+          
+          if (announcementToUse) {
+            // Save announcement to repo asynchronously (non-blocking)
+            this.announcementManager.ensureAnnouncementInRepo(repoPath, announcementToUse)
+              .catch((err) => {
+                logger.warn({ error: err, repoPath, eventId: announcementToUse?.id }, 
+                  'Failed to save announcement to repo (non-blocking, announcement available from relays)');
+              });
+            return { success: true, announcement: announcementToUse };
+          }
+          
+          // Repo has commits but no announcement found - needs announcement
+          return { success: false, needsAnnouncement: true };
+        } else {
+          // Repo exists but is empty - remove it so we can clone fresh
+          logger.info({ npub, repoName }, 'Repository exists but is empty, removing to clone fresh');
+          try {
+            const { rmSync } = await import('fs');
+            rmSync(repoPath, { recursive: true, force: true });
+            logger.info({ npub, repoName }, 'Removed empty repository directory');
+          } catch (rmErr) {
+            logger.warn({ error: rmErr, npub, repoName }, 'Failed to remove empty repository, will try to fetch into it');
+            // Continue - might be able to fetch into existing empty repo
+          }
+          // Fall through to fetch from remotes below
+        }
+      } catch (err) {
+        // Error checking commits - assume empty and try to fetch
+        logger.warn({ error: err, npub, repoName }, 'Error checking if repo has commits, will try to fetch from remotes');
+        // Try to remove and clone fresh
+        try {
+          const { rmSync } = await import('fs');
+          rmSync(repoPath, { recursive: true, force: true });
+          logger.info({ npub, repoName }, 'Removed repository directory after error checking commits');
+        } catch (rmErr) {
+          logger.warn({ error: rmErr, npub, repoName }, 'Failed to remove repository after error');
+        }
+        // Fall through to fetch from remotes below
       }
       
-      // Repo exists but no announcement - use provided announcement or try to fetch from relays
-      let announcementToUse: NostrEvent | null | undefined = announcementEvent;
-      if (!announcementToUse) {
-        const { requireNpubHex: requireNpubHexUtil } = await import('../../utils/npub-utils.js');
-        const repoOwnerPubkey = requireNpubHexUtil(npub);
-        announcementToUse = await this.announcementManager.fetchAnnouncementFromRelays(repoOwnerPubkey, repoName);
-      }
-      
-      if (announcementToUse) {
-        // Save announcement to repo asynchronously (non-blocking)
-        // We have the announcement from relays, so this is just for offline papertrail
-        this.announcementManager.ensureAnnouncementInRepo(repoPath, announcementToUse)
-          .catch((err) => {
-            logger.warn({ error: err, repoPath, eventId: announcementToUse?.id }, 
-              'Failed to save announcement to repo (non-blocking, announcement available from relays)');
-          });
-        return { success: true, announcement: announcementToUse };
-      }
-      
-      // Repo exists but no announcement found - needs announcement
-      return { success: false, needsAnnouncement: true };
+      // Repo exists but is empty - continue to fetch from remotes below
     }
 
     // If no announcement provided, try to fetch from relays
@@ -778,13 +869,92 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
         throw new Error('Repository clone completed but repository path does not exist');
       }
 
-      // Ensure announcement is saved to nostr/repo-events.jsonl (non-blocking - repo is usable without it)
-      // Fire and forget - we have the announcement from relays, so this is just for offline papertrail
-      this.announcementManager.ensureAnnouncementInRepo(repoPath, announcementEvent)
-        .catch((verifyError) => {
-          // Announcement file creation is optional - log but don't fail
-          logger.warn({ error: verifyError, npub, repoName }, 'Failed to ensure announcement in repo, but repository is usable');
-        });
+      // After cloning, ensure default branch, README, and announcement are committed
+      try {
+        const repoGit = simpleGit(repoPath);
+        
+        // Check if repo has any commits
+        let hasCommits = false;
+        try {
+          const commitCountStr = await repoGit.raw(['rev-list', '--count', '--all']).catch(() => '0');
+          const commitCount = parseInt(commitCountStr.trim(), 10);
+          hasCommits = !isNaN(commitCount) && commitCount > 0;
+        } catch {
+          hasCommits = false;
+        }
+        
+        // Get default branch preference
+        let defaultBranch = preferredDefaultBranch || process.env.DEFAULT_BRANCH || 'master';
+        
+        // Check existing branches
+        let existingBranches: string[] = [];
+        try {
+          const branches = await repoGit.branch(['-a']);
+          existingBranches = branches.all
+            .map(b => b.replace(/^remotes\/origin\//, '').replace(/^remotes\//, '').replace(/^refs\/heads\//, ''))
+            .filter(b => !b.includes('HEAD'));
+          existingBranches = [...new Set(existingBranches)];
+          
+          // If we have a preferred branch and it exists, use it
+          if (preferredDefaultBranch && existingBranches.includes(preferredDefaultBranch)) {
+            defaultBranch = preferredDefaultBranch;
+          } else if (existingBranches.length > 0) {
+            // Prefer existing branches that match common defaults
+            const preferredBranches = preferredDefaultBranch 
+              ? [preferredDefaultBranch, defaultBranch, 'main', 'master', 'dev']
+              : [defaultBranch, 'main', 'master', 'dev'];
+            for (const preferred of preferredBranches) {
+              if (existingBranches.includes(preferred)) {
+                defaultBranch = preferred;
+                break;
+              }
+            }
+            // If no match, use the first existing branch
+            if (!existingBranches.includes(defaultBranch)) {
+              defaultBranch = existingBranches[0];
+            }
+          }
+        } catch {
+          // No branches exist yet
+        }
+        
+        // If repo has no commits, create initial branch and commit README + announcement
+        if (!hasCommits) {
+          logger.info({ npub, repoName, defaultBranch }, 'Repository has no commits, creating initial branch and commit');
+          try {
+            await this.createInitialBranchAndReadme(repoPath, npub, repoName, announcementEvent, preferredDefaultBranch);
+            logger.info({ npub, repoName, defaultBranch }, 'Successfully created initial branch and commit');
+          } catch (createError) {
+            logger.error({ 
+              error: createError, 
+              npub, 
+              repoName, 
+              defaultBranch,
+              errorMessage: createError instanceof Error ? createError.message : String(createError),
+              errorStack: createError instanceof Error ? createError.stack : undefined
+            }, 'Failed to create initial branch and commit - this is critical');
+            // Re-throw so the outer catch can handle it
+            throw createError;
+          }
+        } else {
+          // Repo has commits - ensure default branch exists and README/announcement are committed
+          logger.info({ npub, repoName, defaultBranch, hasCommits }, 'Repository has commits, ensuring default branch and files');
+          
+          // Ensure announcement is committed (blocking - we want it in the repo)
+          // This will use worktrees to checkout the default branch and commit
+          await this.announcementManager.ensureAnnouncementInRepo(repoPath, announcementEvent, undefined, preferredDefaultBranch);
+          
+          // Ensure README exists and is committed (also uses worktrees)
+          await this.ensureReadmeExists(repoPath, npub, repoName, announcementEvent, preferredDefaultBranch);
+        }
+      } catch (postCloneError) {
+        // Log but don't fail - repo is cloned and usable
+        logger.warn({ 
+          error: postCloneError, 
+          npub, 
+          repoName 
+        }, 'Failed to set up default branch/README/announcement after clone, but repository is usable');
+      }
 
       logger.info({ npub, repoName }, 'Successfully fetched repository on-demand');
       return { success: true, announcement: announcementEvent };

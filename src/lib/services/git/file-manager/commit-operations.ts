@@ -85,17 +85,83 @@ export async function getCommitHistory(options: CommitHistoryOptions): Promise<C
       // First try with the specified branch
       logOptions.from = branch;
       log = await git.log(logOptions);
+      
+      // If log.all is empty but we know there are commits, try --all as fallback
+      if (!log.all || log.all.length === 0) {
+        logger.debug({ npub, repoName, branch }, 'git.log() returned empty results, trying --all fallback');
+        delete logOptions.from;
+        log = await git.log(logOptions);
+      }
     } catch (branchErr) {
       // If branch doesn't exist or is ambiguous, try --all
       const errorMsg = branchErr instanceof Error ? branchErr.message : String(branchErr);
-      if (errorMsg.includes('ambiguous') || errorMsg.includes('unknown') || errorMsg.includes('does not exist')) {
-        logger.debug({ npub, repoName, branch, error: errorMsg }, 'Branch does not exist or is ambiguous, trying --all');
+      logger.debug({ npub, repoName, branch, error: errorMsg }, 'git.log() failed, trying --all fallback');
+      try {
         delete logOptions.from;
         log = await git.log(logOptions);
-      } else {
-        // Re-throw if it's a different error
-        throw branchErr;
+      } catch (allErr) {
+        // If --all also fails, try using raw git command as last resort
+        logger.debug({ npub, repoName, branch, error: allErr }, 'git.log() with --all also failed, trying raw git command');
+        try {
+          const rawLog = await git.raw(['log', '--all', `--max-count=${limit}`, '--format=%H|%s|%an|%ae|%ai', ...(path ? ['--', path] : [])]);
+          if (rawLog && rawLog.trim()) {
+            // Parse raw log output
+            const lines = rawLog.trim().split('\n').filter(l => l.trim());
+            const commits = lines.map(line => {
+              const [hash, ...rest] = line.split('|');
+              const message = rest.slice(0, -3).join('|'); // Message might contain |
+              const authorName = rest[rest.length - 3];
+              const authorEmail = rest[rest.length - 2];
+              const date = rest[rest.length - 1];
+              return {
+                hash: hash || '',
+                message: message || '',
+                author: `${authorName || 'Unknown'} <${authorEmail || ''}>`,
+                date: date || new Date().toISOString(),
+                files: [] // Can't get files from raw log easily
+              };
+            }).filter(c => c.hash);
+            
+            logger.operation('Commit history retrieved via raw git', { npub, repoName, count: commits.length });
+            return commits;
+          }
+        } catch (rawErr) {
+          logger.error({ error: rawErr, npub, repoName, branch }, 'All methods failed to get commit history');
+          throw branchErr; // Throw original error
+        }
       }
+    }
+    
+    // Ensure log.all exists and has data
+    if (!log || !log.all || log.all.length === 0) {
+      logger.warn({ npub, repoName, branch, logResult: log }, 'git.log() returned empty results despite commits existing');
+      // Try one more time with raw command
+      try {
+        const rawLog = await git.raw(['log', '--all', `--max-count=${limit}`, '--format=%H|%s|%an|%ae|%ai', ...(path ? ['--', path] : [])]);
+        if (rawLog && rawLog.trim()) {
+          const lines = rawLog.trim().split('\n').filter(l => l.trim());
+          const commits = lines.map(line => {
+            const [hash, ...rest] = line.split('|');
+            const message = rest.slice(0, -3).join('|');
+            const authorName = rest[rest.length - 3];
+            const authorEmail = rest[rest.length - 2];
+            const date = rest[rest.length - 1];
+            return {
+              hash: hash || '',
+              message: message || '',
+              author: `${authorName || 'Unknown'} <${authorEmail || ''}>`,
+              date: date || new Date().toISOString(),
+              files: []
+            };
+          }).filter(c => c.hash);
+          
+          logger.operation('Commit history retrieved via raw git (fallback)', { npub, repoName, count: commits.length });
+          return commits;
+        }
+      } catch (rawErr) {
+        logger.error({ error: rawErr, npub, repoName, branch }, 'Raw git command also failed');
+      }
+      return [];
     }
     
     const commits = log.all.map(commit => ({

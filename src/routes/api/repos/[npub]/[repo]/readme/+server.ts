@@ -120,11 +120,16 @@ export const GET: RequestHandler = createRepoGetHandler(
       return json({ found: false });
     }
 
+    // Determine content type
+    const isMarkdown = readmePath?.toLowerCase().endsWith('.md') || readmePath?.toLowerCase().endsWith('.markdown');
+    const isAsciiDoc = readmePath?.toLowerCase().endsWith('.adoc') || readmePath?.toLowerCase().endsWith('.asciidoc');
+    
     return json({
       found: true,
       content: readmeContent,
       path: readmePath,
-      isMarkdown: readmePath?.toLowerCase().endsWith('.md') || readmePath?.toLowerCase().endsWith('.markdown')
+      type: isMarkdown ? 'markdown' : (isAsciiDoc ? 'asciidoc' : 'text'),
+      isMarkdown: isMarkdown // Keep for backward compatibility
     });
   },
   { operation: 'getReadme', requireRepoExists: false, requireRepoAccess: false } // README should be publicly accessible

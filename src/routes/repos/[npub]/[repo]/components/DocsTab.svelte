@@ -88,20 +88,29 @@
       // ALWAYS load README FIRST and display immediately if available
       // README is standard documentation and should always be shown
       try {
-        const readmeResponse = await fetch(`/api/repos/${npub}/${repo}/readme?ref=${currentBranch || 'HEAD'}`);
+        const readmeUrl = `/api/repos/${npub}/${repo}/readme?ref=${currentBranch || 'HEAD'}`;
+        logger.debug({ npub, repo, branch: currentBranch, url: readmeUrl }, 'Fetching README');
+        const readmeResponse = await fetch(readmeUrl);
         if (readmeResponse.ok) {
           const readmeData = await readmeResponse.json();
+          logger.debug({ npub, repo, readmeData }, 'README API response');
           if (readmeData.content) {
             documentationContent = readmeData.content;
             documentationKind = readmeData.type || 'markdown';
             selectedDoc = 'README.md';
             hasReadme = true;
             loading = false; // Stop showing loading once README is loaded
-            logger.debug({ npub, repo }, 'README loaded and displayed');
+            logger.debug({ npub, repo, contentLength: readmeData.content.length }, 'README loaded and displayed');
+          } else if (readmeData.found === false) {
+            logger.debug({ npub, repo, branch: currentBranch }, 'README not found in repository');
+          } else {
+            logger.warn({ npub, repo, readmeData }, 'README API returned unexpected format');
           }
+        } else {
+          logger.debug({ npub, repo, status: readmeResponse.status, statusText: readmeResponse.statusText }, 'README API request failed');
         }
       } catch (readmeErr) {
-        logger.debug({ error: readmeErr, npub, repo }, 'No README found');
+        logger.debug({ error: readmeErr, npub, repo, branch: currentBranch }, 'Error fetching README');
       }
       
       // Now check for docs folder in the background (but don't replace README)

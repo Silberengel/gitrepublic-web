@@ -445,10 +445,37 @@ export class FileManager {
           
           logger.info({ npub, repoName, branchName }, '[FileManager.createBranch] Step 2: Creating empty commit');
           // Create an empty commit pointing to the empty tree with author information
-          // Use --author flag to specify author identity (required when git config is not set)
-          const authorString = `${authorName} <${authorEmail}>`;
-          const commitHash = await git.raw(['commit-tree', '-m', `Initial commit on ${branchName}`, '--author', authorString, emptyTreeHash]);
-          const commit = commitHash.trim();
+          // git commit-tree doesn't support --author flag, so we use environment variables
+          const { spawn } = await import('child_process');
+          const commit = await new Promise<string>((resolve, reject) => {
+            const env = {
+              ...process.env,
+              GIT_AUTHOR_NAME: authorName,
+              GIT_AUTHOR_EMAIL: authorEmail,
+              GIT_COMMITTER_NAME: authorName,
+              GIT_COMMITTER_EMAIL: authorEmail
+            };
+            const proc = spawn('git', ['commit-tree', '-m', `Initial commit on ${branchName}`, emptyTreeHash], {
+              cwd: repoPath,
+              env
+            });
+            let output = '';
+            proc.stdout.on('data', (data) => { output += data.toString(); });
+            proc.stderr.on('data', (data) => { 
+              const error = data.toString();
+              if (error.trim()) {
+                logger.warn({ npub, repoName, branchName, error }, '[FileManager.createBranch] commit-tree stderr');
+              }
+            });
+            proc.on('close', (code) => {
+              if (code === 0) {
+                resolve(output.trim());
+              } else {
+                reject(new Error(`commit-tree failed with code ${code}: ${output || 'no output'}`));
+              }
+            });
+            proc.on('error', reject);
+          });
           logger.info({ npub, repoName, branchName, commit }, '[FileManager.createBranch] Step 2 complete: empty commit created');
           
           logger.info({ npub, repoName, branchName, commit }, '[FileManager.createBranch] Step 3: Creating branch ref pointing to empty commit');

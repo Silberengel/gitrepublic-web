@@ -215,7 +215,19 @@ export async function cloneRepository(
       requestBody.defaultBranch = defaultBranch;
     }
     
-    const data = await apiPost<{ alreadyExists?: boolean }>(`/api/repos/${state.npub}/${state.repo}/clone`, requestBody);
+    logger.debug({ 
+      npub: state.npub, 
+      repo: state.repo, 
+      hasProofEvent: !!proofEvent,
+      defaultBranch 
+    }, '[Clone] Sending clone request to server');
+    
+    const cloneUrl = `/api/repos/${state.npub}/${state.repo}/clone`;
+    logger.debug({ url: cloneUrl }, '[Clone] POST request URL');
+    
+    const data = await apiPost<{ alreadyExists?: boolean }>(cloneUrl, requestBody);
+    
+    logger.debug({ data }, '[Clone] Clone request successful');
     
     if (data.alreadyExists) {
       alert('Repository already exists locally.');
@@ -238,6 +250,12 @@ export async function cloneRepository(
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Failed to clone repository';
+    logger.error({ 
+      error: err, 
+      npub: state.npub, 
+      repo: state.repo,
+      errorMessage 
+    }, '[Clone] Clone request failed');
     alert(`Error: ${errorMessage}`);
     console.error('Error cloning repository:', err);
   } finally {
