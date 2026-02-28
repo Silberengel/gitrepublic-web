@@ -114,7 +114,7 @@ export const handle: Handle = async ({ event, resolve }) => {
   let rateLimitType = 'api';
   if (url.pathname.startsWith('/api/git/')) {
     rateLimitType = 'git';
-  } else if (url.pathname.startsWith('/api/repos/') && url.pathname.includes('/file')) {
+  } else if (url.pathname.startsWith('/api/repos/') && url.pathname.includes('/files')) {
     rateLimitType = 'file';
   } else if (url.pathname.startsWith('/api/search')) {
     rateLimitType = 'search';

@@ -34,7 +34,7 @@ export async function loadPRs(
       created_at: number;
       commitId?: string;
       kind?: number;
-    }>>(`/api/repos/${state.npub}/${state.repo}/prs`);
+    }>>(`/api/repos/${state.npub}/${state.repo}/pull-requests`);
     
     state.prs = data.map((pr) => ({
       id: pr.id,

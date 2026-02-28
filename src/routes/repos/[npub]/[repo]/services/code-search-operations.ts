@@ -27,9 +27,8 @@ export async function performCodeSearch(
       : '';
     
     // For "All Repositories", don't pass repo filter - let it search all repos
-    const url = state.codeSearch.scope === 'repo' 
-      ? `/api/repos/${state.npub}/${state.repo}/code-search?q=${encodeURIComponent(state.codeSearch.query.trim())}${branchParam}`
-      : `/api/code-search?q=${encodeURIComponent(state.codeSearch.query.trim())}`;
+    const repoParam = state.codeSearch.scope === 'repo' ? `&repo=${encodeURIComponent(`${state.npub}/${state.repo}`)}` : '';
+    const url = `/api/search?type=code&q=${encodeURIComponent(state.codeSearch.query.trim())}${repoParam}${branchParam}`;
     
     const data = await apiRequest<Array<any>>(url);
     state.codeSearch.results = Array.isArray(data) ? data : [];

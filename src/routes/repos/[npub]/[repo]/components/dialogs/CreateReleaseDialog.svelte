@@ -27,7 +27,7 @@
   </label>
   <label>
     Download URL (optional):
-    <input type="url" bind:value={state.forms.release.downloadUrl} placeholder="/api/repos/.../download?ref=..." />
+    <input type="url" bind:value={state.forms.release.downloadUrl} placeholder="/api/repos/.../archive?ref=..." />
     <small class="field-hint">Pre-filled with the ZIP download URL for this tag. You can change it if needed.</small>
   </label>
   <label>

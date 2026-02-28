@@ -54,7 +54,7 @@
       imagePath = normalizedPath.join('/');
       
       // Build API URL
-      const apiUrl = `/api/repos/${npub}/${repo}/raw?path=${encodeURIComponent(imagePath)}&ref=${encodeURIComponent(branch)}`;
+      const apiUrl = `/api/repos/${npub}/${repo}/files?path=${encodeURIComponent(imagePath)}&format=raw&ref=${encodeURIComponent(branch)}`;
       
       return `<img${before} src="${apiUrl}"${after}>`;
     });

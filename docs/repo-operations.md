@@ -92,8 +92,22 @@ The transfer process:
 
 ### Via CLI
 
+Ownership transfers are done via the API. Use the publish command to create an ownership transfer event:
+
 ```bash
-gitrep repos transfer <npub> <repo> <new-owner-npub>
+gitrep publish ownership-transfer <repo> <new-owner-npub> [--self-transfer]
+```
+
+Or use the API directly:
+```bash
+# Get transfer history
+curl https://{domain}/api/repos/{npub}/{repo}/transfers
+
+# Initiate transfer (requires NIP-98 auth)
+curl -X POST https://{domain}/api/repos/{npub}/{repo}/transfers \
+  -H "Authorization: Nostr <base64-event>" \
+  -H "Content-Type: application/json" \
+  -d '{"transferEvent": {...}}'
 ```
 
 **Important**: Ownership transfers are permanent and create a chain of ownership events. The new owner will have full control.

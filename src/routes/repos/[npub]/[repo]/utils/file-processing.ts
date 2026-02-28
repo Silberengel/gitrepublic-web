@@ -181,7 +181,7 @@ export function rewriteImagePaths(
     // Build API URL if npub, repo, and branch are provided
     if (npub && repo) {
       const ref = branch || 'HEAD';
-      const apiUrl = `/api/repos/${npub}/${repo}/raw?path=${encodeURIComponent(imagePath)}&ref=${encodeURIComponent(ref)}`;
+      const apiUrl = `/api/repos/${npub}/${repo}/files?path=${encodeURIComponent(imagePath)}&format=raw&ref=${encodeURIComponent(ref)}`;
       const before = beforeAttrs ? beforeAttrs.trim() : '';
       return `<img${before ? ' ' + before : ''} src="${apiUrl}"${afterAttrs}>`;
     }

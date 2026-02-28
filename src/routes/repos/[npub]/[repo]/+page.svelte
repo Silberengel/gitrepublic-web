@@ -407,7 +407,7 @@
   const loadCloneUrlReachability = (forceRefresh = false) => loadCloneUrlReachabilityService(forceRefresh, state, repoCloneUrls);
   const loadForkInfo = async () => {
     try {
-      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/fork`, { headers: buildApiHeaders() });
+      const response = await fetch(`/api/repos/${state.npub}/${state.repo}/forks`, { headers: buildApiHeaders() });
       if (response.ok) state.fork.info = await response.json();
     } catch (err) {
       console.error('Error loading fork info:', err);
@@ -1603,9 +1603,9 @@
           // Pre-fill download URL with full URL
           if (typeof window !== 'undefined') {
             const origin = window.location.origin;
-            state.forms.release.downloadUrl = `${origin}/api/repos/${state.npub}/${state.repo}/download?ref=${encodeURIComponent(tagName)}&format=zip`;
+            state.forms.release.downloadUrl = `${origin}/api/repos/${state.npub}/${state.repo}/archive?ref=${encodeURIComponent(tagName)}&format=zip`;
           } else {
-            state.forms.release.downloadUrl = `/api/repos/${state.npub}/${state.repo}/download?ref=${encodeURIComponent(tagName)}&format=zip`;
+            state.forms.release.downloadUrl = `/api/repos/${state.npub}/${state.repo}/archive?ref=${encodeURIComponent(tagName)}&format=zip`;
           }
           state.openDialog = 'createRelease';
         }}
@@ -1704,11 +1704,10 @@
               }
               
               try {
-                const response = await fetch(`/api/repos/${state.npub}/${state.repo}/prs`, {
+                const response = await fetch(`/api/repos/${state.npub}/${state.repo}/pull-requests/${id}`, {
                   method: 'PATCH',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
-                    prId: id,
                     prAuthor: pr.author,
                     status
                   })

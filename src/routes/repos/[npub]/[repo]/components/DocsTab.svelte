@@ -98,7 +98,7 @@
       
       // Now check for docs folder in the background
       try {
-        const response = await fetch(`/api/repos/${npub}/${repo}/tree?ref=${currentBranch || 'HEAD'}&path=docs`);
+        const response = await fetch(`/api/repos/${npub}/${repo}/files?action=tree&ref=${currentBranch || 'HEAD'}&path=docs`);
         if (response.ok) {
           const data = await response.json();
           const docsFiles = Array.isArray(data) ? data : (data.files || []);
@@ -141,7 +141,7 @@
       documentationTitle = null;
       indexEvent = null;
       
-      const response = await fetch(`/api/repos/${npub}/${repo}/raw?path=${encodeURIComponent(path)}&ref=${currentBranch || 'HEAD'}`);
+      const response = await fetch(`/api/repos/${npub}/${repo}/files?path=${encodeURIComponent(path)}&format=raw&ref=${currentBranch || 'HEAD'}`);
       if (response.ok) {
         const content = await response.text();
         documentationContent = content;

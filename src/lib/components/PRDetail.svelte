@@ -175,7 +175,7 @@
     try {
       // Load diff for the commit
       const response = await fetch(
-        `/api/repos/${npub}/${repo}/diff?from=${pr.commitId}^&to=${pr.commitId}`
+        `/api/repos/${npub}/${repo}/diffs?from=${pr.commitId}^&to=${pr.commitId}`
       );
       if (response.ok) {
         const data = await response.json();
@@ -356,11 +356,10 @@
     error = null;
 
     try {
-      const response = await fetch(`/api/repos/${npub}/${repo}/prs`, {
+      const response = await fetch(`/api/repos/${npub}/${repo}/pull-requests/${pr.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prId: pr.id,
           prAuthor: pr.author,
           status
         })
@@ -397,7 +396,7 @@
     error = null;
 
     try {
-      const response = await fetch(`/api/repos/${npub}/${repo}/prs/${pr.id}/merge`, {
+      const response = await fetch(`/api/repos/${npub}/${repo}/pull-requests/${pr.id}/merge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

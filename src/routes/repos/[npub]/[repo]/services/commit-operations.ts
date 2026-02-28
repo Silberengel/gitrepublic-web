@@ -85,7 +85,7 @@ export async function verifyCommit(
       authorEmail?: string;
       timestamp?: number;
       eventId?: string;
-    }>(`/api/repos/${state.npub}/${state.repo}/commits/${commitHash}/verify`);
+    }>(`/api/repos/${state.npub}/${state.repo}/commits/${commitHash}/verification`);
     
     // Only update verification if there's actually a signature
     // If hasSignature is false or undefined, don't set verification at all
@@ -127,7 +127,7 @@ export async function viewDiff(
       additions: number;
       deletions: number;
       diff: string;
-    }>>(`/api/repos/${state.npub}/${state.repo}/diff?from=${parentHash}&to=${commitHash}`);
+    }>>(`/api/repos/${state.npub}/${state.repo}/diffs?from=${parentHash}&to=${commitHash}`);
     
     state.git.diffData = diffData;
     state.git.showDiff = true;

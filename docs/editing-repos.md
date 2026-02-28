@@ -42,9 +42,9 @@ git push origin feature/new-feature
 
 ### Default Branch
 
-The default branch (usually `main`) can be changed via:
+The default branch (usually `main`) can be viewed via:
 - **Web Interface**: Repository settings
-- **API**: `POST /api/repos/{npub}/{repo}/default-branch`
+- **API**: `GET /api/repos/{npub}/{repo}/branches/default`
 
 ## File Management
 
@@ -60,7 +60,7 @@ The default branch (usually `main`) can be changed via:
 #### Via API
 
 ```bash
-GET /api/repos/{npub}/{repo}/file?path={file-path}&branch={branch}
+GET /api/repos/{npub}/{repo}/files?path={file-path}&ref={branch}
 ```
 
 #### Via CLI
@@ -84,13 +84,11 @@ gitrep file get <npub> <repo> <path> [branch]
 #### Via API
 
 ```bash
-POST /api/repos/{npub}/{repo}/file
+POST /api/repos/{npub}/{repo}/files?path=file.txt
 {
-  "path": "file.txt",
   "content": "File content",
   "commitMessage": "Add file",
-  "branch": "main",
-  "action": "write"
+  "branch": "main"
 }
 ```
 
@@ -112,12 +110,10 @@ gitrep file put <npub> <repo> <path> [file] [message] [branch]
 #### Via API
 
 ```bash
-POST /api/repos/{npub}/{repo}/file
+DELETE /api/repos/{npub}/{repo}/files?path=file.txt
 {
-  "path": "file.txt",
   "commitMessage": "Remove file",
-  "branch": "main",
-  "action": "delete"
+  "branch": "main"
 }
 ```
 

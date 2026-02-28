@@ -34,66 +34,80 @@ View interactive documentation at `/api/openapi.json` or use any OpenAPI viewer.
 
 #### Repository Management
 
-- `GET /api/repos/list` - List all repositories
-- `GET /api/repos/local` - List local repositories
+- `GET /api/repos/list?domain={domain}` - List all registered repositories (optionally filter by domain)
+- `GET /api/repos/local` - List local repositories (cloned on this server)
+- `GET /api/repos/{npub}/{repo}` - Get repository information (with optional `?include=settings,maintainers,access,verification`)
+- `PUT /api/repos/{npub}/{repo}` - Replace repository (full update)
+- `PATCH /api/repos/{npub}/{repo}` - Partial update repository
+- `DELETE /api/repos/{npub}/{repo}` - Delete repository
 - `GET /api/repos/{npub}/{repo}/settings` - Get repository settings
 - `POST /api/repos/{npub}/{repo}/settings` - Update repository settings
-- `GET /api/repos/{npub}/{repo}/maintainers` - Get maintainers
-- `POST /api/repos/{npub}/{repo}/maintainers` - Add maintainer
-- `DELETE /api/repos/{npub}/{repo}/maintainers` - Remove maintainer
-- `POST /api/repos/{npub}/{repo}/fork` - Fork repository
+- `GET /api/repos/{npub}/{repo}/maintainers` - List maintainers
+- `POST /api/repos/{npub}/{repo}/maintainers` - Add maintainer (body: `{ maintainer: "npub..." }`)
+- `DELETE /api/repos/{npub}/{repo}/maintainers/{npub}` - Remove maintainer
+- `GET /api/repos/{npub}/{repo}/forks` - Get fork information
+- `POST /api/repos/{npub}/{repo}/forks` - Fork repository
 - `DELETE /api/repos/{npub}/{repo}/delete` - Delete repository
-- `POST /api/repos/{npub}/{repo}/transfer` - Transfer ownership
-- `POST /api/repos/{npub}/{repo}/clone` - Clone to server
+- `GET /api/repos/{npub}/{repo}/transfers` - Get ownership transfer history
+- `POST /api/repos/{npub}/{repo}/transfers` - Transfer ownership
+- `POST /api/repos/{npub}/{repo}/clone` - Clone repository to server
+- `GET /api/repos/{npub}/{repo}/verification` - Verify repository ownership
+- `POST /api/repos/{npub}/{repo}/verification` - Save announcement to repository for verification
+- `GET /api/repos/{npub}/{repo}/validate` - Validate repository announcement
+- `GET /api/repos/{npub}/{repo}/access` - Get repository access information
+- `GET /api/repos/{npub}/{repo}/releases` - List releases
+- `POST /api/repos/{npub}/{repo}/releases` - Create release
 
 #### File Operations
 
-- `GET /api/repos/{npub}/{repo}/file` - Get file content
-- `POST /api/repos/{npub}/{repo}/file` - Create/update/delete file
-- `GET /api/repos/{npub}/{repo}/tree` - List files and directories
-- `GET /api/repos/{npub}/{repo}/raw` - Get raw file content
-- `GET /api/repos/{npub}/{repo}/readme` - Get README content
+- `GET /api/repos/{npub}/{repo}/files?path={path}&ref={ref}` - Get file content (JSON format)
+- `GET /api/repos/{npub}/{repo}/files?action=tree&path={path}&ref={ref}` - List files and directories
+- `GET /api/repos/{npub}/{repo}/files?path={path}&format=raw&ref={ref}` - Get raw file content
+- `POST /api/repos/{npub}/{repo}/files?path={path}` - Create file
+- `PUT /api/repos/{npub}/{repo}/files?path={path}` - Update file (replace)
+- `PATCH /api/repos/{npub}/{repo}/files?path={path}` - Partial update
+- `DELETE /api/repos/{npub}/{repo}/files?path={path}` - Delete file
+- `GET /api/repos/{npub}/{repo}/readme?ref={ref}` - Get README content
 
 #### Git Operations
 
 - `GET /api/repos/{npub}/{repo}/branches` - List branches
-- `POST /api/repos/{npub}/{repo}/branches` - Create branch
+- `POST /api/repos/{npub}/{repo}/branches` - Create branch (requires maintainer auth)
+- `GET /api/repos/{npub}/{repo}/branches/default` - Get default branch
 - `GET /api/repos/{npub}/{repo}/tags` - List tags
-- `POST /api/repos/{npub}/{repo}/tags` - Create tag
+- `POST /api/repos/{npub}/{repo}/tags` - Create tag (requires maintainer auth)
 - `GET /api/repos/{npub}/{repo}/commits` - List commits
-- `GET /api/repos/{npub}/{repo}/commits/{hash}/verify` - Verify commit signature
-- `GET /api/repos/{npub}/{repo}/diff` - Get diff between commits
-- `GET /api/repos/{npub}/{repo}/default-branch` - Get default branch
-- `POST /api/repos/{npub}/{repo}/default-branch` - Set default branch
+- `GET /api/repos/{npub}/{repo}/commits/{hash}/verification` - Verify commit signature
+- `GET /api/repos/{npub}/{repo}/diffs?from={from}&to={to}&path={path}` - Get diff between commits
+- `GET /api/repos/{npub}/{repo}/archive?format=zip|tar.gz&ref={ref}` - Download repository archive
 
 #### Collaboration
 
-- `GET /api/repos/{npub}/{repo}/prs` - List pull requests
-- `POST /api/repos/{npub}/{repo}/prs` - Create pull request
-- `PATCH /api/repos/{npub}/{repo}/prs` - Update PR status
-- `POST /api/repos/{npub}/{repo}/prs/{prId}/merge` - Merge PR
+- `GET /api/repos/{npub}/{repo}/pull-requests` - List pull requests
+- `POST /api/repos/{npub}/{repo}/pull-requests` - Create pull request
+- `GET /api/repos/{npub}/{repo}/pull-requests/{id}` - Get pull request
+- `PATCH /api/repos/{npub}/{repo}/pull-requests/{id}` - Update PR status
+- `POST /api/repos/{npub}/{repo}/pull-requests/{id}/merge` - Merge PR
 - `GET /api/repos/{npub}/{repo}/issues` - List issues
 - `POST /api/repos/{npub}/{repo}/issues` - Create issue
-- `PATCH /api/repos/{npub}/{repo}/issues` - Update issue status
 - `GET /api/repos/{npub}/{repo}/patches` - List patches
 - `POST /api/repos/{npub}/{repo}/patches` - Create patch
-- `PATCH /api/repos/{npub}/{repo}/patches` - Update patch status
-- `POST /api/repos/{npub}/{repo}/patches/{patchId}/apply` - Apply patch
+- `POST /api/repos/{npub}/{repo}/patches/{id}/application` - Apply patch
 - `GET /api/repos/{npub}/{repo}/highlights` - List highlights/comments
 - `POST /api/repos/{npub}/{repo}/highlights` - Create highlight/comment
 
 #### Search and Discovery
 
-- `GET /api/search` - Search repositories
-- `GET /api/repos/{npub}/{repo}/code-search` - Search code in repository
-- `GET /api/code-search` - Global code search
-- `GET /api/repos/{npub}/{repo}/clone-urls/reachability` - Check clone URL reachability
+- `GET /api/search?type=repos&q={query}` - Search repositories (default)
+- `GET /api/search?type=code&q={query}&repo={npub}/{repo}` - Search code (optionally filter by repository)
+- `GET /api/repos/{npub}/{repo}/clone-urls` - List clone URLs
+- `POST /api/repos/{npub}/{repo}/clone-urls/reachability` - Check clone URL reachability
 
 #### User Operations
 
 - `GET /api/users/{npub}/profile` - Get user profile
 - `GET /api/users/{npub}/repos` - Get user's repositories
-- `GET /api/user/level` - Get user access level
+- `POST /api/user/level` - Verify user access level (relay write access)
 - `GET /api/user/git-dashboard` - Get git dashboard
 - `GET /api/user/messaging-preferences` - Get messaging preferences
 - `POST /api/user/messaging-preferences` - Update messaging preferences
@@ -102,6 +116,7 @@ View interactive documentation at `/api/openapi.json` or use any OpenAPI viewer.
 
 - `GET /api/config` - Get server configuration
 - `GET /api/tor/onion` - Get Tor .onion address
+- `POST /api/repos/poll` - Trigger repository polling (provisions new repos from Nostr)
 - `GET /api/transfers/pending` - Get pending ownership transfers
 
 #### Git HTTP Backend
@@ -120,10 +135,19 @@ curl https://your-domain.com/api/repos/list
 curl https://your-domain.com/api/repos/{npub}/{repo}/settings
 
 # Create file (requires NIP-98 auth)
-curl -X POST https://your-domain.com/api/repos/{npub}/{repo}/file \
+curl -X POST "https://your-domain.com/api/repos/{npub}/{repo}/files?path=test.txt" \
   -H "Authorization: Nostr <base64-event>" \
   -H "Content-Type: application/json" \
-  -d '{"path": "test.txt", "content": "Hello", "commitMessage": "Add file", "branch": "main", "action": "write"}'
+  -d '{"content": "Hello", "commitMessage": "Add file", "branch": "main"}'
+
+# Get file content
+curl "https://your-domain.com/api/repos/{npub}/{repo}/files?path=test.txt&ref=main"
+
+# List files (tree view)
+curl "https://your-domain.com/api/repos/{npub}/{repo}/files?action=tree&ref=main"
+
+# Get raw file content
+curl "https://your-domain.com/api/repos/{npub}/{repo}/files?path=test.txt&format=raw&ref=main"
 ```
 
 ## Command Line Interface (CLI)

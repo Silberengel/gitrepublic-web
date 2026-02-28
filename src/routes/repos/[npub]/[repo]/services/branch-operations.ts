@@ -131,7 +131,7 @@ export async function loadBranches(
       // Fetch the actual default branch from the API
       try {
         const defaultBranchData = await apiRequest<{ defaultBranch?: string; branch?: string }>(
-          `/api/repos/${state.npub}/${state.repo}/default-branch`
+          `/api/repos/${state.npub}/${state.repo}/branches/default`
         );
         state.git.defaultBranch = defaultBranchData.defaultBranch || defaultBranchData.branch || null;
       } catch (err) {

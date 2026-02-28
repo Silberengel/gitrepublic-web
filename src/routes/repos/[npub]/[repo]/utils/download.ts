@@ -71,7 +71,7 @@ export async function downloadRepository(options: DownloadOptions): Promise<void
       params.set('ref', ref);
     }
     params.set('format', 'zip');
-    const downloadUrl = `/api/repos/${npub}/${repo}/download?${params.toString()}`;
+    const downloadUrl = `/api/repos/${npub}/${repo}/archive?${params.toString()}`;
     
     logger.info({ url: downloadUrl, ref }, '[Download] Starting download');
     

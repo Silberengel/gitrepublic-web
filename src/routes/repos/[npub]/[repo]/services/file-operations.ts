@@ -72,8 +72,7 @@ export async function saveFile(
       }
     }
     
-    await apiPost(`/api/repos/${state.npub}/${state.repo}/file`, {
-      path: state.files.currentFile,
+    await apiPost(`/api/repos/${state.npub}/${state.repo}/files?path=${encodeURIComponent(state.files.currentFile)}`, {
       content: state.files.editedContent,
       commitMessage: state.forms.commit.message.trim(),
       authorName: authorName,
@@ -150,14 +149,12 @@ export async function createFile(
       }
     }
     
-    await apiPost(`/api/repos/${state.npub}/${state.repo}/file`, {
-      path: filePath,
+    await apiPost(`/api/repos/${state.npub}/${state.repo}/files?path=${encodeURIComponent(filePath)}`, {
       content: state.forms.file.content,
       commitMessage: commitMsg,
       authorName: authorName,
       authorEmail: authorEmail,
       branch: state.git.currentBranch,
-      action: 'create',
       userPubkey: state.user.pubkey,
       commitSignatureEvent: commitSignatureEvent
     });
@@ -232,15 +229,16 @@ export async function deleteFile(
       }
     }
     
-    await apiPost(`/api/repos/${state.npub}/${state.repo}/file`, {
-      path: filePath,
-      commitMessage: commitMsg,
-      authorName: authorName,
-      authorEmail: authorEmail,
-      branch: state.git.currentBranch,
-      action: 'delete',
-      userPubkey: state.user.pubkey,
-      commitSignatureEvent: commitSignatureEvent
+    await apiRequest(`/api/repos/${state.npub}/${state.repo}/files?path=${encodeURIComponent(filePath)}`, {
+      method: 'DELETE',
+      body: JSON.stringify({
+        commitMessage: commitMsg,
+        authorName: authorName,
+        authorEmail: authorEmail,
+        branch: state.git.currentBranch,
+        userPubkey: state.user.pubkey,
+        commitSignatureEvent: commitSignatureEvent
+      })
     });
 
     // Clear current file if it was deleted
@@ -423,7 +421,7 @@ export async function loadFiles(
     }
     
     const data = await apiRequest<Array<{ name: string; path: string; type: 'file' | 'directory'; size?: number }>>(
-      `/api/repos/${state.npub}/${state.repo}/tree?ref=${encodeURIComponent(branchName)}&path=${encodeURIComponent(path)}`
+      `/api/repos/${state.npub}/${state.repo}/files?action=tree&ref=${encodeURIComponent(branchName)}&path=${encodeURIComponent(path)}`
     );
     
     state.files.list = data;
@@ -555,7 +553,7 @@ export async function loadFile(
     
     if (state.preview.file.isImage) {
       // For image files, construct the raw file URL and skip loading text content
-      state.preview.file.imageUrl = `/api/repos/${state.npub}/${state.repo}/raw?path=${encodeURIComponent(filePath)}&ref=${encodeURIComponent(branchName)}`;
+      state.preview.file.imageUrl = `/api/repos/${state.npub}/${state.repo}/files?path=${encodeURIComponent(filePath)}&format=raw&ref=${encodeURIComponent(branchName)}`;
       state.files.content = ''; // Clear content for images
       state.files.editedContent = ''; // Clear edited content for images
       state.preview.file.html = ''; // Clear HTML for images
@@ -568,7 +566,7 @@ export async function loadFile(
       state.preview.file.imageUrl = null;
       
       const data = await apiRequest<{ content: string }>(
-        `/api/repos/${state.npub}/${state.repo}/file?path=${encodeURIComponent(filePath)}&ref=${encodeURIComponent(branchName)}`
+        `/api/repos/${state.npub}/${state.repo}/files?path=${encodeURIComponent(filePath)}&ref=${encodeURIComponent(branchName)}`
       );
       
       state.files.content = data.content;
@@ -712,10 +710,9 @@ export async function autoSaveFile(
       }
     }
     
-    await apiPost(`/api/repos/${state.npub}/${state.repo}/file`, {
-      path: state.files.currentFile,
+    await apiPost(`/api/repos/${state.npub}/${state.repo}/files?path=${encodeURIComponent(state.files.currentFile)}`, {
       content: state.files.editedContent,
-      message: autoCommitMessage,
+      commitMessage: autoCommitMessage,
       authorName: authorName,
       authorEmail: authorEmail,
       branch: state.git.currentBranch,

@@ -263,7 +263,7 @@ export async function forkRepository(
       error?: string;
       details?: string;
       eventName?: string;
-    }>(`/api/repos/${state.npub}/${state.repo}/fork`, { 
+    }>(`/api/repos/${state.npub}/${state.repo}/forks`, { 
       userPubkey: state.user.pubkey,
       localOnly 
     });
@@ -463,7 +463,7 @@ export async function checkVerification(
       error?: string;
       message?: string;
       cloneVerifications?: Array<{ url: string; verified: boolean; ownerPubkey: string | null; error?: string }>;
-    }>(`/api/repos/${state.npub}/${state.repo}/verify`);
+    }>(`/api/repos/${state.npub}/${state.repo}/verification`);
     
     console.log('[Verification] Response:', data);
     state.verification.status = {
@@ -576,7 +576,7 @@ export async function loadForkInfo(
         npub: string;
         repo: string;
       };
-    }>(`/api/repos/${state.npub}/${state.repo}/fork`);
+    }>(`/api/repos/${state.npub}/${state.repo}/forks`);
     
     if (data.isFork && data.originalRepo) {
       state.fork.info = {
@@ -787,8 +787,8 @@ export async function saveAnnouncementToRepo(
     state.creating.announcement = true;
     state.error = null;
 
-    // Use the existing verify endpoint which saves and commits the announcement
-    const data = await apiRequest<{ message?: string; announcementId?: string }>(`/api/repos/${state.npub}/${state.repo}/verify`, {
+    // Use the existing verification endpoint which saves and commits the announcement
+    const data = await apiRequest<{ message?: string; announcementId?: string }>(`/api/repos/${state.npub}/${state.repo}/verification`, {
       method: 'POST'
     } as RequestInit);
 
@@ -845,7 +845,7 @@ export async function verifyCloneUrl(
   state.error = null;
 
   try {
-    const data = await apiRequest<{ message?: string }>(`/api/repos/${state.npub}/${state.repo}/verify`, {
+    const data = await apiRequest<{ message?: string }>(`/api/repos/${state.npub}/${state.repo}/verification`, {
       method: 'POST'
     } as RequestInit);
     

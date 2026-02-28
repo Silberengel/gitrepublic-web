@@ -29,7 +29,7 @@ export async function loadFiles(options: LoadFilesOptions): Promise<Array<{ name
   try {
     logger.operation('Loading files', { npub, repo, branch, path });
     
-    const url = `/api/repos/${npub}/${repo}/tree?ref=${branch}${path ? `&path=${encodeURIComponent(path)}` : ''}`;
+    const url = `/api/repos/${npub}/${repo}/files?action=tree&ref=${branch}${path ? `&path=${encodeURIComponent(path)}` : ''}`;
     const response = await fetch(url, {
       headers: buildApiHeaders()
     });
@@ -56,7 +56,7 @@ export async function loadFile(options: LoadFileOptions): Promise<{ content: str
   try {
     logger.operation('Loading file', { npub, repo, branch, filePath });
     
-    const url = `/api/repos/${npub}/${repo}/raw?path=${encodeURIComponent(filePath)}&ref=${branch}`;
+    const url = `/api/repos/${npub}/${repo}/files?path=${encodeURIComponent(filePath)}&format=raw&ref=${branch}`;
     const response = await fetch(url, {
       headers: buildApiHeaders()
     });
@@ -162,7 +162,7 @@ export async function loadPRs(npub: string, repo: string): Promise<Array<any>> {
   try {
     logger.operation('Loading PRs', { npub, repo });
     
-    const response = await fetch(`/api/repos/${npub}/${repo}/prs`, {
+    const response = await fetch(`/api/repos/${npub}/${repo}/pull-requests`, {
       headers: buildApiHeaders()
     });
     
