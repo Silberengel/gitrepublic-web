@@ -59,6 +59,12 @@ if [ "$(id -u)" = "0" ]; then
         echo "This may indicate a UID conflict. Consider using a different GITREPUBLIC_UID."
     fi
     
+    # Configure git user.name and user.email for gitrepublic user
+    # This is required for git commits to work properly
+    echo "Configuring git identity for $ACTUAL_USER..."
+    su-exec $ACTUAL_USER git config --global user.name "GitRepublic" || true
+    su-exec $ACTUAL_USER git config --global user.email "gitrepublic@gitrepublic.web" || true
+    
     echo "Switching to user: $ACTUAL_USER (UID: $GITREPUBLIC_UID)..."
     exec su-exec $ACTUAL_USER "$@"
 else

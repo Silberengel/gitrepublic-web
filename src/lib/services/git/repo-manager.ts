@@ -165,27 +165,34 @@ export class RepoManager {
       } else {
         // Branches exist (from sync) - ensure announcement is committed to the default branch
         // This must happen after syncing so we can commit it to the existing default branch
-        await this.announcementManager.ensureAnnouncementInRepo(repoPath.fullPath, event, selfTransferEvent);
+        // Non-blocking: fire and forget - we have the announcement from relays, so this is just for offline papertrail
+        this.announcementManager.ensureAnnouncementInRepo(repoPath.fullPath, event, selfTransferEvent)
+          .catch((err) => {
+            logger.warn({ error: err, repoPath: repoPath.fullPath, eventId: event.id }, 
+              'Failed to save announcement to repo (non-blocking, announcement available from relays)');
+          });
       }
     } else {
       // For existing repos, check if announcement exists in repo
       // If not, try to fetch from relays and save it
+      // Note: We have the announcement from polling (event parameter), so we can use that
+      // Non-blocking: fire and forget - we have the announcement from relays, so this is just for offline papertrail
       const hasAnnouncement = await this.announcementManager.hasAnnouncementInRepoFile(repoPath.fullPath);
       if (!hasAnnouncement) {
-        // Try to fetch from relays
-        const fetchedEvent = await this.announcementManager.fetchAnnouncementFromRelays(event.pubkey, repoPath.repoName);
-        if (fetchedEvent) {
-          // Save fetched announcement to repo
-          await this.announcementManager.ensureAnnouncementInRepo(repoPath.fullPath, fetchedEvent, selfTransferEvent);
-        } else {
-          // Announcement not found in repo or relays - this is a problem
-          logger.warn({ repoPath: repoPath.fullPath }, 'Existing repo has no announcement in repo or on relays');
-        }
-      }
-      
-      if (selfTransferEvent) {
-        // Ensure self-transfer event is also saved
-        await this.announcementManager.ensureAnnouncementInRepo(repoPath.fullPath, event, selfTransferEvent);
+        // We have the event from polling, so use it directly (no need to fetch from relays again)
+        // Save announcement to repo asynchronously
+        this.announcementManager.ensureAnnouncementInRepo(repoPath.fullPath, event, selfTransferEvent)
+          .catch((err) => {
+            logger.warn({ error: err, repoPath: repoPath.fullPath, eventId: event.id }, 
+              'Failed to save announcement to repo (non-blocking, announcement available from relays)');
+          });
+      } else if (selfTransferEvent) {
+        // Announcement exists but self-transfer might not - save it asynchronously
+        this.announcementManager.ensureAnnouncementInRepo(repoPath.fullPath, event, selfTransferEvent)
+          .catch((err) => {
+            logger.warn({ error: err, repoPath: repoPath.fullPath, eventId: event.id }, 
+              'Failed to save self-transfer to repo (non-blocking)');
+          });
       }
     }
   }
@@ -302,6 +309,18 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
       }
       await workGit.add(filesToAdd);
       
+      // Configure git user.name and user.email for this repository
+      // This is required for git commits to work (committer identity)
+      // We use a generic identity since the server is making the commit on behalf of the system
+      // The --author flag sets the author, but we still need committer identity configured
+      try {
+        await workGit.addConfig('user.name', 'GitRepublic', false, 'local');
+        await workGit.addConfig('user.email', 'gitrepublic@gitrepublic.web', false, 'local');
+        logger.debug({ repoPath, npub, repoName }, 'Configured git user.name and user.email for repository');
+      } catch (configError) {
+        logger.warn({ repoPath, npub, repoName, error: configError }, 'Failed to set git config, commit may fail');
+      }
+      
       // Commit files together
       await workGit.commit('Initial commit', filesToAdd, {
         '--author': `${authorName} <${authorEmail}>`
@@ -371,8 +390,13 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
       }
       
       if (announcementToUse) {
-        // Save announcement to repo (this will create initial commit if repo is empty)
-        await this.announcementManager.ensureAnnouncementInRepo(repoPath, announcementToUse);
+        // Save announcement to repo asynchronously (non-blocking)
+        // We have the announcement from relays, so this is just for offline papertrail
+        this.announcementManager.ensureAnnouncementInRepo(repoPath, announcementToUse)
+          .catch((err) => {
+            logger.warn({ error: err, repoPath, eventId: announcementToUse?.id }, 
+              'Failed to save announcement to repo (non-blocking, announcement available from relays)');
+          });
         return { success: true, announcement: announcementToUse };
       }
       
@@ -616,12 +640,12 @@ Your commits will all be signed by your Nostr keys and saved to the event files 
       }
 
       // Ensure announcement is saved to nostr/repo-events.jsonl (non-blocking - repo is usable without it)
-      try {
-        await this.announcementManager.ensureAnnouncementInRepo(repoPath, announcementEvent);
-      } catch (verifyError) {
-        // Announcement file creation is optional - log but don't fail
-        logger.warn({ error: verifyError, npub, repoName }, 'Failed to ensure announcement in repo, but repository is usable');
-      }
+      // Fire and forget - we have the announcement from relays, so this is just for offline papertrail
+      this.announcementManager.ensureAnnouncementInRepo(repoPath, announcementEvent)
+        .catch((verifyError) => {
+          // Announcement file creation is optional - log but don't fail
+          logger.warn({ error: verifyError, npub, repoName }, 'Failed to ensure announcement in repo, but repository is usable');
+        });
 
       logger.info({ npub, repoName }, 'Successfully fetched repository on-demand');
       return { success: true, announcement: announcementEvent };

@@ -266,6 +266,17 @@ export class AnnouncementManager {
         logger.info({ repoPath, filesToAdd, isEmpty }, 'Adding files and committing announcement');
         await workGit.add(filesToAdd);
         
+        // Configure git user.name and user.email for this repository
+        // This is required for git commits to work (committer identity)
+        // We use a generic identity since the server is making the commit on behalf of the system
+        try {
+          await workGit.addConfig('user.name', 'GitRepublic', false, 'local');
+          await workGit.addConfig('user.email', 'gitrepublic@gitrepublic.web', false, 'local');
+          logger.debug({ repoPath }, 'Configured git user.name and user.email for repository');
+        } catch (configError) {
+          logger.warn({ repoPath, error: configError }, 'Failed to set git config, commit may fail');
+        }
+        
         // Use the event timestamp for commit date
         const commitDate = new Date(event.created_at * 1000).toISOString();
         const commitMessage = selfTransferEvent 
@@ -451,13 +462,9 @@ export class AnnouncementManager {
         isEmpty
       }, 'Failed to ensure announcement in repo');
       
-      // For empty repos, this is critical - we need the initial commit
-      // For non-empty repos, it's less critical but still important
-      if (isEmpty) {
-        // Re-throw for empty repos so caller knows it failed
-        throw new Error(`Failed to commit announcement to empty repo: ${errorMessage}`);
-      }
-      // For non-empty repos, don't throw - announcement file creation is important but shouldn't block provisioning
+      // Don't throw - this is now non-blocking
+      // The announcement is available from relays, so this is just for offline papertrail
+      // Even for empty repos, we don't throw since provisioning should succeed regardless
     }
   }
 
