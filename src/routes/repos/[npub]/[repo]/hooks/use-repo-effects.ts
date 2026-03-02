@@ -20,21 +20,55 @@ export function usePageDataEffect(state: RepoState, getPageData: () => any): () 
       const data = getPageData();
       if (data && state.isMounted) {
         state.pageData = data || {};
-        // Set repoNotFound flag if announcement is missing or repoNotFound is explicitly set
-        if (data.repoNotFound === true || (data.announcement === null || data.announcement === undefined)) {
-          state.repoNotFound = true;
-          state.loading.main = false;
+        
+        // Only set repoNotFound if explicitly set to true AND we've verified the repo doesn't exist
+        // Don't set it just because announcement is null - the repo might exist but announcement not found yet
+        if (data.repoNotFound === true) {
+          // Check if repo actually exists by trying to verify via API
+          // If repo exists (e.g., branches endpoint returns 200), don't show "not found"
+          fetch(`/api/repos/${state.npub}/${state.repo}/branches?skipApiFallback=true`)
+            .then(response => {
+              if (state.isMounted) {
+                if (response.ok || response.status === 200) {
+                  // Repo exists! Clear repoNotFound even if announcement is missing
+                  console.log(`[Page Data Effect] Repo exists (status ${response.status}), clearing repoNotFound flag`);
+                  state.repoNotFound = false;
+                } else if (response.status === 404) {
+                  // Repo truly doesn't exist
+                  console.log(`[Page Data Effect] Repo doesn't exist (status 404), setting repoNotFound`);
+                  state.repoNotFound = true;
+                  state.loading.main = false;
+                } else {
+                  // Other error - don't assume repo doesn't exist
+                  console.log(`[Page Data Effect] Repo check returned status ${response.status}, keeping current state`);
+                }
+              }
+            })
+            .catch(err => {
+              if (state.isMounted) {
+                console.warn('[Page Data Effect] Failed to verify repo existence:', err);
+                // On error checking, if repoNotFound was explicitly set, keep it
+                // Otherwise, don't assume repo doesn't exist
+                if (data.repoNotFound === true) {
+                  state.repoNotFound = true;
+                  state.loading.main = false;
+                }
+              }
+            });
         } else if (data.announcement) {
           // Clear repoNotFound if we have a valid announcement
           state.repoNotFound = false;
+        } else {
+          // Announcement is null but repoNotFound wasn't explicitly set
+          // Don't set repoNotFound - let the component try to load the repo anyway
+          // The repo might exist but announcement not found yet (e.g., private fork)
+          console.log('[Page Data Effect] Announcement is null but repoNotFound not explicitly set - allowing page to load');
         }
       }
     } catch (err) {
       if (state.isMounted) {
         console.warn('Failed to update pageData:', err);
-        // On error, mark as not found to prevent blank page
-        state.repoNotFound = true;
-        state.loading.main = false;
+        // On error, don't automatically mark as not found - might be a transient error
       }
     }
   };

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { userStore } from '$lib/stores/user-store.js';
+  import type { NostrEvent } from '$lib/types/nostr.js';
 
   interface AdminRepo {
     npub: string;
@@ -10,6 +11,7 @@
     size: number;
     lastModified: number;
     createdAt: number;
+    announcement?: NostrEvent | null;
   }
 
   let repos = $state<AdminRepo[]>([]);
@@ -160,6 +162,39 @@
   function formatDate(timestamp: number): string {
     return new Date(timestamp).toLocaleString();
   }
+
+  // Helper function to navigate to a repo with announcement in sessionStorage
+  async function navigateToRepo(npub: string, repoName: string, announcement?: NostrEvent | null) {
+    // If we have the announcement, store it in sessionStorage
+    if (announcement && typeof window !== 'undefined') {
+      const repoKey = `${npub}/${repoName}`;
+      try {
+        sessionStorage.setItem(`repo_announcement_${repoKey}`, JSON.stringify(announcement));
+        console.log(`[Admin] Stored announcement in sessionStorage for ${repoKey}`);
+      } catch (err) {
+        console.warn('[Admin] Failed to store announcement in sessionStorage:', err);
+      }
+    } else {
+      // Try to fetch announcement from API
+      try {
+        const response = await fetch(`/api/repos/local?domain=${encodeURIComponent(window.location.hostname)}`);
+        if (response.ok) {
+          const data = await response.json();
+          const repo = data.find((r: { npub: string; repoName: string; announcement: NostrEvent | null }) => 
+            r.npub === npub && r.repoName === repoName
+          );
+          if (repo?.announcement) {
+            const repoKey = `${npub}/${repoName}`;
+            sessionStorage.setItem(`repo_announcement_${repoKey}`, JSON.stringify(repo.announcement));
+            console.log(`[Admin] Fetched and stored announcement from API for ${repoKey}`);
+          }
+        }
+      } catch (err) {
+        console.warn('[Admin] Failed to fetch announcement from API:', err);
+      }
+    }
+    goto(`/repos/${npub}/${repoName}`);
+  }
 </script>
 
 <svelte:head>
@@ -218,9 +253,13 @@
                 <code>{repo.npub.substring(0, 20)}...</code>
               </td>
               <td class="repo-name-cell">
-                <a href="/repos/{repo.npub}/{repo.repoName}" target="_blank">
+                <button 
+                  onclick={() => navigateToRepo(repo.npub, repo.repoName, repo.announcement)}
+                  class="repo-link-button"
+                  title="View repository"
+                >
                   {repo.repoName}
-                </a>
+                </button>
               </td>
               <td>{formatBytes(repo.size)}</td>
               <td>{formatDate(repo.lastModified)}</td>
@@ -378,13 +417,19 @@
     border: 1px solid var(--border-color);
   }
 
-  .repo-name-cell a {
+  .repo-link-button {
+    background: none;
+    border: none;
     color: var(--link-color);
     text-decoration: none;
     font-weight: 500;
+    cursor: pointer;
+    padding: 0;
+    font-size: inherit;
+    font-family: inherit;
   }
 
-  .repo-name-cell a:hover {
+  .repo-link-button:hover {
     color: var(--link-hover);
     text-decoration: underline;
   }

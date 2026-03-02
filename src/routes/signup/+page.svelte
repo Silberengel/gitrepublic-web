@@ -2271,7 +2271,8 @@
           fetch(`/api/repos/${userNpub}/${dTag}/clone`, {
             method: 'POST',
             headers: {
-              'Content-Type': 'application/json'
+              'Content-Type': 'application/json',
+              'X-User-Pubkey': pubkey
             },
             body: JSON.stringify({
               announcementEvent: signedEvent // Pass the signed announcement event directly
@@ -2296,10 +2297,24 @@
         // Redirect to the newly created repository page
         const userNpub = nip19.npubEncode(pubkey);
         
+        // Store announcement in sessionStorage for private repos (not on relays yet)
+        // This allows the page load function to find it immediately
+        if (typeof window !== 'undefined' && signedEvent) {
+          const repoKey = `${userNpub}/${dTag}`;
+          try {
+            sessionStorage.setItem(`repo_announcement_${repoKey}`, JSON.stringify(signedEvent));
+            console.log(`[Signup] Stored announcement in sessionStorage for ${repoKey}`);
+          } catch (err) {
+            console.warn('[Signup] Failed to store announcement in sessionStorage:', err);
+          }
+        }
+        
         // Check if this is a transfer completion (from query params)
         const urlParams = $page.url.searchParams;
         const isTransfer = urlParams.get('transfer') === 'true';
         
+        // Wait longer for commit to complete and filesystem to sync
+        // The Vite SSR error during commit is harmless, but we need to wait for the commit to finish
         setTimeout(() => {
           // Invalidate all caches and redirect
           if (isTransfer) {
@@ -2308,7 +2323,7 @@
           } else {
             goto(`/repos/${userNpub}/${dTag}`, { invalidateAll: true, replaceState: false });
           }
-        }, 1000);
+        }, 3000); // Increased from 1000ms to 3000ms to allow commit to complete
         return;
       }
 

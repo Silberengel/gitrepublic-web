@@ -30,28 +30,45 @@ export async function readAnnouncementFromFilesystem(npub: string, repoName: str
   
   try {
     const repoPath = join(repoRoot, npub, `${repoName}.git`);
+    logger.debug({ npub, repoName, repoPath }, '[readAnnouncementFromFilesystem] Checking repo path');
+    
     if (!existsSync(repoPath)) {
+      logger.debug({ npub, repoName, repoPath }, '[readAnnouncementFromFilesystem] Repo path does not exist');
       return null;
     }
     
+    logger.debug({ npub, repoName }, '[readAnnouncementFromFilesystem] Repo exists, reading git log');
     const git = simpleGit(repoPath);
     
     // Get the most recent commit that modified repo-events.jsonl
-    const logOutput = await git.raw(['log', '--all', '--format=%H', '--reverse', '--', 'nostr/repo-events.jsonl']).catch(() => '');
+    const logOutput = await git.raw(['log', '--all', '--format=%H', '--reverse', '--', 'nostr/repo-events.jsonl']).catch((err) => {
+      logger.debug({ npub, repoName, error: err }, '[readAnnouncementFromFilesystem] Failed to get git log');
+      return '';
+    });
     const commitHashes = logOutput.trim().split('\n').filter(Boolean);
     
+    logger.debug({ npub, repoName, commitCount: commitHashes.length }, '[readAnnouncementFromFilesystem] Found commits');
+    
     if (commitHashes.length === 0) {
+      logger.debug({ npub, repoName }, '[readAnnouncementFromFilesystem] No commits found for repo-events.jsonl');
       return null;
     }
     
     const mostRecentCommit = commitHashes[commitHashes.length - 1];
+    logger.debug({ npub, repoName, commit: mostRecentCommit }, '[readAnnouncementFromFilesystem] Using most recent commit');
     
     // Read the file content from git
-    const fileContent = await git.show([`${mostRecentCommit}:nostr/repo-events.jsonl`]).catch(() => null);
+    const fileContent = await git.show([`${mostRecentCommit}:nostr/repo-events.jsonl`]).catch((err) => {
+      logger.debug({ npub, repoName, commit: mostRecentCommit, error: err }, '[readAnnouncementFromFilesystem] Failed to read file from git');
+      return null;
+    });
     
     if (!fileContent) {
+      logger.debug({ npub, repoName }, '[readAnnouncementFromFilesystem] File content is empty');
       return null;
     }
+    
+    logger.debug({ npub, repoName, contentLength: fileContent.length }, '[readAnnouncementFromFilesystem] File content read successfully');
     
     // Parse repo-events.jsonl to find the most recent announcement
     let announcementEvent: NostrEvent | null = null;
@@ -90,17 +107,19 @@ export async function readAnnouncementFromFilesystem(npub: string, repoName: str
     
     // Check if d-tag matches repo name (case-insensitive)
     if (!dTag || dTag.toLowerCase() !== repoName.toLowerCase()) {
-      logger.debug({ npub, repoName, dTag }, 'Announcement d-tag does not match repo name (case-insensitive)');
+      logger.debug({ npub, repoName, dTag, expectedRepoName: repoName.toLowerCase(), actualDTag: dTag?.toLowerCase() }, '[readAnnouncementFromFilesystem] Announcement d-tag does not match repo name (case-insensitive)');
       return null;
     }
     
+    logger.debug({ npub, repoName, dTag }, '[readAnnouncementFromFilesystem] d-tag matches, validating announcement');
     const validation = validateAnnouncementEvent(announcementEvent, repoName);
     
     if (!validation.valid) {
-      logger.debug({ error: validation.error, npub, repoName }, 'Announcement validation failed');
+      logger.debug({ error: validation.error, npub, repoName }, '[readAnnouncementFromFilesystem] Announcement validation failed');
       return null;
     }
     
+    logger.info({ npub, repoName, eventId: announcementEvent.id }, '[readAnnouncementFromFilesystem] Successfully read and validated announcement');
     return announcementEvent;
   } catch (error) {
     logger.debug({ error, npub, repoName }, 'Error reading announcement from filesystem');

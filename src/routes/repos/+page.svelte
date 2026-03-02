@@ -46,6 +46,20 @@
 
   const nostrClient = new NostrClient(DEFAULT_NOSTR_RELAYS);
 
+  // Helper function to navigate to a repo with announcement in sessionStorage
+  function navigateToRepo(npub: string, repoName: string, announcement: NostrEvent | null) {
+    if (announcement && typeof window !== 'undefined') {
+      const repoKey = `${npub}/${repoName}`;
+      try {
+        sessionStorage.setItem(`repo_announcement_${repoKey}`, JSON.stringify(announcement));
+        console.log(`[Repos Page] Stored announcement in sessionStorage for ${repoKey}`);
+      } catch (err) {
+        console.warn('[Repos Page] Failed to store announcement in sessionStorage:', err);
+      }
+    }
+    goto(`/repos/${npub}/${repoName}`);
+  }
+
   onMount(async () => {
     await loadRepos();
     await loadUserAndContacts();
@@ -719,9 +733,13 @@
                       <p class="description">{getRepoDescription(repo)}</p>
                     {/if}
                   </div>
-                  <a href="/repos/{item.npub}/{item.repoName}" class="view-button" title="View repository">
+                  <button 
+                    onclick={() => navigateToRepo(item.npub, item.repoName, repo)} 
+                    class="view-button" 
+                    title="View repository"
+                  >
                     <img src="/icons/arrow-right.svg" alt="View" />
-                  </a>
+                  </button>
                 </div>
                 <div class="repo-meta">
                   <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
@@ -772,9 +790,13 @@
                       <p class="description">{getRepoDescription(repo)}</p>
                     {/if}
                   </div>
-                  <a href="/repos/{item.npub}/{item.repoName}" class="view-button" title="View repository">
+                  <button 
+                    onclick={() => navigateToRepo(item.npub, item.repoName, repo)} 
+                    class="view-button" 
+                    title="View repository"
+                  >
                     <img src="/icons/arrow-right.svg" alt="View" />
-                  </a>
+                  </button>
                 </div>
                 <div class="repo-meta">
                   <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
@@ -856,9 +878,13 @@
                         <p class="description">{getRepoDescription(repo)}</p>
                       {/if}
                     </div>
-                    <a href="/repos/{item.npub}/{item.repoName}" class="view-button" title="View repository">
+                    <button 
+                      onclick={() => navigateToRepo(item.npub, item.repoName, repo)} 
+                      class="view-button" 
+                      title="View repository"
+                    >
                       <img src="/icons/arrow-right.svg" alt="View" />
-                    </a>
+                    </button>
                   </div>
                   <div class="repo-meta">
                     <span>Created: {new Date(repo.created_at * 1000).toLocaleDateString()}</span>
